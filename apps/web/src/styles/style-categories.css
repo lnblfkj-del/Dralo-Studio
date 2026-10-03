@@ -1,0 +1,15 @@
+.category-picker {display:flex;align-items:center;gap:10px;min-width:0;margin:10px 0;}
+.category-picker .settings-tabs {min-width:0;overflow:visible;flex:1;flex-wrap:wrap;gap:0 24px;}
+.style-category-checks {display:flex;flex-wrap:wrap;gap:8px 14px;}
+.style-category-checks label {display:flex;align-items:center;gap:5px;font-size:12px;}
+.category-picker .ui-button {max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.category-search {box-sizing:border-box;width:100%;padding:10px;border:1px solid #ded8e3;border-radius:6px;margin:8px 0;font:inherit;}
+.category-options {max-height:320px;overflow:auto;display:grid;gap:4px;}
+.category-options button {text-align:left;padding:10px;border:0;background:transparent;overflow-wrap:anywhere;}
+.category-options button[aria-pressed=true] {background:#f0ebf5;color:#72528c;}
+.category-manager-list {display:grid;margin-top:14px;max-height:55vh;overflow:auto;}
+.category-manager-list>div {display:flex;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid #eee9f1;}
+.category-manager-list span {flex:1;min-width:0;overflow-wrap:anywhere;}
+.category-manager-list small {display:block;color:#95899b;font-size:11px;margin-top:4px;}
+.category-manager-list button {background:transparent;border:1px solid #e4deea;border-radius:5px;padding:5px 8px;white-space:nowrap;}
+.category-manager-list button:disabled {opacity:.4;}

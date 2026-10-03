@@ -1,0 +1,6 @@
+.client-version-button{display:flex;align-items:center;gap:8px;width:100%;min-height:38px;padding:7px 9px;border:0;border-radius:6px;background:transparent;color:var(--app-color-text,#202023);font:inherit;font-size:14px;text-align:left;cursor:pointer}
+.client-version-button:hover{background:var(--app-color-bg-layout,#f4f4f5)}
+.client-version-button:focus-visible{outline:2px solid var(--app-color-accent,#7657cf);outline-offset:2px}
+.client-version-button svg{flex-shrink:0}
+.client-version-button .client-update-badge{margin-left:auto;color:var(--app-color-accent,#7657cf);font-size:11px;font-weight:600}
+.client-update-badge::before{content:"";display:inline-block;width:5px;height:5px;margin-right:4px;border-radius:50%;background:currentColor}

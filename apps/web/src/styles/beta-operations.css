@@ -1,0 +1,23 @@
+.beta-operations{min-width:0}
+.beta-operations .beta-band{padding:20px 0;border-block-start:1px solid var(--color-border,#e4e0e7);margin-top:16px;background:transparent}
+.beta-band h2{font-size:16px;margin:0 0 10px}
+.beta-band h3{font-size:14px}
+.beta-band header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+.beta-band header span,.beta-sample{font-size:12px;color:var(--color-text-muted,#867b8d)}
+.beta-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:20px 0;gap:0}
+.beta-metrics>div{padding:16px 0;border-bottom:1px solid var(--color-border,#e4e0e7);min-width:0}
+.beta-metrics dt{font-size:12px;color:var(--color-text-muted,#867b8d)}
+.beta-metrics dd{font-size:20px;margin:8px 0 0;overflow-wrap:anywhere}
+.beta-copy{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;font-size:13px}
+.beta-link{font-size:13px;padding:8px 12px;color:var(--color-primary,#746083);text-decoration:none}
+.beta-toolbar{display:flex;justify-content:flex-end;padding-bottom:16px}
+.beta-detail{display:grid;grid-template-columns:80px minmax(0,1fr);gap:12px;font-size:13px;line-height:1.8}
+.beta-detail dd{margin:0;overflow-wrap:anywhere}.beta-detail dt{color:var(--color-text-muted,#867b8d)}
+.beta-reply{border-left:2px solid var(--color-primary,#746083);padding-left:16px;margin-top:18px}
+.users-fields textarea,.users-fields select{box-sizing:border-box;width:100%;max-width:100%;padding:10px 12px;border:1px solid #ddd7e2;border-radius:6px;font:inherit;resize:vertical;background:#fff;color:#302837}
+.beta-operations form.users-filter{padding:0 0 16px;gap:16px}
+.beta-operations .users-filter label{display:grid;gap:6px;font-size:12px;min-width:0}
+.beta-operations .users-filter input{width:140px;flex:none}
+.beta-operations .users-table th:last-child,.beta-operations .users-table td:last-child{width:100px}
+.beta-operations .users-table td{overflow-wrap:anywhere;max-width:400px}
+@media(max-width:760px){.beta-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.beta-band header{gap:6px}.beta-operations .users-actions{flex-wrap:wrap}.beta-operations .settings-tabs{overflow-x:auto;max-width:100%}}

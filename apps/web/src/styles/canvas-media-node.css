@@ -1,0 +1,28 @@
+.canvas-media-node { background: #fff; border: 1px solid #ded9e5; border-radius: 12px; color: #292531; box-shadow: 0 3px 12px #29253106; min-width: 300px; }
+.canvas-media-node.selected { border-color: #9273ad; box-shadow: 0 0 0 1px #9273ad; }
+.canvas-media-node > header { display: flex; align-items: center; gap: 8px; padding: 14px 16px; border-bottom: 1px solid #eeeaf2; }
+.canvas-media-node > header strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-media-node small { color: #81788e; font-size: 11px; overflow-wrap: anywhere; }
+.canvas-media-stage { min-height: 180px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 12px; background: #f8f6fa; color: #95899f; overflow: hidden; }
+.canvas-media-stage > img, .canvas-media-stage > video { width: 100%; max-height: 280px; object-fit: contain; }
+.canvas-media-stage.audio { min-height: 110px; padding: 12px; }
+.canvas-media-body { padding: 12px 16px; display: grid; gap: 12px; }
+.canvas-media-node fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 10px; min-width: 0; }
+.canvas-media-node label { display: grid; gap: 5px; font-size: 11px; color: #776c85; min-width: 0; }
+.canvas-media-node select, .canvas-media-node textarea { width: 100%; min-width: 0; border: 1px solid #dfd9e6; border-radius: 6px; background: white; padding: 8px; font: inherit; color: #342d3d; box-sizing: border-box; }
+.canvas-media-node textarea { resize: vertical; font-size: 12px; }
+.canvas-media-node button { border: 1px solid #dfd9e6; background: #fff; border-radius: 6px; padding: 7px 10px; display: inline-flex; gap: 5px; align-items: center; font-size: 11px; cursor: pointer; }
+.canvas-media-node button:disabled { opacity: .5; cursor: not-allowed; }
+.canvas-media-fields { display: flex; gap: 8px; }
+.canvas-media-fields > label { flex: 1; }
+.canvas-media-actions { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.canvas-audio-player { width: 100%; }
+.canvas-audio-player audio, .canvas-audio-player svg { display: block; width: 100%; }
+.canvas-generation-confirm-content { display: grid; gap: 10px; }
+.canvas-generation-confirm-content > p { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; max-height: 180px; overflow: auto; }
+.canvas-video-preflight { display: grid; gap: 7px; padding: 12px; border: 1px solid #dfd9e6; border-radius: 9px; background: #faf8fc; }
+.canvas-video-preflight > p { margin: 0; display: grid; grid-template-columns: 38px 1fr; gap: 8px; font-size: 12px; }
+.canvas-video-preflight > p b { color: #4f7b60; }
+.canvas-video-preflight > p[data-status="degraded"] b { color: #9a6a25; }
+.canvas-video-preflight > p[data-status="ignored"] b { color: #77717f; }
+.canvas-video-preflight > p[data-status="blocked"] b, .canvas-video-preflight [role="alert"] { color: #a63e3e; }

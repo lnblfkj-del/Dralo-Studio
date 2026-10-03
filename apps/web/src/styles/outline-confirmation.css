@@ -1,0 +1,45 @@
+.outline-confirmation .ui-dialog__body { padding:0; overflow:hidden; }
+.outline-confirmation__layout { display:grid; grid-template-columns:280px minmax(0,1fr); height:min(560px,65vh); color:var(--app-color-text); font-size:14px; }
+.outline-confirmation__summary { min-width:0; padding:24px; overflow:auto; background:var(--app-color-bg-input); border-right:1px solid var(--app-color-border); }
+.outline-confirmation__eyebrow { display:flex; align-items:center; gap:8px; color:var(--app-color-accent); font-size:12px; }
+.outline-confirmation__eyebrow > span { margin-left:auto; color:var(--app-color-text-muted); }
+.outline-confirmation h3 { margin:16px 0; font-size:18px; font-weight:600; }
+.outline-confirmation__counts { display:grid; grid-template-columns:1fr 1fr; margin:20px 0 24px; padding-bottom:20px; border-bottom:1px solid var(--app-color-border); }
+.outline-confirmation__counts dt { color:var(--app-color-text-muted); font-size:12px; }
+.outline-confirmation__counts dd { margin:6px 0 0; font-size:28px; font-weight:600; line-height:1.3; }
+.outline-confirmation__counts small { margin-left:6px; font-size:12px; font-weight:400; color:var(--app-color-text-muted); }
+.outline-confirmation__summary section + section { margin-top:24px; }
+.outline-confirmation h4 { display:flex; align-items:center; gap:6px; margin:0 0 8px; font-size:14px; font-weight:600; }
+.outline-confirmation p { margin:0; line-height:1.8; overflow-wrap:anywhere; }
+.outline-confirmation__summary section p { font-size:13px; color:var(--app-color-text-muted); }
+.outline-confirmation__preserved h4 { color:var(--app-color-accent); }
+.outline-confirmation__warning { display:flex; align-items:flex-start; gap:8px; margin-top:24px !important; color:var(--app-color-accent); font-size:13px; }
+.outline-confirmation__warning svg { flex-shrink:0; margin-top:4px; }
+.outline-confirmation__detail { display:flex; flex-direction:column; min-width:0; min-height:0; padding:0 24px; }
+.outline-confirmation__detail header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:4px 0; }
+.outline-confirmation__detail header h3 { font-size:16px; }
+.outline-confirmation__detail header > span { font-size:12px; color:var(--app-color-text-muted); }
+.outline-confirmation__list { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; }
+.outline-confirmation table { width:100%; border-collapse:collapse; table-layout:fixed; text-align:left; font-size:13px; }
+.outline-confirmation thead th { position:sticky; top:0; z-index:1; padding:10px 12px; background:var(--app-color-bg-input); color:var(--app-color-text-muted); font-weight:500; }
+.outline-confirmation thead th:first-child { width:43%; }
+.outline-confirmation thead th:last-child { width:24%; }
+.outline-confirmation tbody th,.outline-confirmation td { padding:14px 12px; border-bottom:1px solid var(--app-color-border); vertical-align:top; overflow-wrap:anywhere; }
+.outline-confirmation tbody th { font-weight:400; }
+.outline-confirmation tbody strong { display:block; margin-top:4px; font-size:14px; line-height:1.6; font-weight:500; }
+.outline-confirmation__episode { color:var(--app-color-text-muted); font-size:11px; }
+.outline-confirmation__fields { display:flex; flex-wrap:wrap; gap:5px; }
+.outline-confirmation__fields > span { padding:2px 6px; border-radius:4px; background:var(--app-color-bg-input); line-height:1.6; font-size:12px; }
+.outline-confirmation__review { color:var(--app-color-accent); }
+.outline-confirmation__muted { color:var(--app-color-text-muted); }
+.outline-confirmation__note { padding:14px 0; font-size:12px; color:var(--app-color-text-muted); }
+.outline-confirmation__error { padding:0 0 14px; color:var(--app-color-danger); }
+.outline-confirmation__empty { display:flex; flex-direction:column; align-items:center; justify-content:center; height:100%; min-height:160px; gap:12px; color:var(--app-color-text-muted); }
+.outline-confirmation__empty h4 { margin:0; color:var(--app-color-text); }
+@media(max-width:700px) {
+  .outline-confirmation__layout { grid-template-columns:1fr; height:min(640px,65vh); overflow:auto; }
+  .outline-confirmation__summary { overflow:visible; padding:20px; border-right:0; border-bottom:1px solid var(--app-color-border); }
+  .outline-confirmation__detail { min-height:360px; padding:0 16px; }
+  .outline-confirmation__list { overflow:visible; }
+  .outline-confirmation thead th,.outline-confirmation tbody th,.outline-confirmation td { padding:10px 6px; }
+}

@@ -1,0 +1,104 @@
+.ui-button.ant-btn {
+  min-width: 0;
+  padding-inline: 16px;
+  border-radius: var(--app-radius-control);
+  box-shadow: none;
+  font-size: var(--app-font-size);
+  font-weight: 500;
+  transition: background-color var(--app-motion-fast), border-color var(--app-motion-fast), color var(--app-motion-fast), box-shadow var(--app-motion-fast);
+}
+
+.ui-button.ui-control--compact { height: var(--app-control-compact); padding-inline: 12px; }
+.ui-button.ui-control--default { height: var(--app-control-default); }
+.ui-button.ui-control--emphasized { height: var(--app-control-emphasized); padding-inline: 20px; }
+.ui-button--primary.ant-btn { border-color: var(--app-color-accent); background: var(--app-color-accent); color: #fff; }
+.ui-button--primary.ant-btn :where(span, svg) { color: inherit; }
+.ui-button--primary.ant-btn:not(:disabled):hover { border-color: var(--app-color-accent-hover); background: var(--app-color-accent-hover); color: #fff; }
+.ui-button--primary.ant-btn:disabled { border-color: color-mix(in srgb, var(--app-color-accent) 48%, var(--app-color-border)); background: color-mix(in srgb, var(--app-color-accent) 58%, var(--app-color-bg-surface)); color: #fff; opacity: 1; }
+.ui-button--primary.ant-btn.ant-btn-loading { border-color: var(--app-color-accent); background: var(--app-color-accent); color: #fff; opacity: .78; }
+.ui-button--secondary.ant-btn { border-color: var(--app-color-border); background: var(--app-color-bg-surface); color: var(--app-color-text); }
+.ui-button--secondary.ant-btn:not(:disabled):hover { border-color: color-mix(in srgb, var(--app-color-accent) 55%, var(--app-color-border)); background: color-mix(in srgb, var(--app-color-accent) 5%, white); color: var(--app-color-accent); }
+.ui-button--text.ant-btn:not(:disabled):hover { background: color-mix(in srgb, var(--app-color-accent) 8%, transparent); color: var(--app-color-accent); }
+.ui-button--danger.ant-btn { border-color: color-mix(in srgb, var(--app-color-danger) 32%, var(--app-color-border)); background: var(--app-color-bg-surface); color: var(--app-color-danger); }
+.ui-button--danger.ant-btn:not(:disabled):hover { background: color-mix(in srgb, var(--app-color-danger) 7%, white); }
+.ui-button--danger.ant-btn:disabled { border-color: color-mix(in srgb, var(--app-color-danger) 18%, var(--app-color-border)); background: var(--app-color-bg-surface); color: color-mix(in srgb, var(--app-color-danger) 52%, var(--app-color-text-muted)); opacity: 1; }
+.ui-button.ant-btn:focus-visible { outline: 2px solid var(--app-color-accent); outline-offset: 2px; }
+
+.ui-icon-button.ant-btn {
+  width: var(--app-control-default);
+  padding: 0;
+}
+.ui-icon-button.ui-control--compact { width: var(--app-control-compact); }
+.ui-icon-button.ui-control--emphasized { width: var(--app-control-emphasized); }
+
+.ui-field { display: grid; min-width: 0; gap: var(--app-space-2); }
+.ui-field__label { color: var(--app-color-text); font-size: 13px; font-weight: 600; line-height: 1.4; }
+.ui-field__label span { color: var(--app-color-danger); }
+.ui-field__message { min-height: 17px; color: var(--app-color-text-muted); font-size: 12px; line-height: 1.4; }
+.ui-field[data-invalid="true"] .ui-field__message { color: var(--app-color-danger); }
+.ui-field__control { width: 100%; }
+.ui-field__control.ui-control--compact:not(.ant-input-textarea) { min-height: var(--app-control-compact); }
+.ui-field__control.ui-control--default:not(.ant-input-textarea) { min-height: var(--app-control-default); }
+.ui-field__control.ui-control--emphasized:not(.ant-input-textarea) { min-height: var(--app-control-emphasized); }
+.ui-field__control.ant-input,
+.ui-field__control .ant-select-selector,
+.ui-field__control.ant-input-textarea textarea { border-radius: var(--app-radius-control); background: var(--app-color-bg-surface); }
+.ui-field__control.ant-input:focus-visible { outline: none; }
+
+.ui-feedback-boundary { min-height: inherit; color: inherit; font: inherit; }
+
+.ui-dialog-root .ant-modal-mask { backdrop-filter: blur(2px); }
+.ui-dialog-root .ant-modal-wrap { overflow: hidden; padding: 24px 16px; }
+.ui-dialog-root .ant-modal-centered { display: flex; align-items: center; justify-content: center; }
+.ui-dialog-root .ant-modal-centered::before { display: none; }
+.ui-dialog.ant-modal { top: auto; max-width: calc(100vw - 32px); max-height: calc(100dvh - 48px); margin: 0; padding-bottom: 0; }
+.ui-dialog :is(.ant-modal-container, .ant-modal-content) { display: flex; width: 100%; max-height: min(820px, calc(100dvh - 48px)); flex-direction: column; padding: 0; overflow: hidden; border-radius: var(--app-radius-surface); }
+.ui-dialog .ant-modal-header { flex: none; margin: 0; padding: 20px 52px 18px 24px; border-bottom: 1px solid var(--app-color-border); }
+.ui-dialog .ant-modal-close { top: 16px; right: 16px; width: 36px; height: 36px; color: var(--app-color-text-muted); }
+.ui-dialog .ant-modal-body { min-height: 0; flex: 1 1 auto; overflow: auto; overscroll-behavior: contain; }
+.ui-dialog .ant-modal-footer { flex: none; margin: 0; }
+.ui-dialog__heading { display: grid; gap: 5px; }
+.ui-dialog__heading strong,
+.ui-dialog__heading h2 { margin: 0; color: var(--app-color-text); font-size: 18px; line-height: 1.35; }
+.ui-dialog__heading p { margin: 0; color: var(--app-color-text-muted); font-size: 12px; font-weight: 400; line-height: 1.55; }
+.ui-dialog__body { min-width: 0; padding: 20px 24px; color: var(--app-color-text); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.ui-dialog__body small { font-size: 12px !important; line-height: 1.55; }
+.ui-dialog__body code { font-size: 12px !important; line-height: 1.5; }
+.ui-dialog__body :is(input, select, textarea) { min-width: 0; font-size: 14px !important; }
+.ui-dialog__footer { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--app-space-2); padding: 14px 24px; border-top: 1px solid var(--app-color-border); background: color-mix(in srgb, var(--app-color-bg-layout) 62%, white); }
+.ui-dialog--confirm .ant-modal-header { border-bottom: 0; padding-bottom: 8px; }
+.ui-dialog--confirm .ui-dialog__body { padding-top: 6px; }
+.ui-confirm-dialog__message { margin: 0; color: var(--app-color-text-muted); line-height: 1.7; }
+.ui-dialog__error { margin-top: var(--app-space-3); padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--app-color-danger) 30%, white); border-radius: var(--app-radius-control); background: color-mix(in srgb, var(--app-color-danger) 7%, white); color: var(--app-color-danger); font-size: 13px; }
+
+@media (max-width: 680px) {
+  .ui-dialog-root .ant-modal-wrap {
+    padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  .ui-dialog.ant-modal { max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .ui-dialog :is(.ant-modal-container, .ant-modal-content) { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .ui-dialog .ant-modal-header { padding: 18px 48px 16px 18px; }
+  .ui-dialog__body { padding: 18px; }
+  .ui-dialog__body :is(input, select, textarea) { font-size: 16px !important; }
+  .ui-dialog__footer { padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); }
+}
+
+@media (max-height: 760px) {
+  .ui-dialog-root .ant-modal-wrap { padding-block: 12px; }
+  .ui-dialog.ant-modal,
+  .ui-dialog :is(.ant-modal-container, .ant-modal-content) { max-height: calc(100dvh - 24px); }
+  .ui-dialog .ant-modal-header { padding-block: 15px 13px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ui-button.ant-btn { transition: none; }
+}
+.ui-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

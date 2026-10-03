@@ -1,0 +1,221 @@
+.canvas-tool-dock {
+  position: absolute;
+  left: 18px;
+  bottom: 24px;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 44px;
+  border: 1px solid #dedfe2;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.08);
+  padding: 8px 0;
+}
+
+.canvas-tool-dock button {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #4b4854;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.canvas-tool-dock button:hover {
+  background: #f0edf5;
+}
+
+.canvas-tool-dock button.primary {
+  background: #1f1d24;
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.canvas-tool-dock button.primary:hover {
+  background: #33303c;
+}
+
+.canvas-tool-dock button[aria-pressed="true"] {
+  background: #ede9f3;
+  color: #5b4279;
+}
+
+/* 抽屉面板（添加节点 / 资产库） */
+.canvas-tool-panel {
+  position: absolute;
+  left: 72px;
+  top: 18px;
+  bottom: 18px;
+  z-index: 24;
+  box-sizing: border-box;
+  width: 320px;
+  border: 1px solid #dedde3;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(16px);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.1);
+  padding: 18px;
+  overflow-y: auto;
+  animation: panel-slide-in 0.18s ease-out;
+}
+
+@keyframes panel-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.canvas-tool-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.canvas-tool-panel > header small {
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: #928e9b;
+}
+
+.canvas-tool-panel > header h2 {
+  margin: 3px 0 14px;
+  font-size: 16px;
+  color: #26242c;
+}
+
+.canvas-tool-panel > header button {
+  border: 0;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+}
+
+.canvas-add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.canvas-add-grid button {
+  height: 56px;
+  border: 1px solid #e1e0e6;
+  border-radius: 10px;
+  background: #fbfafc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.canvas-add-grid button:hover {
+  background: #f0edf5;
+  border-color: #cac6d4;
+  transform: translateY(-1px);
+}
+
+.canvas-add-grid span {
+  font-size: 12px;
+  font-weight: 500;
+  color: #2b2832;
+}
+
+/* 资产抽屉内部 */
+.canvas-library-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+  border-radius: 8px;
+  background: #eceaf0;
+  padding: 3px;
+}
+
+.canvas-library-tabs button {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 4px;
+  font-size: 10px;
+  color: #555160;
+  background: transparent;
+  cursor: pointer;
+}
+
+.canvas-library-tabs button.active {
+  background: #ffffff;
+  color: #232128;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.canvas-library-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0;
+  border: 1px solid #dcd9e2;
+  border-radius: 16px;
+  background: #ffffff;
+  padding: 0 10px;
+}
+
+.canvas-library-search input {
+  height: 32px;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.canvas-library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.canvas-library-list > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #eae8ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.canvas-library-list > button:hover {
+  border-color: #aba6b8;
+  background: #fbfafc;
+}
+
+.canvas-library-list strong {
+  display: block;
+  font-size: 11px;
+  color: #2a2732;
+}
+
+.canvas-library-list small {
+  display: block;
+  margin-top: 2px;
+  color: #8c8896;
+  font-size: 9px;
+}
+
+/* 节点 Prompt Composer（参考图3/图4） */

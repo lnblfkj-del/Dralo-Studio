@@ -1,0 +1,79 @@
+/* Settings pages: compact directories and one editing surface at a time. */
+.model-routing-page .control-directory-grid{ display:flex; flex-direction:column; gap:0; }
+.model-routing-page .control-directory-card{ min-height:90px; display:flex; align-items:center; padding:16px 8px; border:0; border-bottom:1px solid #eeeaf1; border-radius:0; gap:16px; }
+.model-routing-page .control-directory-copy{ flex:1; }
+.model-routing-page .control-directory-copy>small,.model-routing-page .control-directory-copy>em{ display:none; }
+.model-routing-page .control-directory-card>.control-status{ position:static; }
+.settings-dialog .control-config-body--dialog{ display:block; padding:0; }
+.settings-dialog .control-config-body--dialog .control-config-section{ padding:0; border:0; }
+.channel-advanced summary,.channel-add-model summary{ cursor:pointer; padding:12px 0; color:#725986; font-size:13px; }
+.settings-provider-page .settings-heading p{ font-size:13px; }
+.settings-dialog :is(.ant-modal-container,.ant-modal-content){ display:flex; flex-direction:column; overflow:hidden; }
+.settings-dialog .ant-modal-header{ flex:none; }
+.settings-dialog .settings-dialog__form{ min-height:0; flex:1; overflow:hidden; }
+.settings-dialog .settings-dialog__body{ min-height:0; overflow:auto; overscroll-behavior:contain; }
+.provider-config-panel--dialog .provider-config-heading{ padding:0 0 12px; margin:0; min-height:0; justify-content:flex-end; }
+.provider-config-panel--dialog .provider-config-heading>div:first-child{ display:none; }
+.provider-config-panel--dialog .provider-form{ gap:16px; }
+.provider-config-panel--dialog .provider-fields{ display:grid; grid-template-columns:1fr; gap:16px; }
+.provider-config-panel--dialog .provider-form label{ gap:7px; margin:0; }
+.provider-config-panel--dialog input,.provider-config-panel--dialog select{ box-sizing:border-box; min-width:0; width:100%; min-height:38px; padding:8px 11px; font-size:13px; }
+.provider-config-panel--dialog .provider-field-hint{ font-size:12px; line-height:1.6; margin:8px 0; color:#85798e; }
+.provider-config-panel--dialog .key-input input{ border:0; }
+.provider-config-panel--dialog .advanced-settings{ margin:0; padding:12px 0; gap:14px; }
+.provider-config-panel--dialog .advanced-settings h3{ display:none; }
+.provider-config-panel--dialog .model-section{ margin:0; padding:0; border:0; }
+.provider-config-panel--dialog .model-section>header{ margin:0 0 12px; padding:0; justify-content:flex-end; }
+.provider-config-panel--dialog .model-section>header>div:first-child{ display:none; }
+.channel-add-model{ margin-bottom:12px; border-bottom:1px solid #eeeaf1; }
+.channel-model-search{ margin:4px 0 14px; border:1px solid #ded7e5; border-radius:6px; }
+.provider-config-panel--dialog .model-definition-card{ display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; padding:14px 0; border:0; border-bottom:1px solid #eeeaf1; border-radius:0; }
+.provider-config-panel--dialog .model-definition-main{ min-width:0; }
+.provider-config-panel--dialog .model-definition-main h3{ font-size:14px; overflow-wrap:anywhere; }
+.provider-config-panel--dialog .model-definition-main small{ font-size:11px; overflow-wrap:anywhere; }
+.provider-config-panel--dialog .model-definition-actions{ padding:0; flex-wrap:wrap; align-self:center; }
+.provider-config-panel--dialog .model-capability-tags{ flex-wrap:wrap; }
+.agent-settings-page .agent-directory-grid,.agent-settings-page .business-executor-grid{ display:flex; flex-direction:column; gap:0; }
+.agent-settings-page .agent-directory-card,.agent-settings-page .business-executor-grid>button{ display:flex; align-items:center; width:100%; min-height:78px; padding:15px 8px; gap:16px; border:0; border-bottom:1px solid #eeeaf1; border-radius:0; text-align:left; background:white; }
+.agent-settings-page .agent-directory-card:last-child,.agent-settings-page .business-executor-grid>button:last-child{ border-bottom:0; }
+.agent-settings-page .agent-directory-copy,.agent-settings-page .business-executor-grid>button>div{ flex:1; min-width:0; }
+.agent-settings-page .agent-directory-copy>small,.agent-settings-page .business-executor-grid>button>div>small,.agent-settings-page .agent-directory-copy>em{ display:none; }
+.agent-settings-page .agent-directory-copy>strong,.agent-settings-page .business-executor-grid strong{ font-size:14px; }
+.agent-settings-page .agent-directory-copy>span,.agent-settings-page .business-executor-grid p{ display:block; margin:5px 0 0; color:#84778d; font-size:12px; line-height:1.6; }
+.agent-settings-page .agent-status,.agent-settings-page .business-executor-grid em{ position:static; margin:0 12px; flex-shrink:0; font-size:12px; }
+.agent-settings-page .agent-directory-card::after,.agent-settings-page .business-executor-grid>button::after{ content:'配置 ›'; color:#78598d; font-size:13px; white-space:nowrap; }
+.agent-settings-page .agent-directory-card:hover,.agent-settings-page .business-executor-grid>button:hover{ background:#faf7fc; transform:none; }
+.settings-dialog:has(.agent-config-panel--dialog) :is(.ant-modal-container,.ant-modal-content),.settings-dialog:has(.business-executor-config--dialog) :is(.ant-modal-container,.ant-modal-content){ max-height:min(760px,calc(100dvh - 40px)); }
+.agent-config-panel--dialog .agent-config-header{ padding:0 0 12px; border:0; background:white; display:flex; justify-content:flex-end; }
+.agent-config-panel--dialog .agent-config-header>.agent-config-icon,.agent-config-panel--dialog .agent-config-header>div:not(.agent-config-status){ display:none; }
+.agent-config-panel--dialog .agent-config-status{ margin:0; }
+.agent-config-panel--dialog .settings-tabs{ margin:0 0 18px; }
+.agent-config-panel--dialog .settings-tabs button{ border:0; border-bottom:2px solid transparent; border-radius:0; background:white; }
+.agent-config-panel--dialog .settings-tabs button[aria-selected=true]{ border-bottom-color:#9472ac; background:white; }
+.agent-config-panel--dialog .agent-config-body{ display:block; padding:0; }
+.agent-config-panel--dialog .agent-config-section{ border:0; padding:0; margin:0; background:white; }
+.agent-config-panel--dialog .agent-config-section>header{ display:none; }
+.agent-config-body[data-view=models] .agent-skill-bindings,.agent-config-body[data-view=rules] .agent-skill-bindings,.agent-config-body[data-view=skills] .agent-config-fields{ display:none; }
+.agent-config-body[data-view=models] .agent-config-fields>.agent-config-section:nth-child(2),.agent-config-body[data-view=rules] .agent-config-fields>.agent-config-section:first-child{ display:none; }
+.agent-config-panel--dialog .agent-settings-grid{ grid-template-columns:1fr; gap:18px; }
+.agent-config-panel--dialog .agent-model-policy{ padding:0 0 16px; border:0; border-bottom:1px solid #eeeaf1; background:white; }
+.agent-config-panel--dialog .agent-field-heading span,.agent-config-panel--dialog .agent-field>span{ font-size:13px; }
+.agent-config-panel--dialog .agent-field-heading small,.agent-config-panel--dialog .agent-field>small,.agent-config-panel--dialog .agent-route-resolution{ font-size:12px; line-height:1.6; }
+.agent-config-panel--dialog .agent-settings-grid-models{ gap:12px; }
+.provider-config-panel--dialog:has(.model-section) .provider-config-heading{ display:none; }
+.agent-config-panel--dialog .agent-model-selects{ grid-template-columns:minmax(130px,.8fr) minmax(0,1.2fr); gap:10px; }
+.agent-config-panel--dialog :is(input,select,textarea),.business-executor-config--dialog :is(input,select){ font-size:13px; }
+.agent-config-panel--dialog textarea{ min-height:240px; line-height:1.8; }
+.agent-config-panel--dialog .agent-skill-binding-grid{ grid-template-columns:1fr; max-height:380px; overflow:auto; }
+.agent-config-panel--dialog .agent-follow-panel{ display:none; }
+.business-executor-config--dialog>header{ padding:0 0 12px; justify-content:flex-end; background:white; border:0; }
+.business-executor-config--dialog>header>.business-executor-icon,.business-executor-config--dialog>header>div{ display:none; }
+.business-executor-config--dialog .business-executor-fields{ padding:12px 0; }
+.business-executor-config--dialog .business-executor-skills{ padding:16px 0; }
+.business-executor-config--dialog .business-executor-skills>div{ grid-template-columns:1fr; }
+.business-executor-config--dialog .business-executor-tools{ padding:12px 0; }
+@media(max-width:700px){
+ .agent-settings-page .agent-directory-card,.agent-settings-page .business-executor-grid>button{ flex-wrap:wrap; }
+ .agent-config-panel--dialog .agent-model-selects{ grid-template-columns:1fr; }
+ .provider-config-panel--dialog .model-definition-card{ grid-template-columns:1fr; }
+}

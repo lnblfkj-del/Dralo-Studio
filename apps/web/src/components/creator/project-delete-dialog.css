@@ -1,0 +1,30 @@
+.project-delete-dialog {
+  box-sizing: border-box;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  margin: auto;
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius-surface);
+  background: var(--app-color-bg-container, white);
+  color: var(--app-color-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  box-shadow: 0 16px 48px #0003;
+}
+.project-delete-dialog::backdrop { background: #0006; }
+.project-delete-dialog > header { display: flex; align-items: flex-start; gap: 16px; padding: 20px 24px; border-bottom: 1px solid var(--app-color-border); }
+.project-delete-dialog h2 { flex: 1; min-width: 0; margin: 0; font-size: 18px; line-height: 1.5; overflow-wrap: anywhere; }
+.project-delete-dialog .project-delete-close { display: grid; place-items: center; flex: none; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 4px; color: var(--app-color-text-muted); background: transparent; }
+.project-delete-dialog .project-delete-close:hover { background: var(--app-color-bg-layout); }
+.project-delete-body { padding: 20px 24px 0; overflow-wrap: anywhere; }
+.project-delete-body > p:first-child { margin: 0 0 20px; }
+.project-delete-body label { display: grid; gap: 8px; }
+.project-delete-body input { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; }
+.project-delete-status { min-height: 21px; color: var(--app-color-text-muted); font-size: 13px; }
+.project-delete-error { color: var(--app-color-danger); }
+.project-delete-dialog > footer { display: flex; justify-content: flex-end; padding: 12px 24px 20px; }
+.project-delete-dialog .project-delete-confirm { min-width: 100px; color: white; background: var(--app-color-danger); border-color: var(--app-color-danger); }
+.project-delete-dialog button:disabled { cursor: not-allowed; opacity: .45; }

@@ -1,0 +1,16 @@
+{
+  "name": "dralo-studio",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @ai-drama/web dev",
+    "build:web": "pnpm --filter @ai-drama/web build",
+    "build:director": "pnpm --dir apps/director-upstream build",
+    "build": "pnpm build:director && pnpm build:web"
+  },
+  "license": "Apache-2.0"
+}

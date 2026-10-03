@@ -1,0 +1,137 @@
+.agent-workspace-launcher {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 120;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  padding: 0;
+  border: 1px solid #d8d3dc;
+  border-radius: 10px;
+  color: #28232d;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 38px rgba(37, 31, 45, 0.14);
+  backdrop-filter: blur(14px);
+}
+.agent-workspace-launcher:hover {
+  border-color: #a993c1;
+  box-shadow: 0 17px 42px rgba(37, 31, 45, 0.17);
+}
+.agent-workspace-launcher-icon,
+.agent-workspace-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  color: #76558f;
+  background: #f0eaf5;
+}
+.agent-workspace-launcher-icon {
+  width: 34px;
+  height: 34px;
+}
+.agent-workspace-identity > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
+
+.agent-workspace-header {
+  box-sizing: border-box;
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex: 0 0 auto;
+  padding: 9px 14px;
+  border-bottom: 1px solid #ebe8ed;
+  background: #fff;
+}
+.agent-workspace-identity,
+.agent-workspace-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.agent-workspace-icon {
+  width: 34px;
+  height: 34px;
+}
+.agent-workspace-identity strong {
+  color: #2d2731;
+  font-size: 13px;
+  line-height: 1.3;
+}
+.agent-workspace-identity small {
+  max-width: 210px;
+  overflow: hidden;
+  color: #8b8490;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-workspace-action,
+.agent-workspace-header-actions .header-action-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 1px solid #e1dde5;
+  border-radius: 8px;
+  color: #6f6875;
+  background: #faf9fb;
+}
+.agent-workspace-action:hover,
+.agent-workspace-header-actions .header-action-btn:hover,
+.agent-workspace-header-actions .header-action-btn.active {
+  border-color: #c9bbd7;
+  color: #674a80;
+  background: #f3edf8;
+}
+
+.creative-workspace.agent-workspace-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.episode-script-workspace.agent-workspace-closed {
+  grid-template-columns: 240px minmax(0, 1fr);
+}
+.script-agent-popover > .agent-workspace-header,
+.creative-agent > .agent-workspace-header,
+.episode-script-agent > .agent-workspace-header {
+  height: auto;
+  min-height: 58px;
+  padding: 9px 14px;
+}
+.creative-agent > .agent-workspace-header .agent-workspace-action,
+.episode-script-agent > .agent-workspace-header .agent-workspace-action,
+.canvas-agent-floating .agent-workspace-header .agent-workspace-action,
+.canvas-agent-floating .agent-workspace-header .header-action-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e1dde5;
+  border-radius: 8px;
+  background: #faf9fb;
+}
+.episode-script-workspace .episode-script-agent footer button {
+  border-radius: 8px;
+}
+.canvas-agent-floating > .agent-workspace-header {
+  min-height: 58px;
+}
+.canvas-agent-floating .agent-job-tag {
+  margin-left: 2px;
+}
+
+@media (max-width: 760px) {
+  .agent-workspace-launcher {
+    right: 14px;
+    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  }
+  .episode-script-workspace.agent-workspace-closed {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+}

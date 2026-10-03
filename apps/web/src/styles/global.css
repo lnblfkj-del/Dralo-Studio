@@ -1,0 +1,124 @@
+/* 全局样式。
+ *
+ * 旧业务类名暂时保留；数值来自 theme/appTheme.ts，并在首帧前注入。
+ */
+
+:root {
+  /* 兼容未迁移页面；禁止在业务页继续新增同义主题值。 */
+  --bg: var(--app-color-bg-layout);
+  --bg-elevated: var(--app-color-bg-surface);
+  --bg-input: var(--app-color-bg-input);
+  --border: var(--app-color-border);
+  --text: var(--app-color-text);
+  --text-muted: var(--app-color-text-muted);
+  --accent: var(--app-color-accent);
+  --accent-hover: var(--app-color-accent-hover);
+  --danger: var(--app-color-danger);
+  --success: var(--app-color-success);
+
+  --radius: var(--app-radius-control);
+  --space: var(--app-space-4);
+
+  color-scheme: light;
+  font-family: var(--app-font-family);
+  line-height: 1.6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+  padding: 8px 16px;
+  transition: background 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-elevated));
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* 键盘焦点必须可见，这是无障碍的基本要求 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--text);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0 0 12px;
+  line-height: 1.3;
+}
+
+/* 屏幕阅读器专用文本 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

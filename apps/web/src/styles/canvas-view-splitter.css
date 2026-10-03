@@ -1,0 +1,19 @@
+.canvas-advanced-entry { flex-wrap: wrap; }
+.production-editor.canvas-views-dialog { width: 100%; max-width: none; max-height: none; padding: 0; overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; color: var(--text-primary, #2d2933); }
+.canvas-views-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 22px; padding: 22px; border-block: 1px solid var(--border, #e3dfe9); }
+.canvas-views-layout section { min-width: 0; }
+.canvas-views-image { position: relative; width: 100%; overflow: hidden; background: #faf9fc; }
+.canvas-views-image img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.production-editor.canvas-views-dialog .canvas-views-image button { position: absolute; border: 1px dashed #9075b4; border-radius: 0; background: transparent; padding: 0; display: flex; align-items: flex-start; justify-content: flex-start; overflow: hidden; }
+.production-editor.canvas-views-dialog .canvas-views-image button:hover { background: #9075b40c; }
+.production-editor.canvas-views-dialog .canvas-views-image button[aria-pressed="true"] { border: 2px solid #82639e; background: #9075b414; }
+.canvas-views-image button span { color: #fff; background: #76568e; padding: 3px 5px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.canvas-views-layout p, .canvas-views-layout small { font-size: 12px; color: var(--text-secondary, #827a90); line-height: 1.7; }
+.canvas-views-settings fieldset { display: grid; gap: 12px; }
+.canvas-views-settings label:not(.canvas-views-confirm) { display: grid; gap: 6px; min-width: 0; }
+.canvas-views-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.canvas-views-settings select, .canvas-views-settings input:not([type="checkbox"]) { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px; border: 1px solid var(--border, #e3dfe9); border-radius: 7px; background: var(--surface, #fff); color: inherit; }
+.canvas-views-settings label.canvas-views-confirm { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.6; }
+.canvas-views-confirm input { width: auto; margin-top: 3px; }
+.canvas-views-layout [role="alert"] { color: #b34d60; }
+@media (max-width: 650px) { .canvas-views-layout { grid-template-columns: 1fr; padding: 16px; } }

@@ -1,0 +1,14 @@
+.canvas-prompt-input { position: relative; min-width: 0; }
+.canvas-input-role { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-size: 11px; }
+.canvas-input-role select { flex: 1; min-width: 0; }
+.production-canvas .canvas-commands { overflow-x: auto; flex-wrap: nowrap; }
+.production-canvas .canvas-commands > button, .production-canvas .canvas-save { flex-shrink: 0; white-space: nowrap; }
+.production-canvas .canvas-error-notice { position: absolute; z-index: 20; bottom: 80px; left: 50%; transform: translateX(-50%); width: min(620px, calc(100% - 40px)); box-sizing: border-box; padding: 14px; border: 1px solid #e8a6a6; border-radius: 10px; background: #fff5f5; color: #9e2323; box-shadow: 0 4px 18px #0002; white-space: normal; overflow-wrap: anywhere; max-height: min(40vh, 300px); overflow-y: auto; font-size: 13px; line-height: 1.6; }
+.production-canvas .canvas-error-notice p { margin: 6px 0; white-space: pre-wrap; }
+.production-canvas .canvas-node-task small, .production-canvas .canvas-media-node [role=alert] { display: block; flex-basis: 100%; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; line-height: 1.6; }
+.canvas-prompt-input textarea { width: 100%; box-sizing: border-box; }
+.canvas-mention-options { position: absolute; bottom: 100%; left: 0; right: 0; max-height: 220px; overflow: auto; z-index: 30; background: #fff; color: #282332; border: 1px solid #d8ccec; border-radius: 10px; padding: 5px; box-shadow: 0 8px 25px #25163420; }
+.canvas-mention-options button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 7px; border: 0; background: transparent; text-align: left; }
+.canvas-mention-options button[aria-selected=true] { background: #eee6fa; }
+.canvas-input-tags { font-size: 11px; margin: 5px 0; color: #726185; }
+.canvas-input-tags summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

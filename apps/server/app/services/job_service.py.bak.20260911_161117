@@ -1,0 +1,2376 @@
+"""SQLite Job 状态机与原子领取。"""
+
+import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from hashlib import sha256
+from typing import Any
+
+from sqlalchemy import String, and_, case, cast, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.team_access import owner_scope, same_team
+from sqlalchemy.orm import aliased
+
+from app.core.config import settings
+from app.core.errors import AppError, ConflictError, NotFoundError, ValidationError
+from app.models import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_DOWNLOADING,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_PROCESSING,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RETRYING,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_SUCCEEDED,
+    JOB_TYPE_EXPORT,
+    JOB_TYPE_IMAGE,
+    JOB_TYPE_TEXT,
+    JOB_TYPE_VIDEO,
+    BillingCall,
+    Episode,
+    EpisodeProduction,
+    EpisodeProductionPlan,
+    Job,
+    Project,
+    Provider,
+    ProviderModel,
+    Scene,
+    SegmentVideoVersion,
+    Shot,
+    ShotVideoVersion,
+    VideoSegment,
+    VideoSegmentShot,
+    utcnow,
+)
+from app.providers.protocols import execution_contract, is_toapis_model, validate_model_protocol
+from app.providers.video_contracts import VIDEO_CONTRACTS, validate_video_parameters
+from app.services.pricing_service import attach as attach_pricing
+from app.services.pricing_service import estimate as estimate_pricing
+
+TERMINAL_STATUSES = {JOB_STATUS_SUCCEEDED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}
+BATCH_PARENT_TARGETS = {
+    "video_batch",
+    "episode_video_batch",
+    "script_study_batch_group",
+    "script_asset_breakdown_group",
+}
+LOCAL_JOB_TYPES = {"media_process", JOB_TYPE_EXPORT}
+ACTIVE_LEASE_STATUSES = {
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_PROCESSING,
+    JOB_STATUS_DOWNLOADING,
+}
+REMOTE_EXECUTION_PHASES = {"poll", "download"}
+
+
+def _aware_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+async def _video_model_pair(
+    session: AsyncSession, provider_model_id: int
+) -> tuple[ProviderModel, Provider]:
+    pair = (
+        await session.execute(
+            select(ProviderModel, Provider)
+            .join(Provider, Provider.id == ProviderModel.provider_id)
+            .where(ProviderModel.id == provider_model_id)
+        )
+    ).one_or_none()
+    if pair is None:
+        raise NotFoundError("模型不存在")
+    model, provider = pair
+    validate_model_protocol(provider, model)
+    if not provider.enabled or not model.enabled:
+        raise ConflictError("模型渠道或模型已停用")
+    if model.model_type != "video":
+        raise ConflictError("批量分镜视频只能使用视频模型")
+    return model, provider
+
+
+def _aggregate_video_pricing(quotes: list[dict[str, Any]]) -> dict[str, Any]:
+    currencies = {str(item.get("currency", "CNY")) for item in quotes}
+    known = [item for item in quotes if item.get("amount") is not None]
+    result: dict[str, Any] = {
+        "status": "unknown",
+        "currency": next(iter(currencies), "CNY") if len(currencies) <= 1 else "MIXED",
+        "amount": None,
+        "estimated_cents": None,
+        "estimated_count": len(known),
+        "total_count": len(quotes),
+        "reason": "部分或全部分镜视频价格未知；未知不等于免费",
+        "breakdown": quotes,
+    }
+    if quotes and len(known) == len(quotes) and len(currencies) == 1:
+        amount = sum((Decimal(str(item["amount"])) for item in known), Decimal("0"))
+        result.update(
+            status="estimated",
+            amount=format(amount, "f"),
+            reason="按各分镜视频提交参数汇总估算，非渠道实际扣费",
+        )
+        if result["currency"] == "CNY":
+            result["estimated_cents"] = sum(
+                int(item.get("estimated_cents") or 0) for item in known
+            )
+    return result
+
+
+async def build_episode_video_plan(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int,
+    episode_id: int,
+    provider_model_id: int,
+    parameters: dict[str, Any],
+    regenerate: bool,
+) -> dict[str, Any]:
+    """Validate an E5 segment batch without creating jobs or contacting a provider.
+
+    The legacy ``*_shot_ids`` fields remain read-only aliases for clients created
+    before E5.  They describe the shots contained by the selected segments; jobs
+    are never created against those shot ids here.
+    """
+    episode = await session.scalar(
+        select(Episode).where(
+            Episode.id == episode_id,
+            Episode.project_id == project_id,
+            owner_scope(Episode.owner_id, owner_id),
+        )
+    )
+    if episode is None:
+        raise NotFoundError("分集不存在")
+    from app.services.script_finalization_service import require_project_scripts_finalized
+
+    await require_project_scripts_finalized(session, project_id, owner_id)
+    from app.services import business_executor_service
+
+    orchestrator_execution = await business_executor_service.resolve_execution(
+        session, "media_task_orchestrator"
+    )
+    model, provider = await _video_model_pair(session, provider_model_id)
+    from app.services import segment_plan_service
+
+    production = await session.scalar(
+        select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+    )
+    if production is None or production.active_plan_id is None:
+        await segment_plan_service.initialize_legacy_plan(session, episode)
+        production = await session.scalar(
+            select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+        )
+    plan = (
+        await session.get(EpisodeProductionPlan, production.active_plan_id)
+        if production and production.active_plan_id
+        else None
+    )
+    if plan is None:
+        raise ConflictError("本集尚未建立片段生产计划")
+    if plan.status not in {"confirmed", "compatibility"}:
+        raise ConflictError("片段脚本尚未确认，请先保存并确认生产计划")
+    if plan.source_script_revision != episode.script_revision:
+        raise ConflictError("片段计划来源剧本已变化，请重新规划后再生产")
+    project = await session.scalar(
+        select(Project).where(Project.id == project_id, owner_scope(Project.owner_id, owner_id))
+    )
+    if project is None:
+        raise NotFoundError("项目不存在")
+    from app.services.asset_service import get_project_asset_readiness
+
+    asset_readiness = await get_project_asset_readiness(session, project)
+    episode_asset_state = next(
+        (
+            item
+            for item in asset_readiness["episodes"]
+            if item["episode_id"] == episode.id
+        ),
+        None,
+    )
+    asset_block_reason: str | None = None
+    if episode_asset_state and episode_asset_state["status"] not in {
+        "ready",
+        "no_requirements",
+    }:
+        missing_names = [
+            issue["asset_name"] for issue in episode_asset_state["issues"][:3]
+        ]
+        if episode_asset_state["status"] == "stale":
+            asset_block_reason = "剧本版本变化后，角色或场景素材尚未复核"
+        else:
+            suffix = f"：{'、'.join(missing_names)}" if missing_names else ""
+            asset_block_reason = f"缺少已确认的角色或场景最终图片{suffix}"
+    if plan.provider_model_id is not None and plan.provider_model_id != model.id:
+        raise ConflictError("当前片段计划使用了其他视频模型，请重新规划后再生产")
+    segments = list(
+        (
+            await session.scalars(
+                select(VideoSegment)
+                .where(VideoSegment.plan_id == plan.id)
+                .order_by(VideoSegment.order, VideoSegment.id)
+            )
+        ).all()
+    )
+    if not segments:
+        raise ConflictError("当前片段计划为空，请重新规划")
+    segment_ids = [segment.id for segment in segments]
+    links = list(
+        (
+            await session.scalars(
+                select(VideoSegmentShot)
+                .where(VideoSegmentShot.segment_id.in_(segment_ids))
+                .order_by(VideoSegmentShot.segment_id, VideoSegmentShot.order)
+            )
+        ).all()
+    )
+    links_by_segment: dict[int, list[VideoSegmentShot]] = {
+        segment.id: [] for segment in segments
+    }
+    for link in links:
+        links_by_segment[link.segment_id].append(link)
+    shot_ids = [link.shot_id for link in links]
+    shots = {
+        item.id: item
+        for item in (
+            await session.scalars(select(Shot).where(Shot.id.in_(shot_ids)))
+        ).all()
+    }
+    final_ids = set(
+        (
+            await session.scalars(
+                select(SegmentVideoVersion.segment_id).where(
+                    SegmentVideoVersion.segment_id.in_(segment_ids),
+                    SegmentVideoVersion.is_final.is_(True),
+                )
+            )
+        ).all()
+    )
+    active_ids = set(
+        (
+            await session.scalars(
+                select(Job.target_id).where(
+                    Job.target_type == "video_segment",
+                    Job.target_id.in_(segment_ids),
+                    Job.status.not_in(TERMINAL_STATUSES),
+                )
+            )
+        ).all()
+    )
+    eligible: list[int] = []
+    skipped: list[int] = []
+    blocked: list[dict[str, Any]] = []
+    quotes: list[dict[str, Any]] = []
+    from app.providers.toapis import video_parameters
+    video_contract: dict[str, Any] | None = None
+    if plan.status == "confirmed":
+        from app.services.video_model_contract import (
+            normalize as normalize_video_model,
+        )
+        from app.services.video_model_contract import (
+            validate_parameters,
+            validate_segment,
+        )
+
+        video_contract = normalize_video_model(model)
+
+    for segment in segments:
+        segment_shots = [shots[link.shot_id] for link in links_by_segment[segment.id] if link.shot_id in shots]
+        issue = {
+            "segment_id": segment.id,
+            "order": segment.order,
+            "shot_ids": [item.id for item in segment_shots],
+            # Compatibility aliases for pre-E5 clients.
+            "shot_id": segment_shots[0].id if segment_shots else None,
+            "scene_id": segment_shots[0].scene_id if segment_shots else None,
+        }
+        if segment.id in active_ids:
+            blocked.append(
+                {
+                    **issue,
+                    "reason": "该片段已有进行中的视频任务",
+                }
+            )
+            continue
+        if asset_block_reason:
+            blocked.append({**issue, "reason": asset_block_reason})
+            continue
+        if segment.id in final_ids and not regenerate:
+            skipped.append(segment.id)
+            continue
+        if any(shot.is_locked for shot in segment_shots):
+            blocked.append(
+                {
+                    **issue,
+                    "reason": "分镜已锁定，所在片段不能生成视频",
+                }
+            )
+            continue
+        prompt = (segment.prompt or "").strip()
+        if not prompt:
+            blocked.append(
+                {
+                    **issue,
+                    "reason": "缺少片段供应商 Prompt",
+                }
+            )
+            continue
+        refs = segment.refs or {}
+        reference_ids = list(dict.fromkeys(
+            int(value)
+            for value in refs.get("reference_media_ids", [])
+            if type(value) is int and value > 0
+        ))
+        segment_parameters = {
+            **(plan.parameters or {}),
+            **(segment.parameters or {}),
+            **parameters,
+            "duration": segment.generation_duration,
+        }
+        reference_ids = [
+            media_id
+            for media_id in reference_ids
+            if media_id
+            not in {
+                segment_parameters.get("first_frame_media_id"),
+                segment_parameters.get("last_frame_media_id"),
+            }
+        ]
+        try:
+            if video_contract is not None:
+                validate_parameters(video_contract, segment_parameters)
+                validate_segment(
+                    video_contract,
+                    generation_duration=segment.generation_duration,
+                    shot_count=len(segment_shots),
+                    timeline_duration=segment.timeline_duration,
+                    reference_count=len(reference_ids),
+                )
+            effective_parameters = {**(model.default_params or {}), **segment_parameters}
+            from app.providers.protocols import effective_protocol
+            if effective_protocol(provider, model) in VIDEO_CONTRACTS:
+                validate_video_parameters(effective_protocol(provider, model), effective_parameters,
+                                  negative_prompt=segment.negative_prompt,
+                                  first=bool(effective_parameters.get("first_frame_media_id")),
+                                  last=bool(effective_parameters.get("last_frame_media_id")),
+                                  references=len(reference_ids))
+            if is_toapis_model(provider, model):
+                if segment.negative_prompt:
+                    raise ConflictError("ToAPIs 视频负面提示词请合并到生成要求中")
+                effective_parameters = video_parameters(
+                    model.model_id,
+                    effective_parameters,
+                    first=bool(effective_parameters.get("first_frame_media_id")),
+                    last=bool(effective_parameters.get("last_frame_media_id")),
+                    references=len(reference_ids),
+                )
+        except (ConflictError, ValidationError) as exc:
+            blocked.append(
+                {
+                    **issue,
+                    "reason": exc.message,
+                }
+            )
+            continue
+        quote = estimate_pricing(model, prompt, effective_parameters)
+        quotes.append({
+            "segment_id": segment.id,
+            "order": segment.order,
+            "generation_duration": segment.generation_duration,
+            "shot_ids": issue["shot_ids"],
+            **quote,
+        })
+        eligible.append(segment.id)
+    pricing = _aggregate_video_pricing(quotes)
+    eligible_shots = [
+        link.shot_id for link in links if link.segment_id in eligible
+    ]
+    skipped_shots = [
+        link.shot_id for link in links if link.segment_id in skipped
+    ]
+    return {
+        "project_id": project_id,
+        "episode_id": episode.id,
+        "episode_number": episode.number,
+        "provider_model_id": model.id,
+        "provider_name": provider.name,
+        "model_id": model.model_id,
+        "plan_id": plan.id,
+        "plan_version": plan.version,
+        "plan_revision": plan.revision,
+        "eligible_segment_ids": eligible,
+        "skipped_final_segment_ids": skipped,
+        "eligible_shot_ids": eligible_shots,
+        "skipped_final_shot_ids": skipped_shots,
+        "blocked": blocked,
+        "total_segments": len(segments),
+        "total_shots": len(shots),
+        "total_generation_duration": sum(
+            segment.generation_duration for segment in segments if segment.id in eligible
+        ),
+        "estimated_count": len(quotes),
+        "pricing_estimate": pricing,
+        "requires_confirmation": True,
+        "business_executor": orchestrator_execution,
+    }
+
+
+async def create_text_job(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    provider_model_id: int,
+    prompt: str,
+    project_id: int | None,
+    parameters: dict[str, Any],
+) -> Job:
+    row = await session.execute(
+        select(ProviderModel, Provider)
+        .join(Provider, Provider.id == ProviderModel.provider_id)
+        .where(ProviderModel.id == provider_model_id)
+    )
+    pair = row.one_or_none()
+    if pair is None:
+        raise NotFoundError("模型不存在")
+    model, provider = pair
+    validate_model_protocol(provider, model)
+    if not provider.enabled or not model.enabled:
+        raise ConflictError("模型渠道或模型已停用")
+    if model.model_type != "text":
+        raise ConflictError("M2 文本任务只能使用文本模型")
+    if project_id is not None:
+        project = await session.scalar(
+            select(Project.id).where(Project.id == project_id, owner_scope(Project.owner_id, owner_id))
+        )
+        if project is None:
+            raise NotFoundError("项目不存在")
+    job = Job(
+        owner_id=owner_id,
+        project_id=project_id,
+        provider_id=provider.id,
+        job_type=JOB_TYPE_TEXT,
+        status=JOB_STATUS_QUEUED,
+        payload={"provider_model_id": model.id, "prompt": prompt, "parameters": {**model.default_params, **parameters}, "protocol_contract": execution_contract(provider, model)},
+        provider=provider.name,
+        model=model.model_id,
+    )
+    attach_pricing(job, model)
+    session.add(job)
+    await session.flush()
+    return job
+
+
+async def create_image_job(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int | None,
+    asset_id: int,
+    provider_model_id: int,
+    prompt: str,
+    negative_prompt: str | None,
+    reference_media_ids: list[int],
+    parameters: dict[str, Any],
+) -> Job:
+    row = await session.execute(
+        select(ProviderModel, Provider)
+        .join(Provider, Provider.id == ProviderModel.provider_id)
+        .where(ProviderModel.id == provider_model_id)
+    )
+    pair = row.one_or_none()
+    if pair is None:
+        raise NotFoundError("模型不存在")
+    model, provider = pair
+    validate_model_protocol(provider, model)
+    if not provider.enabled or not model.enabled:
+        raise ConflictError("模型渠道或模型已停用")
+    if model.model_type != "image":
+        raise ConflictError("图片任务只能使用图片模型")
+    if project_id is not None:
+        project = await session.scalar(
+            select(Project.id).where(Project.id == project_id, owner_scope(Project.owner_id, owner_id))
+        )
+        if project is None:
+            raise NotFoundError("项目不存在")
+    job = Job(
+        owner_id=owner_id,
+        project_id=project_id,
+        provider_id=provider.id,
+        job_type=JOB_TYPE_IMAGE,
+        target_type="asset",
+        target_id=asset_id,
+        status=JOB_STATUS_QUEUED,
+        payload={
+            "protocol_contract": execution_contract(provider, model),
+            "provider_model_id": model.id,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "reference_media_ids": reference_media_ids,
+            "parameters": {**model.default_params, **parameters},
+        },
+        provider=provider.name,
+        model=model.model_id,
+    )
+    attach_pricing(job, model)
+    session.add(job)
+    await session.flush()
+    return job
+
+
+async def create_video_job(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    provider_model_id: int,
+    prompt: str,
+    project_id: int,
+    negative_prompt: str | None,
+    first_frame_media_id: int | None,
+    last_frame_media_id: int | None,
+    reference_media_ids: list[int],
+    parameters: dict[str, Any],
+) -> Job:
+    row = await session.execute(
+        select(ProviderModel, Provider).join(Provider, Provider.id == ProviderModel.provider_id)
+        .where(ProviderModel.id == provider_model_id)
+    )
+    pair = row.one_or_none()
+    if pair is None:
+        raise NotFoundError("模型不存在")
+    model, provider = pair
+    validate_model_protocol(provider, model)
+    if not provider.enabled or not model.enabled:
+        raise ConflictError("模型渠道或模型已停用")
+    if model.model_type != "video":
+        raise ConflictError("视频任务只能使用视频模型")
+    from app.providers.toapis import video_parameters
+    parameters = {**model.default_params, **parameters}
+    from app.providers.protocols import effective_protocol
+    if effective_protocol(provider, model) in VIDEO_CONTRACTS:
+        validate_video_parameters(effective_protocol(provider, model), parameters, negative_prompt=negative_prompt, first=bool(first_frame_media_id),
+                          last=bool(last_frame_media_id), references=len(reference_media_ids))
+    if is_toapis_model(provider, model):
+        parameters = video_parameters(model.model_id, parameters, first=bool(first_frame_media_id),
+            last=bool(last_frame_media_id), references=len(reference_media_ids))
+        if negative_prompt:
+            raise ConflictError("ToAPIs 视频负面提示词请合并到生成要求中")
+    project = await session.scalar(select(Project.id).where(
+        Project.id == project_id, owner_scope(Project.owner_id, owner_id)
+    ))
+    if project is None:
+        raise NotFoundError("项目不存在")
+    from app.models import MediaFile
+    media_ids = [x for x in [first_frame_media_id, last_frame_media_id, *reference_media_ids] if x]
+    if media_ids:
+        count = await session.scalar(select(func.count(MediaFile.id)).where(
+            MediaFile.id.in_(set(media_ids)), owner_scope(MediaFile.owner_id, owner_id), MediaFile.kind == "image"
+        ))
+        if count != len(set(media_ids)):
+            raise ConflictError("首帧、尾帧或参考媒体不存在")
+    job = Job(
+        owner_id=owner_id, project_id=project_id, provider_id=provider.id,
+        job_type=JOB_TYPE_VIDEO, status=JOB_STATUS_QUEUED,
+        target_type="project", target_id=project_id,
+        payload={"protocol_contract": execution_contract(provider, model), "provider_model_id": model.id, "prompt": prompt,
+                 "negative_prompt": negative_prompt, "first_frame_media_id": first_frame_media_id,
+                 "last_frame_media_id": last_frame_media_id, "reference_media_ids": reference_media_ids,
+                 "parameters": parameters},
+        provider=provider.name, model=model.model_id,
+    )
+    attach_pricing(job, model)
+    session.add(job)
+    await session.flush()
+    return job
+
+
+async def create_shot_video_job(
+    session: AsyncSession, owner_id: int, *, shot_id: int, **data: Any
+) -> Job:
+    shot = await session.scalar(select(Shot).where(Shot.id == shot_id, owner_scope(Shot.owner_id, owner_id)))
+    if shot is None:
+        raise NotFoundError("分镜不存在")
+    if shot.is_locked:
+        raise ConflictError("分镜已锁定，不能生成新视频版本")
+    active = await session.scalar(
+        select(Job.id).where(
+            Job.target_type == "shot",
+            Job.target_id == shot.id,
+            Job.status.not_in(TERMINAL_STATUSES),
+        )
+    )
+    if active is not None:
+        raise ConflictError("该分镜已有进行中的视频任务，请等待完成后再试")
+    project_id = await session.scalar(
+        select(Episode.project_id).join(Scene, Scene.episode_id == Episode.id).where(Scene.id == shot.scene_id)
+    )
+    job = await create_video_job(session, owner_id, project_id=project_id, **data)
+    job.target_type = "shot"
+    job.target_id = shot.id
+    shot.status = "generating"
+    await session.flush()
+    return job
+
+
+async def create_segment_video_job(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    segment: VideoSegment,
+    project_id: int,
+    provider_model_id: int,
+    parameters: dict[str, Any],
+    plan_parameters: dict[str, Any],
+    shot_ids: list[int],
+) -> Job:
+    """Create one paid-capable video job for exactly one VideoSegment."""
+    if segment.status == "generating":
+        raise ConflictError("该片段已有进行中的视频任务")
+    active = await session.scalar(
+        select(Job.id).where(
+            Job.target_type == "video_segment",
+            Job.target_id == segment.id,
+            Job.status.not_in(TERMINAL_STATUSES),
+        )
+    )
+    if active is not None:
+        raise ConflictError("该片段已有进行中的视频任务")
+    refs = segment.refs or {}
+    reference_media_ids = list(
+        dict.fromkeys(
+            int(value)
+            for value in refs.get("reference_media_ids", [])
+            if type(value) is int and value > 0
+        )
+    )
+    effective = {
+        **plan_parameters,
+        **(segment.parameters or {}),
+        **parameters,
+        "duration": segment.generation_duration,
+    }
+    first_frame_media_id = effective.pop("first_frame_media_id", None)
+    last_frame_media_id = effective.pop("last_frame_media_id", None)
+    reference_media_ids = [
+        media_id
+        for media_id in reference_media_ids
+        if media_id not in {first_frame_media_id, last_frame_media_id}
+    ]
+    job = await create_video_job(
+        session,
+        owner_id,
+        provider_model_id=provider_model_id,
+        prompt=segment.prompt,
+        project_id=project_id,
+        negative_prompt=segment.negative_prompt,
+        first_frame_media_id=first_frame_media_id,
+        last_frame_media_id=last_frame_media_id,
+        reference_media_ids=reference_media_ids,
+        parameters=effective,
+    )
+    job.target_type = "video_segment"
+    job.target_id = segment.id
+    job.payload = {
+        **job.payload,
+        "plan_id": segment.plan_id,
+        "episode_id": segment.episode_id,
+        "segment_order": segment.order,
+        "shot_ids": shot_ids,
+        "generation_duration": segment.generation_duration,
+    }
+    segment.status = "generating"
+    await session.flush()
+    return job
+
+
+async def create_episode_segment_jobs(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int,
+    episode_id: int,
+    provider_model_id: int,
+    segment_ids: list[int],
+    parameters: dict[str, Any],
+    request_id: str,
+    regenerate: bool,
+    plan_summary: dict[str, Any],
+) -> tuple[Job, list[Job]]:
+    """Create the E5 episode parent and one immutable child per segment."""
+    segments = list(
+        (
+            await session.scalars(
+                select(VideoSegment)
+                .where(
+                    VideoSegment.id.in_(segment_ids),
+                    VideoSegment.episode_id == episode_id,
+                )
+                .order_by(VideoSegment.order)
+            )
+        ).all()
+    )
+    if len(segments) != len(segment_ids):
+        raise ConflictError("片段计划已变化，请重新预检")
+    plan = await session.get(EpisodeProductionPlan, plan_summary["plan_id"])
+    if plan is None or plan.episode_id != episode_id:
+        raise ConflictError("片段计划已变化，请重新预检")
+    links = list(
+        (
+            await session.scalars(
+                select(VideoSegmentShot)
+                .where(VideoSegmentShot.segment_id.in_(segment_ids))
+                .order_by(VideoSegmentShot.segment_id, VideoSegmentShot.order)
+            )
+        ).all()
+    )
+    shots_by_segment: dict[int, list[int]] = {segment.id: [] for segment in segments}
+    for link in links:
+        shots_by_segment[link.segment_id].append(link.shot_id)
+    parent = Job(
+        owner_id=owner_id,
+        project_id=project_id,
+        job_type=JOB_TYPE_VIDEO,
+        status=JOB_STATUS_PROCESSING,
+        progress=0,
+        # Keep the established parent discriminator so historical clients still
+        # discover the operation; payload.production_unit is authoritative in E5.
+        target_type="episode_video_batch",
+        target_id=episode_id,
+        payload={
+            "production_unit": "video_segment",
+            "plan_id": plan_summary["plan_id"],
+            "plan_version": plan_summary["plan_version"],
+            "plan_revision": plan_summary["plan_revision"],
+            "segment_ids": segment_ids,
+            "episode_id": episode_id,
+            "episode_number": plan_summary["episode_number"],
+            "request_id": request_id,
+            "provider_model_id": provider_model_id,
+            "parameters": parameters,
+            "regenerate": regenerate,
+            "pricing_snapshot": plan_summary["pricing_estimate"],
+            "total_generation_duration": plan_summary["total_generation_duration"],
+            "business_executor": plan_summary["business_executor"],
+        },
+        result={
+            "production_unit": "video_segment",
+            "total": len(segments),
+            "completed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "child_job_ids": [],
+        },
+        cost_estimate=plan_summary["pricing_estimate"].get("estimated_cents"),
+    )
+    session.add(parent)
+    await session.flush()
+    children: list[Job] = []
+    for segment in segments:
+        child = await create_segment_video_job(
+            session,
+            owner_id,
+            segment=segment,
+            project_id=project_id,
+            provider_model_id=provider_model_id,
+            parameters=parameters,
+            plan_parameters=plan.parameters or {},
+            shot_ids=shots_by_segment[segment.id],
+        )
+        child.parent_job_id = parent.id
+        child.payload = {
+            **child.payload,
+            "business_executor": plan_summary["business_executor"],
+        }
+        child.payload = {
+            **child.payload,
+            "episode_number": plan_summary["episode_number"],
+        }
+        children.append(child)
+    parent.result = {
+        **parent.result,
+        "child_job_ids": [child.id for child in children],
+    }
+    await session.flush()
+    return parent, children
+
+
+async def create_batch_video_jobs(
+    session: AsyncSession, owner_id: int, *, provider_model_id: int,
+    shot_ids: list[int], parameters: dict[str, Any], project_id: int,
+    episode_id: int | None = None, request_id: str | None = None,
+    regenerate: bool = False,
+) -> tuple[Job, list[Job]]:
+    ids = list(dict.fromkeys(shot_ids))
+    shots = list((await session.execute(
+        select(Shot).where(Shot.id.in_(ids), owner_scope(Shot.owner_id, owner_id))
+    )).scalars())
+    if len(shots) != len(ids):
+        raise NotFoundError("批量分镜中包含不存在的分镜")
+    project_ids = list((await session.execute(
+        select(Episode.project_id).join(Scene, Scene.episode_id == Episode.id).join(Shot, Shot.scene_id == Scene.id)
+        .where(Shot.id.in_(ids))
+    )).scalars())
+    if len(set(project_ids)) != 1:
+        raise ConflictError("批量视频分镜必须属于同一项目")
+    if project_ids[0] != project_id:
+        raise NotFoundError("项目不存在")
+    parent_target = "episode_video_batch" if episode_id is not None else "video_batch"
+    parent = Job(owner_id=owner_id, project_id=project_ids[0], job_type=JOB_TYPE_VIDEO,
+                 status=JOB_STATUS_PROCESSING, progress=0, target_type=parent_target,
+                 target_id=episode_id,
+                 payload={"shot_ids": ids, "episode_id": episode_id, "request_id": request_id,
+                          "provider_model_id": provider_model_id, "parameters": parameters,
+                          "regenerate": regenerate},
+                 result={"total": len(ids), "completed": 0, "succeeded": 0,
+                         "failed": 0, "cancelled": 0, "child_job_ids": []})
+    session.add(parent)
+    await session.flush()
+    children = []
+    for shot in shots:
+        shot_parameters = dict(parameters)
+        shot_parameters.setdefault("duration", round(float(shot.duration or 4)))
+        child = await create_shot_video_job(
+            session, owner_id, shot_id=shot.id, provider_model_id=provider_model_id,
+            prompt=shot.prompt or shot.action or "镜头视频", negative_prompt=shot.negative_prompt,
+            first_frame_media_id=None, last_frame_media_id=None, reference_media_ids=[],
+            parameters=shot_parameters,
+        )
+        child.parent_job_id = parent.id
+        children.append(child)
+    quotes = [child.payload.get("pricing_snapshot", {}) for child in children]
+    pricing = _aggregate_video_pricing(quotes)
+    parent.payload = {**parent.payload, "pricing_snapshot": pricing}
+    parent.cost_estimate = pricing.get("estimated_cents")
+    parent.result = {
+        "total": len(children),
+        "completed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "cancelled": 0,
+        "child_job_ids": [child.id for child in children],
+    }
+    await session.flush()
+    return parent, children
+
+
+async def start_episode_video_batch(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int,
+    episode_id: int,
+    provider_model_id: int,
+    parameters: dict[str, Any],
+    regenerate: bool,
+    request_id: str,
+    expected_plan_id: int | None = None,
+    expected_plan_revision: int | None = None,
+) -> Job:
+    request_fingerprint = sha256(
+        json.dumps(
+            {
+                "project_id": project_id,
+                "episode_id": episode_id,
+                "provider_model_id": provider_model_id,
+                "parameters": parameters,
+                "regenerate": regenerate,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    existing_jobs = list(
+        (
+            await session.scalars(
+                select(Job)
+                .where(
+                    owner_scope(Job.owner_id, owner_id),
+                    Job.project_id == project_id,
+                    Job.target_type == "episode_video_batch",
+                    Job.target_id == episode_id,
+                )
+                .order_by(Job.id.desc())
+            )
+        ).all()
+    )
+    for existing in existing_jobs:
+        if (existing.payload or {}).get("request_id") == request_id:
+            previous_fingerprint = (existing.payload or {}).get("request_fingerprint")
+            if previous_fingerprint and previous_fingerprint != request_fingerprint:
+                raise ConflictError("相同请求编号的生产参数不一致，请刷新任务状态")
+            return existing
+    if any(existing.status not in TERMINAL_STATUSES for existing in existing_jobs):
+        raise ConflictError("本集已有进行中的批量生产任务")
+    plan = await build_episode_video_plan(
+        session,
+        owner_id,
+        project_id=project_id,
+        episode_id=episode_id,
+        provider_model_id=provider_model_id,
+        parameters=parameters,
+        regenerate=regenerate,
+    )
+    if expected_plan_id is not None and plan["plan_id"] != expected_plan_id:
+        raise ConflictError("片段计划已变化，请重新预检费用")
+    if (
+        expected_plan_revision is not None
+        and plan["plan_revision"] != expected_plan_revision
+    ):
+        raise ConflictError("片段计划内容已变化，请重新预检费用")
+    if plan["blocked"]:
+        first = plan["blocked"][0]
+        raise ConflictError(
+            f"片段 {first['order']} 无法批量生产：{first['reason']}"
+        )
+    if not plan["eligible_segment_ids"]:
+        if plan["skipped_final_segment_ids"]:
+            raise ConflictError("本集片段均已有最终视频版本；如需重做，请开启重新生成")
+        raise ConflictError("本集没有可生成的视频片段")
+    parent, _children = await create_episode_segment_jobs(
+        session,
+        owner_id,
+        project_id=project_id,
+        episode_id=episode_id,
+        provider_model_id=provider_model_id,
+        segment_ids=plan["eligible_segment_ids"],
+        parameters=parameters,
+        request_id=request_id,
+        regenerate=regenerate,
+        plan_summary=plan,
+    )
+    parent.payload = {**parent.payload, "plan": plan}
+    parent.payload = {
+        **parent.payload,
+        "request_fingerprint": request_fingerprint,
+    }
+    production = await session.scalar(
+        select(EpisodeProduction).where(EpisodeProduction.episode_id == episode_id)
+    )
+    if production is not None:
+        production.last_error = None
+    await session.flush()
+    return parent
+
+
+async def start_project_episode_batches(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int,
+    episode_ids: list[int],
+    provider_model_id: int,
+    parameters: dict[str, Any],
+    regenerate: bool,
+    request_id: str,
+) -> list[Job]:
+    existing = list(
+        (
+            await session.scalars(
+                select(Job).where(
+                    owner_scope(Job.owner_id, owner_id),
+                    Job.project_id == project_id,
+                    Job.target_type == "episode_video_batch",
+                    Job.target_id.in_(episode_ids),
+                )
+            )
+        ).all()
+    )
+    existing_by_episode = {
+        item.target_id: item
+        for item in existing
+        if (item.payload or {}).get("request_id")
+        == f"{request_id}:{item.target_id}"
+    }
+    if len(existing_by_episode) == len(episode_ids):
+        return [existing_by_episode[episode_id] for episode_id in episode_ids]
+    if existing_by_episode:
+        raise ConflictError(
+            "本次跨集请求只创建了部分任务，请刷新任务状态，不要更换请求编号重发"
+        )
+    episodes = list(
+        (
+            await session.scalars(
+                select(Episode).where(
+                    Episode.id.in_(episode_ids),
+                    Episode.project_id == project_id,
+                    owner_scope(Episode.owner_id, owner_id),
+                )
+            )
+        ).all()
+    )
+    if len(episodes) != len(episode_ids):
+        raise NotFoundError("批量列表中包含不存在的分集")
+    episode_numbers = {item.id: item.number for item in episodes}
+    # Validate every episode before creating the first job, so a bad episode
+    # cannot leave a partially submitted project batch.
+    for episode_id in episode_ids:
+        plan = await build_episode_video_plan(
+            session,
+            owner_id,
+            project_id=project_id,
+            episode_id=episode_id,
+            provider_model_id=provider_model_id,
+            parameters=parameters,
+            regenerate=regenerate,
+        )
+        if plan["blocked"] or not plan["eligible_segment_ids"]:
+            reason = (
+                plan["blocked"][0]["reason"]
+                if plan["blocked"]
+                else "没有可生成的片段视频"
+            )
+            raise ConflictError(f"第 {episode_numbers[episode_id]} 集：{reason}")
+    jobs = []
+    for episode_id in episode_ids:
+        jobs.append(
+            await start_episode_video_batch(
+                session,
+                owner_id,
+                project_id=project_id,
+                episode_id=episode_id,
+                provider_model_id=provider_model_id,
+                parameters=parameters,
+                regenerate=regenerate,
+                request_id=f"{request_id}:{episode_id}",
+            )
+        )
+    return jobs
+
+
+async def create_episode_export_job(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int,
+    episode_id: int,
+    request_id: str,
+) -> Job:
+    episode = await session.scalar(
+        select(Episode).where(
+            Episode.id == episode_id,
+            Episode.project_id == project_id,
+            owner_scope(Episode.owner_id, owner_id),
+        )
+    )
+    if episode is None:
+        raise NotFoundError("分集不存在")
+    from app.services.script_finalization_service import require_project_scripts_finalized
+
+    await require_project_scripts_finalized(session, project_id, owner_id)
+    existing_jobs = list(
+        (
+            await session.scalars(
+                select(Job)
+                .where(
+                    owner_scope(Job.owner_id, owner_id),
+                    Job.project_id == project_id,
+                    Job.target_type == "episode_export",
+                    Job.target_id == episode_id,
+                )
+                .order_by(Job.id.desc())
+            )
+        ).all()
+    )
+    for existing in existing_jobs:
+        if (existing.payload or {}).get("request_id") == request_id:
+            return existing
+    if any(existing.status not in TERMINAL_STATUSES for existing in existing_jobs):
+        raise ConflictError("本集已有进行中的整集合成任务")
+    production = await session.scalar(
+        select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+    )
+    if production is None or production.active_plan_id is None:
+        from app.services import segment_plan_service
+
+        await segment_plan_service.initialize_legacy_plan(session, episode)
+        production = await session.scalar(
+            select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+        )
+    plan = (
+        await session.get(EpisodeProductionPlan, production.active_plan_id)
+        if production and production.active_plan_id
+        else None
+    )
+    if plan is None:
+        raise ConflictError("本集尚未建立片段生产计划，无法合成")
+    segments = list(
+        (
+            await session.scalars(
+                select(VideoSegment)
+                .where(VideoSegment.plan_id == plan.id)
+                .order_by(VideoSegment.order)
+            )
+        ).all()
+    )
+    if not segments:
+        raise ConflictError("当前片段计划为空，无法合成")
+    final_versions = list(
+        (
+            await session.scalars(
+                select(SegmentVideoVersion).where(
+                    SegmentVideoVersion.segment_id.in_([item.id for item in segments]),
+                    SegmentVideoVersion.is_final.is_(True),
+                )
+            )
+        ).all()
+    )
+    final_by_segment = {item.segment_id: item for item in final_versions}
+    missing = [item for item in segments if item.id not in final_by_segment]
+    if missing:
+        raise ConflictError(f"还有 {len(missing)} 个片段未选定最终视频版本")
+    settings = (production.settings if production else {}) or {}
+    job = Job(
+        owner_id=owner_id,
+        project_id=project_id,
+        job_type=JOB_TYPE_EXPORT,
+        status=JOB_STATUS_QUEUED,
+        target_type="episode_export",
+        target_id=episode.id,
+        payload={
+            "request_id": request_id,
+            "episode_id": episode.id,
+            "plan_id": plan.id,
+            "plan_version": plan.version,
+            "segment_video_version_ids": [
+                final_by_segment[item.id].id for item in segments
+            ],
+            "background_audio_media_id": settings.get("background_audio_media_id"),
+            "background_audio_volume": settings.get("background_audio_volume", 0.3),
+            "include_subtitles": settings.get("include_subtitles", True),
+            "pricing_snapshot": {
+                "status": "estimated",
+                "currency": "CNY",
+                "amount": "0",
+                "estimated_cents": 0,
+                "reason": "本地 FFmpeg 合成，不调用外部生成渠道",
+                "pricing_version": "local-export-v1",
+            },
+        },
+        cost_estimate=0,
+        max_attempts=1,
+    )
+    session.add(job)
+    if production is not None:
+        production.last_error = None
+    await session.flush()
+    return job
+
+
+async def list_child_jobs(
+    session: AsyncSession, parent: Job, owner_id: int
+) -> list[Job]:
+    if not await same_team(session, parent.owner_id, owner_id) or parent.target_type not in BATCH_PARENT_TARGETS:
+        raise NotFoundError("批量任务不存在")
+    return list(
+        (
+            await session.scalars(
+                select(Job)
+                .where(Job.parent_job_id == parent.id, owner_scope(Job.owner_id, owner_id))
+                .order_by(Job.id)
+            )
+        ).all()
+    )
+
+
+async def get_job(
+    session: AsyncSession, job_id: int, owner_id: int, *, include_deleted: bool = False
+) -> Job:
+    filters = [Job.id == job_id, owner_scope(Job.owner_id, owner_id)]
+    if not include_deleted:
+        filters.append(Job.deleted_at.is_(None))
+    job = await session.scalar(select(Job).where(*filters))
+    if job is None:
+        raise NotFoundError("任务不存在")
+    return job
+
+
+def _job_list_filters(
+    owner_id: int,
+    *,
+    project_id: int | None = None,
+    status: str | None = None,
+    job_type: str | None = None,
+    search: str | None = None,
+    recycled: bool = False,
+) -> list[Any]:
+    filters: list[Any] = [owner_scope(Job.owner_id, owner_id)]
+    filters.append(Job.deleted_at.is_not(None) if recycled else Job.deleted_at.is_(None))
+    if project_id is not None:
+        filters.append(Job.project_id == project_id)
+    if status == "active":
+        filters.append(Job.status.in_(ACTIVE_LEASE_STATUSES))
+    elif status == "attention":
+        filters.append(Job.status.in_({
+            *ACTIVE_LEASE_STATUSES,
+            JOB_STATUS_QUEUED,
+            JOB_STATUS_RETRYING,
+            JOB_STATUS_FAILED,
+        }))
+    elif status == "queued":
+        filters.append(Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING}))
+    elif status and status != "all":
+        filters.append(Job.status == status)
+    type_groups = {
+        "text": {"text", "script", "storyboard"},
+        "image": {"image"},
+        "video": {"video", "export"},
+        "audio": {"audio", "tts"},
+    }
+    if job_type and job_type != "all":
+        if job_type == "other":
+            known_types = set().union(*type_groups.values())
+            filters.append(Job.job_type.not_in(known_types))
+        else:
+            filters.append(Job.job_type.in_(type_groups.get(job_type, {job_type})))
+    keyword = (search or "").strip().lower()
+    if keyword:
+        pattern = f"%{keyword}%"
+        filters.append(or_(
+            func.lower(cast(Job.id, String)).like(pattern),
+            func.lower(cast(Job.project_id, String)).like(pattern),
+            func.lower(Job.job_type).like(pattern),
+            func.lower(func.coalesce(Job.provider, "")).like(pattern),
+            func.lower(func.coalesce(Job.model, "")).like(pattern),
+            func.lower(func.coalesce(Job.error_message, "")).like(pattern),
+        ))
+    return filters
+
+
+async def list_jobs(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    offset: int = 0,
+    limit: int = 50,
+    project_id: int | None = None,
+    status: str | None = None,
+    job_type: str | None = None,
+    search: str | None = None,
+    sort: str = "newest",
+    recycled: bool = False,
+) -> dict[str, Any]:
+    filters = _job_list_filters(
+        owner_id,
+        project_id=project_id,
+        status=status,
+        job_type=job_type,
+        search=search,
+        recycled=recycled,
+    )
+    order = Job.created_at.asc() if sort == "oldest" else Job.created_at.desc()
+    total = int(await session.scalar(select(func.count(Job.id)).where(*filters)) or 0)
+    items = list((await session.scalars(
+        select(Job).where(*filters).order_by(order, Job.id.desc()).offset(offset).limit(limit)
+    )).all())
+
+    base = [owner_scope(Job.owner_id, owner_id), Job.deleted_at.is_(None)]
+    if project_id is not None:
+        base.append(Job.project_id == project_id)
+    today = utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    row = (await session.execute(select(
+        func.count(Job.id),
+        func.sum(case((Job.status.in_(ACTIVE_LEASE_STATUSES), 1), else_=0)),
+        func.sum(case((Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING}), 1), else_=0)),
+        func.sum(case((Job.status == JOB_STATUS_SUCCEEDED, 1), else_=0)),
+        func.sum(case((Job.status == JOB_STATUS_FAILED, 1), else_=0)),
+        func.sum(case((Job.status == JOB_STATUS_CANCELLED, 1), else_=0)),
+        func.sum(case((and_(Job.status == JOB_STATUS_SUCCEEDED, Job.finished_at >= today), 1), else_=0)),
+    ).where(*base))).one()
+    recycle_filters = [owner_scope(Job.owner_id, owner_id), Job.deleted_at.is_not(None)]
+    if project_id is not None:
+        recycle_filters.append(Job.project_id == project_id)
+    recycled_count = int(await session.scalar(select(func.count(Job.id)).where(*recycle_filters)) or 0)
+    values = [int(value or 0) for value in row]
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "stats": {
+            "total": values[0], "active": values[1], "queued": values[2],
+            "succeeded": values[3], "failed": values[4], "cancelled": values[5],
+            "today_completed": values[6], "recycled": recycled_count,
+        },
+    }
+
+
+async def release_due_retries(session: AsyncSession, local_media_only: bool = False) -> int:
+    now = utcnow()
+    result = await session.execute(
+        update(Job)
+        .where(Job.status == JOB_STATUS_RETRYING, Job.available_at <= now)
+        .where(Job.job_type.in_(LOCAL_JOB_TYPES) if local_media_only else True)
+        .values(status=JOB_STATUS_QUEUED, available_at=None)
+    )
+    return int(result.rowcount or 0)
+
+
+async def recover_expired_leases(session: AsyncSession, local_media_only: bool = False) -> int:
+    now = utcnow()
+    jobs = list(
+        (
+            await session.execute(
+                select(Job).where(
+                    Job.status.in_([
+                        JOB_STATUS_RUNNING,
+                        JOB_STATUS_PROCESSING,
+                        JOB_STATUS_DOWNLOADING,
+                    ]),
+                    Job.lease_expires_at < now,
+                    Job.job_type.in_(LOCAL_JOB_TYPES) if local_media_only else True,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    failed_children: list[int] = []
+    for job in jobs:
+        job.worker_id = None
+        job.lease_expires_at = None
+        if job.attempts >= job.max_attempts:
+            job.status = JOB_STATUS_FAILED
+            job.error_code = "LEASE_EXPIRED"
+            job.error_message = "任务执行进程中断，且已达到最大重试次数"
+            job.finished_at = now
+            failed_children.append(job.id)
+        else:
+            job.status = JOB_STATUS_RETRYING
+            job.available_at = now + timedelta(seconds=settings.job_retry_backoff_seconds)
+            job.error_code = "LEASE_EXPIRED"
+            job.error_message = "任务执行进程中断，正在自动重试"
+    await session.flush()
+    for job_id in failed_children:
+        await aggregate_parent_job(session, job_id)
+    return len(jobs)
+
+
+async def claim_next_job(session: AsyncSession, worker_id: str, local_media_only: bool = False) -> Job | None:
+    await release_due_retries(session, local_media_only)
+    await recover_expired_leases(session, local_media_only)
+    now = utcnow()
+    active_global = aliased(Job)
+    active_type = aliased(Job)
+    active_provider = aliased(Job)
+    active_model = aliased(Job)
+    active_local = aliased(Job)
+    # Remote poll/download jobs remain active even while no local Worker owns a
+    # lease. They count against global/type/provider generation capacity, but a
+    # due continuation must be allowed to poll so a full sliding window can drain.
+    global_active_count = (
+        select(func.count(active_global.id))
+        .where(
+            or_(
+                and_(
+                    active_global.status.in_(ACTIVE_LEASE_STATUSES),
+                    active_global.worker_id.is_not(None),
+                    active_global.lease_expires_at >= now,
+                ),
+                and_(
+                    active_global.status == JOB_STATUS_PROCESSING,
+                    active_global.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+                ),
+            )
+        )
+        .scalar_subquery()
+    )
+    type_active_count = (
+        select(func.count(active_type.id))
+        .where(
+            active_type.job_type == Job.job_type,
+            or_(
+                and_(
+                    active_type.status.in_(ACTIVE_LEASE_STATUSES),
+                    active_type.worker_id.is_not(None),
+                    active_type.lease_expires_at >= now,
+                ),
+                and_(
+                    active_type.status == JOB_STATUS_PROCESSING,
+                    active_type.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+                ),
+            ),
+        )
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    provider_active_count = (
+        select(func.count(active_provider.id))
+        .where(
+            active_provider.provider_id == Job.provider_id,
+            or_(
+                and_(
+                    active_provider.status.in_(ACTIVE_LEASE_STATUSES),
+                    active_provider.worker_id.is_not(None),
+                    active_provider.lease_expires_at >= now,
+                ),
+                and_(
+                    active_provider.status == JOB_STATUS_PROCESSING,
+                    active_provider.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+                ),
+            ),
+        )
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    provider_limit = (
+        select(Provider.max_concurrency)
+        .where(Provider.id == Job.provider_id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    candidate_model_id = Job.payload["provider_model_id"].as_integer()
+    active_model_id = active_model.payload["provider_model_id"].as_integer()
+    model_active_count = (
+        select(func.count(active_model.id))
+        .where(
+            active_model_id == candidate_model_id,
+            or_(
+                and_(
+                    active_model.status.in_(ACTIVE_LEASE_STATUSES),
+                    active_model.worker_id.is_not(None),
+                    active_model.lease_expires_at >= now,
+                ),
+                and_(
+                    active_model.status == JOB_STATUS_PROCESSING,
+                    active_model.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+                ),
+            ),
+        )
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    model_limit = (
+        select(ProviderModel.effective_concurrency)
+        .where(ProviderModel.id == candidate_model_id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    model_rate_limit_until = (
+        select(ProviderModel.rate_limit_until)
+        .where(ProviderModel.id == candidate_model_id)
+        .correlate(Job)
+        .scalar_subquery()
+    )
+    type_limit = case(
+        (Job.job_type.in_([JOB_TYPE_TEXT, "script", "storyboard"]), settings.job_text_concurrency),
+        (Job.job_type == JOB_TYPE_IMAGE, settings.job_image_concurrency),
+        (Job.job_type == JOB_TYPE_VIDEO, settings.job_video_concurrency),
+        (Job.job_type == "tts", settings.job_tts_concurrency),
+        (Job.job_type.in_(LOCAL_JOB_TYPES), 1),
+        else_=settings.job_default_type_concurrency,
+    )
+    # Across all Worker processes, at most one CPU media transform holds an active lease.
+    processing_busy = select(active_local.id).where(
+        active_local.job_type.in_(LOCAL_JOB_TYPES),
+        active_local.status.in_(ACTIVE_LEASE_STATUSES),
+        active_local.worker_id.is_not(None),
+        active_local.lease_expires_at >= now,
+    ).exists()
+    paused_parent_ids = select(Job.id).where(
+        Job.batch_paused_at.is_not(None), Job.deleted_at.is_(None)
+    )
+    continuation_ready = and_(
+        Job.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_PROCESSING]),
+        Job.worker_id.is_(None),
+        or_(Job.available_at.is_(None), Job.available_at <= now),
+    )
+    fresh_ready = and_(
+        Job.execution_phase == "submit",
+        Job.status == JOB_STATUS_QUEUED,
+        global_active_count < settings.job_global_concurrency,
+        type_active_count < type_limit,
+        or_(Job.provider_id.is_(None), provider_active_count < provider_limit),
+        or_(
+            candidate_model_id.is_(None),
+            and_(
+                model_limit.is_not(None),
+                model_active_count < model_limit,
+                or_(model_rate_limit_until.is_(None), model_rate_limit_until <= now),
+            ),
+        ),
+        or_(Job.available_at.is_(None), Job.available_at <= now),
+    )
+    candidate = (
+        select(Job.id)
+        .where(
+            Job.job_type.in_(LOCAL_JOB_TYPES) if local_media_only else True,
+            Job.deleted_at.is_(None),
+            or_(Job.parent_job_id.is_(None), Job.parent_job_id.not_in(paused_parent_ids)),
+            fresh_ready if local_media_only else or_(continuation_ready, fresh_ready),
+            or_(Job.job_type.not_in(LOCAL_JOB_TYPES), ~processing_busy),
+            or_(Job.target_type.is_(None), Job.target_type != "video_batch"),
+        )
+        .order_by(
+            case((Job.execution_phase.in_(REMOTE_EXECUTION_PHASES), 0), else_=1),
+            Job.priority.asc(),
+            Job.id.asc(),
+        )
+        .limit(1)
+        .scalar_subquery()
+    )
+    claimed_id = await session.scalar(
+        update(Job)
+        .where(
+            Job.id == candidate,
+            Job.worker_id.is_(None),
+            Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_PROCESSING]),
+        )
+        .values(
+            status=case(
+                (Job.execution_phase == "submit", JOB_STATUS_RUNNING),
+                else_=JOB_STATUS_PROCESSING,
+            ),
+            worker_id=worker_id,
+            lease_expires_at=now + timedelta(seconds=settings.job_lease_seconds),
+            available_at=None,
+            started_at=case((Job.started_at.is_(None), now), else_=Job.started_at),
+            attempts=case(
+                (Job.status == JOB_STATUS_QUEUED, Job.attempts + 1),
+                else_=Job.attempts,
+            ),
+            progress=case(
+                (Job.execution_phase == "submit", 5), else_=Job.progress
+            ),
+            error_code=case(
+                (Job.status == JOB_STATUS_QUEUED, None), else_=Job.error_code
+            ),
+            error_message=case(
+                (Job.status == JOB_STATUS_QUEUED, None), else_=Job.error_message
+            ),
+        )
+        .returning(Job.id)
+    )
+    if claimed_id is None:
+        return None
+    return await session.get(Job, claimed_id)
+
+
+async def mark_processing(session: AsyncSession, job_id: int, worker_id: str) -> bool:
+    result = await session.execute(
+        update(Job)
+        .where(Job.id == job_id, Job.worker_id == worker_id, Job.status == JOB_STATUS_RUNNING)
+        .values(status=JOB_STATUS_PROCESSING, progress=20)
+    )
+    return bool(result.rowcount)
+
+
+async def mark_downloading(session: AsyncSession, job_id: int, worker_id: str) -> bool:
+    result = await session.execute(
+        update(Job).where(
+            Job.id == job_id, Job.worker_id == worker_id,
+            Job.status.in_([
+                JOB_STATUS_RUNNING,
+                JOB_STATUS_PROCESSING,
+                JOB_STATUS_DOWNLOADING,
+            ]),
+        ).values(status="downloading", execution_phase="download", progress=90)
+    )
+    return bool(result.rowcount)
+
+
+async def defer_remote_job(
+    session: AsyncSession,
+    job_id: int,
+    worker_id: str,
+    *,
+    progress: int,
+    delay_seconds: float,
+) -> bool:
+    """Persist a remote in-flight task and release its local Worker lease."""
+    now = utcnow()
+    result = await session.execute(
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.worker_id == worker_id,
+            Job.status.in_([JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING]),
+        )
+        .values(
+            status=JOB_STATUS_PROCESSING,
+            execution_phase="poll",
+            progress=max(20, min(89, progress)),
+            worker_id=None,
+            lease_expires_at=None,
+            available_at=now + timedelta(seconds=max(1.0, delay_seconds)),
+        )
+    )
+    return bool(result.rowcount)
+
+
+async def renew_lease(session: AsyncSession, job_id: int, worker_id: str) -> bool:
+    result = await session.execute(
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.worker_id == worker_id,
+            Job.status.in_([JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_DOWNLOADING]),
+        )
+        .values(lease_expires_at=utcnow() + timedelta(seconds=settings.job_lease_seconds))
+    )
+    return bool(result.rowcount)
+
+
+async def mark_succeeded(
+    session: AsyncSession, job_id: int, worker_id: str, result_data: dict[str, Any]
+) -> bool:
+    result = await session.execute(
+        update(Job)
+        .where(
+            Job.id == job_id,
+            Job.worker_id == worker_id,
+            Job.status.in_([
+                JOB_STATUS_RUNNING,
+                JOB_STATUS_PROCESSING,
+                JOB_STATUS_DOWNLOADING,
+            ]),
+        )
+        .values(
+            status=JOB_STATUS_SUCCEEDED,
+            progress=100,
+            result=result_data,
+            worker_id=None,
+            lease_expires_at=None,
+            finished_at=utcnow(),
+        )
+    )
+    if not result.rowcount:
+        return False
+    await record_model_success(session, job_id)
+    await aggregate_parent_job(session, job_id)
+    return True
+
+
+async def mark_failed(
+    session: AsyncSession,
+    job_id: int,
+    worker_id: str,
+    code: str,
+    message: str,
+    *,
+    retry_after_seconds: int | None = None,
+) -> bool:
+    job = await session.scalar(select(Job).where(Job.id == job_id, Job.worker_id == worker_id))
+    if job is None or job.status not in {
+        JOB_STATUS_RUNNING,
+        JOB_STATUS_PROCESSING,
+        JOB_STATUS_DOWNLOADING,
+    }:
+        return False
+    job.worker_id = None
+    job.lease_expires_at = None
+    job.error_code = code
+    job.error_message = message
+    model_cooldown = None
+    if code == "RATE_LIMIT_ERROR":
+        model_cooldown = await record_model_rate_limit(
+            session, job, retry_after_seconds=retry_after_seconds
+        )
+    uncertain_video = job.payload.get("video_submission", {}).get("started") and not job.payload.get("video_submission", {}).get("id")
+    if uncertain_video:
+        job.error_message = message + "；未确认外部任务 ID，请先在当前模型渠道核对任务/账单，系统不会自动重发"
+    non_retryable = code in {"MODEL_ROUTE_CHANGED", "PROVIDER_PARAMETER_ERROR", "PROVIDER_AUTH_ERROR", "QUOTA_ERROR", "CONFLICT", "MODEL_NOT_FOUND"}
+    if non_retryable or job.attempts >= job.max_attempts or uncertain_video or job.payload.get("media_submission", {}).get("started"):
+        job.status = JOB_STATUS_FAILED
+        job.finished_at = utcnow()
+    else:
+        job.status = JOB_STATUS_RETRYING
+        retry_at = utcnow() + timedelta(seconds=settings.job_retry_backoff_seconds)
+        job.available_at = max(retry_at, model_cooldown) if model_cooldown else retry_at
+    await session.flush()
+    if job.target_type == "shot" and job.target_id is not None:
+        shot = await session.get(Shot, job.target_id)
+        if shot is not None:
+            shot.status = "failed" if job.status == JOB_STATUS_FAILED else "generating"
+    if job.target_type == "video_segment" and job.target_id is not None:
+        segment = await session.get(VideoSegment, job.target_id)
+        if segment is not None:
+            segment.status = "failed" if job.status == JOB_STATUS_FAILED else "generating"
+    if job.target_type == "episode_export" and job.target_id is not None:
+        production = await session.scalar(
+            select(EpisodeProduction).where(
+                EpisodeProduction.episode_id == job.target_id
+            )
+        )
+        if production is not None:
+            production.last_error = job.error_message
+    if job.status == JOB_STATUS_FAILED:
+        await aggregate_parent_job(session, job.id)
+    return True
+
+
+def _job_provider_model_id(job: Job) -> int | None:
+    value = (job.payload or {}).get("provider_model_id")
+    return int(value) if isinstance(value, int) and value > 0 else None
+
+
+async def record_model_rate_limit(
+    session: AsyncSession,
+    job: Job,
+    *,
+    retry_after_seconds: int | None = None,
+) -> datetime | None:
+    """Atomically shrink a model window shared by every Worker process."""
+    model_id = _job_provider_model_id(job)
+    if model_id is None:
+        return None
+    model = await session.scalar(
+        select(ProviderModel).where(ProviderModel.id == model_id).with_for_update()
+    )
+    if model is None:
+        return None
+    now = utcnow()
+    model.rate_limit_hits = min(30, model.rate_limit_hits + 1)
+    model.success_streak = 0
+    model.effective_concurrency = max(1, (model.effective_concurrency + 1) // 2)
+    exponential = settings.model_rate_limit_base_seconds * (2 ** min(model.rate_limit_hits - 1, 5))
+    delay = min(
+        settings.model_rate_limit_max_seconds,
+        max(settings.model_rate_limit_base_seconds, retry_after_seconds or 0, exponential),
+    )
+    model.last_rate_limited_at = now
+    model.rate_limit_until = now + timedelta(seconds=delay)
+    await session.flush()
+    return model.rate_limit_until
+
+
+async def record_model_success(session: AsyncSession, job_id: int) -> None:
+    """Recover one slot only after a configurable run of successful completions."""
+    job = await session.get(Job, job_id)
+    if job is None:
+        return
+    model_id = _job_provider_model_id(job)
+    if model_id is None:
+        return
+    model = await session.scalar(
+        select(ProviderModel).where(ProviderModel.id == model_id).with_for_update()
+    )
+    if model is None or model.effective_concurrency >= model.max_concurrency:
+        if model is not None:
+            model.effective_concurrency = min(model.effective_concurrency, model.max_concurrency)
+            model.success_streak = 0
+            if model.effective_concurrency == model.max_concurrency:
+                model.rate_limit_hits = 0
+                model.rate_limit_until = None
+        return
+    now = utcnow()
+    if _aware_utc(model.rate_limit_until) is not None and _aware_utc(model.rate_limit_until) > now:
+        return
+    model.success_streak += 1
+    if model.success_streak >= settings.model_recovery_successes:
+        model.effective_concurrency += 1
+        model.success_streak = 0
+        model.rate_limit_hits = max(0, model.rate_limit_hits - 1)
+        if model.effective_concurrency >= model.max_concurrency:
+            model.effective_concurrency = model.max_concurrency
+            model.rate_limit_hits = 0
+            model.rate_limit_until = None
+    await session.flush()
+
+
+async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job | None:
+    """根据子任务状态更新批量父任务；父任务本身永远不进入 Worker 队列。"""
+    child = await session.get(Job, child_job_id)
+    if child is None or child.parent_job_id is None:
+        return None
+    parent = await session.get(Job, child.parent_job_id)
+    if parent is None or parent.target_type not in BATCH_PARENT_TARGETS:
+        return None
+    children = list((await session.scalars(
+        select(Job).where(Job.parent_job_id == parent.id)
+    )).all())
+    total = len(children)
+    succeeded = sum(item.status == JOB_STATUS_SUCCEEDED for item in children)
+    failed = sum(item.status == JOB_STATUS_FAILED for item in children)
+    cancelled = sum(item.status == JOB_STATUS_CANCELLED for item in children)
+    completed = succeeded + failed + cancelled
+    actual_generation_duration = sum(
+        float((item.result or {}).get("duration") or 0)
+        for item in children
+        if item.status == JOB_STATUS_SUCCEEDED
+    )
+    parent.progress = round(completed * 100 / total) if total else 100
+    parent.result = {
+        **(parent.result or {}),
+        "total": total,
+        "completed": completed,
+        "succeeded": succeeded,
+        "failed": failed,
+        "cancelled": cancelled,
+        "actual_generation_duration": actual_generation_duration,
+        "children": [
+            {
+                "job_id": item.id,
+                "segment_id": item.target_id if item.target_type == "video_segment" else None,
+                "shot_id": item.target_id if item.target_type == "shot" else None,
+                "segment_order": (item.payload or {}).get("segment_order"),
+                "shot_ids": (item.payload or {}).get("shot_ids", []),
+                "status": item.status,
+                "progress": item.progress,
+                "error_message": item.error_message,
+                "media_file_id": (item.result or {}).get("media_file_id"),
+            }
+            for item in children
+        ],
+    }
+    if completed == total and (failed or cancelled):
+        parent.status = JOB_STATUS_FAILED
+        parent.error_code = "BATCH_PARTIAL_FAILURE" if succeeded else "BATCH_FAILED"
+        batch_label = {
+            "script_study_batch_group": "剧本研读",
+            "script_asset_breakdown_group": "剧本资产拆解",
+        }.get(parent.target_type, "批量视频")
+        parent.error_message = f"{batch_label}完成 {succeeded}/{total}，其中 {failed + cancelled} 个任务失败或取消"
+        parent.finished_at = parent.finished_at or utcnow()
+    elif total and completed == total:
+        parent.status = JOB_STATUS_SUCCEEDED
+        parent.progress = 100
+        parent.error_code = None
+        parent.error_message = None
+        parent.finished_at = parent.finished_at or utcnow()
+    else:
+        parent.status = JOB_STATUS_PROCESSING
+        parent.finished_at = None
+    if parent.target_type == "episode_video_batch" and parent.target_id is not None:
+        production = await session.scalar(
+            select(EpisodeProduction).where(
+                EpisodeProduction.episode_id == parent.target_id
+            )
+        )
+        if production is not None:
+            production.last_error = (
+                parent.error_message if parent.status == JOB_STATUS_FAILED else None
+            )
+    await session.flush()
+    return parent
+
+
+async def cancel_job(session: AsyncSession, job: Job) -> Job:
+    if job.status in TERMINAL_STATUSES:
+        raise ConflictError("任务已结束，无法取消")
+    changed = await session.execute(update(Job).where(
+        Job.id == job.id, Job.status.not_in(TERMINAL_STATUSES),
+    ).values(status=JOB_STATUS_CANCELLED, worker_id=None, lease_expires_at=None, finished_at=utcnow()))
+    if changed.rowcount != 1:
+        raise ConflictError("任务已结束，无法取消")
+    job.status = JOB_STATUS_CANCELLED
+    job.worker_id = None
+    job.lease_expires_at = None
+    job.finished_at = utcnow()
+    cancelled_ids = [job.id]
+    if job.target_type in BATCH_PARENT_TARGETS:
+        children = list((await session.scalars(
+            select(Job).where(Job.parent_job_id == job.id)
+        )).all())
+        for child in children:
+            if child.status not in TERMINAL_STATUSES:
+                cancelled_ids.append(child.id)
+                child.status = JOB_STATUS_CANCELLED
+                child.worker_id = None
+                child.lease_expires_at = None
+                child.finished_at = job.finished_at
+                if child.target_type == "shot" and child.target_id is not None:
+                    shot = await session.get(Shot, child.target_id)
+                    if shot is not None:
+                        has_final = await session.scalar(
+                            select(ShotVideoVersion.id).where(
+                                ShotVideoVersion.shot_id == shot.id,
+                                ShotVideoVersion.is_final.is_(True),
+                            )
+                        )
+                        shot.status = "ready" if has_final else "pending"
+                if child.target_type == "video_segment" and child.target_id is not None:
+                    segment = await session.get(VideoSegment, child.target_id)
+                    if segment is not None:
+                        has_final = await session.scalar(
+                            select(SegmentVideoVersion.id).where(
+                                SegmentVideoVersion.segment_id == segment.id,
+                                SegmentVideoVersion.is_final.is_(True),
+                            )
+                        )
+                        segment.status = "ready" if has_final else "pending"
+        job.status = JOB_STATUS_CANCELLED
+        job.progress = 100
+        job.result = {**(job.result or {}), "cancelled": len(children)}
+    elif job.parent_job_id is not None:
+        if job.target_type == "shot" and job.target_id is not None:
+            shot = await session.get(Shot, job.target_id)
+            if shot is not None:
+                has_final = await session.scalar(
+                    select(ShotVideoVersion.id).where(
+                        ShotVideoVersion.shot_id == shot.id,
+                        ShotVideoVersion.is_final.is_(True),
+                    )
+                )
+                shot.status = "ready" if has_final else "pending"
+        if job.target_type == "video_segment" and job.target_id is not None:
+            segment = await session.get(VideoSegment, job.target_id)
+            if segment is not None:
+                has_final = await session.scalar(
+                    select(SegmentVideoVersion.id).where(
+                        SegmentVideoVersion.segment_id == segment.id,
+                        SegmentVideoVersion.is_final.is_(True),
+                    )
+                )
+                segment.status = "ready" if has_final else "pending"
+        await aggregate_parent_job(session, job.id)
+    from app.services import billing_service
+
+    await billing_service.mark_job_outcome_unknown(session, cancelled_ids)
+    await session.flush()
+    return job
+
+
+async def retry_job(session: AsyncSession, job: Job) -> Job:
+    if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
+        raise ConflictError("仅失败或已取消的任务可以重试")
+    submission = job.payload.get("video_submission", {})
+    if job.payload.get("media_submission", {}).get("started"):
+        raise ConflictError("媒体请求已发送，结果或费用待核实；禁止盲目重发，请先核对渠道账单")
+    if submission.get("started") and not submission.get("id"):
+        raise ConflictError("视频提交结果不确定，请先在当前模型渠道核对任务/账单；不允许盲目重发")
+    if job.target_type in {"canvas_node", "canvas_agent"}:
+        from app.services import canvas_generation_service, canvas_service
+        project = await session.get(Project, job.project_id)
+        await canvas_generation_service.submission_lock(session, project)
+        await session.refresh(job)
+        if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
+            raise ConflictError("任务已被重试或结束，请刷新状态")
+        if job.job_type == "media_process":
+            from app.services import canvas_processing_service
+            await canvas_processing_service.preflight(session, job, retry=True)
+        else:
+            await canvas_generation_service.validate_model(session, job.payload["provider_model_id"], "audio" if job.job_type == "tts" else job.job_type, job.payload.get("parameters", {}))
+            from app.services import canvas_advanced_service
+            await canvas_advanced_service.preflight(session, job)
+        if job.target_type == "canvas_agent":
+            from app.models import AgentSkill
+            from app.services import provider_service
+            config = await provider_service.get_ai_settings(session)
+            skill = await session.get(AgentSkill, job.payload.get("parameters", {}).get("skill_id"))
+            if not config.canvas_agent_enabled or not skill or not skill.enabled:
+                raise ConflictError("画布 Agent 或对应 Skill 已停用")
+            active = await session.scalar(select(Job.id).where(Job.target_type == "canvas_agent", Job.target_id == job.target_id, Job.status.not_in(TERMINAL_STATUSES)))
+            if active:
+                raise ConflictError("该会话已有进行中的任务")
+        if job.target_type == "canvas_node":
+            node = await canvas_service.get_canvas_node(session, project.id, job.payload.get("parameters", {}).get("source_node_key", ""))
+            await canvas_service.assert_node_unlocked(session, project, node)
+            active = await session.scalar(select(Job.id).where(Job.target_type == "canvas_node", Job.target_id == node.id, Job.status.not_in(TERMINAL_STATUSES)))
+            if active:
+                raise ConflictError("节点已有进行中的任务")
+            node.data = {**node.data, "job_id": job.id, "generation_status": "queued"}
+    claimed_retry = await session.execute(
+        update(Job)
+        .where(
+            Job.id == job.id,
+            Job.status.in_({JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}),
+        )
+        .values(status=JOB_STATUS_QUEUED)
+    )
+    if claimed_retry.rowcount != 1:
+        raise ConflictError("任务已被重试或状态已变化，请刷新后再操作")
+    await session.refresh(job)
+    if job.target_type in BATCH_PARENT_TARGETS:
+        batch_result = dict(job.result or {})
+        children = list((await session.scalars(
+            select(Job).where(Job.parent_job_id == job.id)
+        )).all())
+        for child in children:
+            if child.status in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
+                child_submission = child.payload.get("video_submission", {})
+                if child.payload.get("media_submission", {}).get("started"):
+                    raise ConflictError(
+                        f"分镜视频任务 #{child.id} 的媒体请求结果待核实，不能批量盲目重发"
+                    )
+                if child_submission.get("started") and not child_submission.get("id"):
+                    raise ConflictError(
+                        f"分镜视频任务 #{child.id} 的提交结果不确定，请先核对渠道账单"
+                    )
+                child.status = JOB_STATUS_QUEUED
+                child.progress = 0
+                child.attempts = 0
+                child.available_at = None
+                child.error_code = None
+                child.error_message = None
+                child.result = None
+                child.started_at = None
+                child.finished_at = None
+                if child.target_type == "shot" and child.target_id is not None:
+                    shot = await session.get(Shot, child.target_id)
+                    if shot is None or shot.is_locked:
+                        raise ConflictError(
+                            f"分镜视频任务 #{child.id} 的目标已删除或锁定，不能重试"
+                        )
+                    shot.status = "generating"
+                if child.target_type == "video_segment" and child.target_id is not None:
+                    segment = await session.get(VideoSegment, child.target_id)
+                    if segment is None or segment.plan_id != child.payload.get("plan_id"):
+                        raise ConflictError(
+                            f"片段视频任务 #{child.id} 的目标已删除或计划已变化，不能重试"
+                        )
+                    segment.status = "generating"
+        job.status = JOB_STATUS_PROCESSING
+    else:
+        job.status = JOB_STATUS_QUEUED
+        if job.target_type == "episode_export" and job.target_id is not None:
+            production = await session.scalar(
+                select(EpisodeProduction).where(
+                    EpisodeProduction.episode_id == job.target_id
+                )
+            )
+            if production is not None:
+                production.last_error = None
+    job.progress = 0
+    job.attempts = 0
+    job.available_at = None
+    job.error_code = None
+    job.error_message = None
+    job.result = None
+    job.started_at = None
+    job.finished_at = None
+    if job.target_type in BATCH_PARENT_TARGETS:
+        job.result = batch_result
+        if children:
+            await aggregate_parent_job(session, children[0].id)
+    await session.flush()
+    return job
+
+
+async def delete_job(session: AsyncSession, job: Job) -> int:
+    """Move terminal history to the recycle bin without deleting assets or billing."""
+    if job.status not in TERMINAL_STATUSES:
+        raise ConflictError("活动任务不能删除，请先取消并等待状态更新")
+    if job.deleted_at is not None:
+        raise ConflictError("任务已经在回收站中")
+    if job.parent_job_id is not None:
+        raise ConflictError("批量子任务不能单独删除，请删除对应的父任务")
+    job_id = job.id
+    deleted_at = utcnow()
+    job.deleted_at = deleted_at
+    if job.target_type in BATCH_PARENT_TARGETS:
+        await session.execute(
+            update(Job).where(Job.parent_job_id == job.id).values(deleted_at=deleted_at)
+        )
+    await session.flush()
+    return job_id
+
+
+async def restore_job(session: AsyncSession, job: Job) -> Job:
+    """Restore one root task and its child history from the recycle bin."""
+    if job.deleted_at is None:
+        raise ConflictError("任务不在回收站中")
+    if job.parent_job_id is not None:
+        raise ConflictError("批量子任务不能单独恢复，请恢复对应的父任务")
+    job.deleted_at = None
+    if job.target_type in BATCH_PARENT_TARGETS:
+        await session.execute(
+            update(Job).where(Job.parent_job_id == job.id).values(deleted_at=None)
+        )
+    await session.flush()
+    return job
+
+
+async def purge_job(session: AsyncSession, job: Job) -> list[int]:
+    """Permanently remove recycled task history while preserving business data."""
+    if job.deleted_at is None:
+        raise ConflictError("任务必须先移入回收站才能永久删除")
+    if job.status not in TERMINAL_STATUSES:
+        raise ConflictError("活动任务不能永久删除")
+    if job.parent_job_id is not None:
+        raise ConflictError("批量子任务不能单独永久删除，请处理对应父任务")
+    child_ids = list(
+        (await session.scalars(select(Job.id).where(Job.parent_job_id == job.id))).all()
+    )
+    purged_ids = [job.id, *child_ids]
+    now = utcnow()
+    calls = list(
+        (await session.scalars(select(BillingCall).where(BillingCall.job_id.in_(purged_ids)))).all()
+    )
+    job_by_id = {
+        item.id: item
+        for item in (
+            await session.scalars(select(Job).where(Job.id.in_(purged_ids)))
+        ).all()
+    }
+    for call in calls:
+        source = job_by_id.get(call.job_id)
+        call.snapshot = {
+            **(call.snapshot or {}),
+            "purged_job": {
+                "id": call.job_id,
+                "parent_job_id": source.parent_job_id if source else None,
+                "job_type": source.job_type if source else None,
+                "target_type": source.target_type if source else None,
+                "target_id": source.target_id if source else None,
+                "status": source.status if source else None,
+                "purged_at": now.isoformat(),
+            },
+        }
+        call.job_id = None
+    # Child rows are deleted explicitly for databases where self-referential
+    # cascades are deferred; every other job reference uses SET NULL.
+    if child_ids:
+        await session.execute(delete(Job).where(Job.id.in_(child_ids)))
+    await session.execute(delete(Job).where(Job.id == job.id))
+    await session.flush()
+    return purged_ids
+
+
+async def pause_batch(session: AsyncSession, job: Job) -> Job:
+    if job.parent_job_id is not None or job.target_type not in BATCH_PARENT_TARGETS:
+        raise ConflictError("只有批次父任务可以暂停后续提交")
+    if job.status in TERMINAL_STATUSES:
+        raise ConflictError("已结束批次不能暂停")
+    job.batch_paused_at = utcnow()
+    await session.flush()
+    return job
+
+
+async def resume_batch(session: AsyncSession, job: Job) -> Job:
+    if job.parent_job_id is not None or job.target_type not in BATCH_PARENT_TARGETS:
+        raise ConflictError("只有批次父任务可以继续提交")
+    if job.batch_paused_at is None:
+        raise ConflictError("批次当前未暂停")
+    if job.status in TERMINAL_STATUSES:
+        raise ConflictError("已结束批次不能继续")
+    job.batch_paused_at = None
+    await session.flush()
+    return job
+
+
+async def bulk_manage_jobs(
+    session: AsyncSession,
+    owner_id: int,
+    job_ids: list[int],
+    action: str,
+) -> list[dict[str, Any]]:
+    """Apply a management action independently while preserving per-item errors."""
+    if action not in {"cancel", "retry", "delete", "restore", "purge"}:
+        raise ValidationError("不支持的批量任务操作")
+    jobs = list(
+        (
+            await session.scalars(
+                select(Job).where(
+                    owner_scope(Job.owner_id, owner_id),
+                    Job.id.in_(job_ids),
+                    Job.deleted_at.is_not(None) if action in {"restore", "purge"} else Job.deleted_at.is_(None),
+                )
+            )
+        ).all()
+    )
+    by_id = {job.id: job for job in jobs}
+    selected = set(job_ids)
+    results: list[dict[str, Any]] = []
+    for job_id in job_ids:
+        job = by_id.get(job_id)
+        if job is None:
+            results.append(
+                {
+                    "job_id": job_id,
+                    "outcome": "failed",
+                    "error_code": "NOT_FOUND",
+                    "error_message": "任务不存在",
+                }
+            )
+            continue
+        if job.parent_job_id in selected:
+            results.append(
+                {
+                    "job_id": job_id,
+                    "outcome": "covered_by_parent",
+                    "job_status": job.status,
+                }
+            )
+            continue
+        original_status = job.status
+        try:
+            async with session.begin_nested():
+                if action == "cancel":
+                    await cancel_job(session, job)
+                    outcome = "cancelled"
+                elif action == "retry":
+                    await retry_job(session, job)
+                    outcome = "queued"
+                elif action == "restore":
+                    await restore_job(session, job)
+                    outcome = "restored"
+                elif action == "purge":
+                    await purge_job(session, job)
+                    outcome = "purged"
+                else:
+                    await delete_job(session, job)
+                    outcome = "deleted"
+            results.append(
+                {
+                    "job_id": job_id,
+                    "outcome": outcome,
+                    "job_status": None if outcome in {"deleted", "purged"} else job.status,
+                }
+            )
+        except AppError as exc:
+            results.append(
+                {
+                    "job_id": job_id,
+                    "outcome": "failed",
+                    "job_status": original_status,
+                    "error_code": exc.code,
+                    "error_message": exc.message,
+                }
+            )
+    return results
+
+
+async def matching_job_ids(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    project_id: int | None = None,
+    status: str | None = None,
+    job_type: str | None = None,
+    search: str | None = None,
+    recycled: bool = False,
+) -> list[int]:
+    """Resolve a server-side selection so pagination cannot omit matching tasks."""
+    filters = _job_list_filters(
+        owner_id,
+        project_id=project_id,
+        status=status,
+        job_type=job_type,
+        search=search,
+        recycled=recycled,
+    )
+    return list((await session.scalars(select(Job.id).where(*filters).order_by(Job.id))).all())
+
+
+def retry_block_reason(job: Job) -> str | None:
+    if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
+        return "仅失败或已取消的任务可以重试"
+    if job.payload.get("media_submission", {}).get("started"):
+        return "媒体请求结果或费用待核实，禁止盲目重发"
+    submission = job.payload.get("video_submission", {})
+    if submission.get("started") and not submission.get("id"):
+        return "视频提交结果不确定，需先核对渠道任务和账单"
+    return None
+
+
+async def job_diagnostic(session: AsyncSession, job: Job) -> dict[str, Any]:
+    """Return a safe explanation without exposing prompts, keys or provider URLs."""
+    from app.services import worker_runtime_service
+
+    model_runtime = None
+    runtime = await worker_runtime_service.status(session, include_workers=True)
+    worker_online = bool(runtime.get("ready"))
+    if job.worker_id:
+        worker_online = any(
+            item["id"] == job.worker_id for item in runtime.get("workers", [])
+        )
+    queue_reason: str | None = None
+    if (
+        job.status == JOB_STATUS_PROCESSING
+        and job.execution_phase == "poll"
+        and job.worker_id is None
+    ):
+        queue_reason = "remote_processing"
+    elif job.status == JOB_STATUS_RETRYING:
+        queue_reason = "retry_backoff"
+    elif job.status == JOB_STATUS_QUEUED:
+        compatible = [
+            item
+            for item in runtime.get("workers", [])
+            if item["version"] == worker_runtime_service.RUNTIME_VERSION
+            and job.job_type in item["capabilities"]
+        ]
+        if not compatible:
+            queue_reason = (
+                "worker_version_mismatch"
+                if runtime["version_mismatch_workers"]
+                else "no_compatible_worker"
+            )
+        elif runtime["available_capacity"] <= 0:
+            queue_reason = "worker_capacity_full"
+        else:
+            now = utcnow()
+            active_filter = (
+                or_(
+                    and_(
+                        Job.status.in_(ACTIVE_LEASE_STATUSES),
+                        Job.worker_id.is_not(None),
+                        Job.lease_expires_at >= now,
+                    ),
+                    and_(
+                        Job.status == JOB_STATUS_PROCESSING,
+                        Job.execution_phase.in_(REMOTE_EXECUTION_PHASES),
+                    ),
+                ),
+            )
+            global_active = await session.scalar(
+                select(func.count(Job.id)).where(*active_filter)
+            )
+            type_active = await session.scalar(
+                select(func.count(Job.id)).where(
+                    *active_filter, Job.job_type == job.job_type
+                )
+            )
+            provider_active = 0
+            provider_limit = None
+            model_active = 0
+            if job.provider_id is not None:
+                provider_active = await session.scalar(
+                    select(func.count(Job.id)).where(
+                        *active_filter, Job.provider_id == job.provider_id
+                    )
+                )
+                provider_limit = await session.scalar(
+                    select(Provider.max_concurrency).where(
+                        Provider.id == job.provider_id
+                    )
+                )
+            provider_model_id = _job_provider_model_id(job)
+            if provider_model_id is not None:
+                model = await session.get(ProviderModel, provider_model_id)
+                model_active = await session.scalar(
+                    select(func.count(Job.id)).where(
+                        *active_filter,
+                        Job.payload["provider_model_id"].as_integer() == provider_model_id,
+                    )
+                )
+                if model is not None:
+                    model_runtime = {
+                        "model_id": model.id,
+                        "configured_limit": model.max_concurrency,
+                        "effective_limit": model.effective_concurrency,
+                        "active": int(model_active or 0),
+                        "rate_limit_until": model.rate_limit_until,
+                        "rate_limit_hits": model.rate_limit_hits,
+                    }
+            if int(global_active or 0) >= settings.job_global_concurrency:
+                queue_reason = "global_capacity_full"
+            elif int(type_active or 0) >= settings.job_type_concurrency(job.job_type):
+                queue_reason = "job_type_capacity_full"
+            elif provider_limit is not None and int(provider_active or 0) >= provider_limit:
+                queue_reason = "provider_capacity_full"
+            elif model_runtime and _aware_utc(model_runtime["rate_limit_until"]) and _aware_utc(model_runtime["rate_limit_until"]) > now:
+                queue_reason = "model_rate_limit_cooldown"
+            elif model_runtime and int(model_active or 0) >= model_runtime["effective_limit"]:
+                queue_reason = "model_capacity_full"
+            else:
+                queue_reason = "ready_to_claim"
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+        "attempts": job.attempts,
+        "max_attempts": job.max_attempts,
+        "queue_reason": queue_reason,
+        "worker_online": worker_online,
+        "cancel_allowed": job.status not in TERMINAL_STATUSES,
+        "retry_allowed": retry_block_reason(job) is None,
+        "retry_block_reason": retry_block_reason(job),
+        "delete_allowed": job.status in TERMINAL_STATUSES
+        and job.parent_job_id is None,
+        "execution_info": job.execution_info,
+        "model_runtime": model_runtime,
+    }

@@ -1,0 +1,73 @@
+/* Reuse user management panels without changing unrelated settings pages. */
+.account-page .settings-tabs {
+  flex-wrap: wrap;
+}
+
+.account-page .profile-storage {
+  max-width: none;
+  padding: 0;
+  margin: 0 0 24px;
+}
+
+.account-page .profile-form {
+  max-width: none;
+  padding: 0;
+}
+
+.account-page .users-panel { border-radius: 8px; }
+.account-panel-body { padding: 0 24px 24px; }
+.account-panel-footer { display: flex; justify-content: flex-end; padding: 16px 24px; border-top: 1px solid var(--app-color-border, #e4e0e7); }
+.account-page .settings-tabs { margin-bottom: 20px; }
+.account-page .beta-band { padding: 0; margin-top: 20px; background: #fff; border: 1px solid #e4e0e7; }
+.account-page .beta-band > header { padding: 22px 24px 18px; }
+.account-page .beta-band > .beta-copy,
+.account-page .beta-band > p,
+.account-page .beta-band > .beta-reply { margin: 0 24px 24px; }
+.account-page .beta-band > header h2 { margin: 0; font-weight: 600; }
+.account-page .beta-band > header span { line-height: 1.6; }
+.account-page .beta-band > .users-filter { padding: 0 24px 16px; }
+.account-page .beta-toolbar { padding: 0 24px 16px; }
+.account-page .beta-overview { margin-top: 20px; }
+.account-page .beta-metrics { margin: 0; gap: 24px; padding: 0 24px 24px; }
+.account-page .beta-metrics > div { padding: 16px; border: 0; border-radius: 6px; background: #faf9fb; }
+.account-page .beta-sample { margin: 0; }
+.account-page .profile-storage dl { margin-top: 0; }
+.account-page .beta-reply { padding: 12px 16px; background: #faf9fb; border-radius: 0 6px 6px 0; }
+.account-page .beta-reply h3 { margin: 0 0 8px; }
+.account-page .beta-reply p { margin: 0; }
+
+.profile-form .users-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-form .profile-avatar-row {
+  grid-column: 1 / -1;
+  margin-bottom: 6px;
+}
+
+.profile-form .users-fields > button {
+  justify-self: start;
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 760px) {
+  .account-panel-body { padding: 0 16px 20px; }
+  .account-panel-footer { padding: 14px 16px; }
+  .account-page .users-panel-heading,
+  .account-page .beta-band > header { padding: 18px 16px 14px; }
+  .account-page .beta-metrics { padding: 0 16px 20px; gap: 12px; }
+  .account-page .beta-band > .beta-copy,
+  .account-page .beta-band > p,
+  .account-page .beta-band > .beta-reply { margin-inline: 16px; }
+  .profile-form .users-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .account-page .profile-storage dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .account-page .users-actions {
+    flex-wrap: wrap;
+  }
+}

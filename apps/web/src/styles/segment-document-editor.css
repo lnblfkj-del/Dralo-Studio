@@ -1,0 +1,37 @@
+.segment-document-toolbar { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border-color, #e5e5ed); }
+.segment-document-toolbar > span { margin-left: auto; color: #777783; font-size: 12px; }
+.segment-document-toolbar > button { color: #7550ce; background: #f5f0ff; border: 1px solid #d9c9f3; border-radius: 6px; padding: 7px 12px; }
+.segment-document-editor { padding: 16px 0; color: #202026; }
+.document-inline-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.document-inline-fields > .segment-document-field { min-width: 64px; max-width: 100%; }
+.document-inline-fields select { width: auto; max-width: 220px; }
+.document-block { display: flex; gap: 12px; align-items: baseline; margin: 12px 0; }
+.document-block > strong { flex-shrink: 0; font-size: 13px; }
+.document-block > .segment-document-field { flex: 1; min-width: 0; }
+.segment-document-field { position: relative; min-width: 0; }
+.segment-document-field .tiptap { padding: 5px 7px; border: 1px solid transparent; border-radius: 4px; min-height: 34px; outline: none; overflow-wrap: anywhere; font-size: 14px; line-height: 1.8; }
+.segment-document-field .tiptap:hover { background: #fafafa; }
+.segment-document-field .tiptap:focus { border-color: #b79be9; background: #fff; }
+.segment-document-field .tiptap p { margin: 0; }
+.segment-document-editor blockquote { margin: 12px 0; padding: 4px 12px; border-left: 2px solid #8962d9; }
+.document-asset-token { display: inline-flex; align-items: center; background: #f2eef9; color: #584183; border-radius: 4px; padding: 0 4px; }
+.document-token-thumb { display: inline-block; width: 22px; height: 22px; overflow: hidden; margin-right: 4px; vertical-align: middle; }
+.document-mention-menu { position: absolute; z-index: 45; width: 272px; max-width: min(calc(100vw - 24px), 320px); max-height: min(360px, calc(100vh - 24px)); overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-elevated); box-shadow: 0 8px 26px #0002; padding: 8px; }
+.document-mention-scopes { display: flex; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+.document-mention-scopes button { min-height: 30px; padding: 4px 10px; border: 1px solid transparent; border-radius: 5px; color: var(--text-muted); background: transparent; font-size: 12px; }
+.document-mention-scopes [aria-pressed="true"] { color: #7550ce; background: #f3eefb; }
+.document-mention-menu [role="listbox"] { max-height: min(268px, calc(100vh - 108px)); overflow: auto; overscroll-behavior: contain; padding-top: 4px; }
+.document-mention-menu [role="option"] { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 9px; width: 100%; min-width: 0; min-height: 44px; padding: 6px 7px; border: 0; text-align: left; background: transparent; border-radius: 5px; }
+.document-mention-menu [role="option"][aria-selected="true"] { background: #f3eefb; }
+.document-mention-thumb { display: block; width: 30px; height: 30px; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+.document-mention-thumb > * { display: block; width: 100% !important; height: 100% !important; min-width: 0 !important; min-height: 0 !important; max-width: 100% !important; max-height: 100% !important; overflow: hidden !important; }
+.document-mention-thumb img, .document-mention-thumb video, .document-mention-thumb canvas { display: block; width: 100% !important; height: 100% !important; max-width: 100% !important; max-height: 100% !important; object-fit: cover; }
+.document-mention-name { display: block; min-width: 0; overflow: hidden; color: var(--text); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.director-requirements { display: grid; gap: 8px; }
+.director-requirements textarea { width: 100%; min-height: 100px; resize: vertical; }
+.continuous-script .tiptap { min-height: 280px; padding: 12px; }
+.continuous-script .tiptap p { margin: 0 0 14px; }
+.script-inline-tool { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; max-width: 100%; padding: 2px 5px; border-radius: 4px; background: #f3f4f6; color: #34343b; vertical-align: middle; }
+.script-inline-tool input, .script-inline-tool select { width: 90px; min-width: 0; max-width: 160px; padding: 2px 4px; border: 0; background: transparent; font: inherit; }
+.script-inline-tool input[type="number"] { width: 60px; }
+.document-mention-scopes [aria-selected="true"] { color: #7550ce; background: #f3eefb; }

@@ -1,0 +1,5 @@
+@import "./tasks-table.css";
+@import "./tasks-insights.css";
+@import "./tasks-dialog.css";
+.task-action-note{display:inline-flex;align-items:center;gap:5px;color:var(--app-color-warning,#9a6500);font-size:12px;white-space:nowrap}
+.task-recovery-card h3,.task-diagnostic h3{display:flex;align-items:center;gap:7px}

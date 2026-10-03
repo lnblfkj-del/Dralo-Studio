@@ -1,0 +1,11 @@
+packages:
+  - "."
+
+overrides:
+  three-stdlib: 2.36.1
+
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: true

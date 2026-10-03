@@ -1,0 +1,25 @@
+# Dralo Studio direct dependencies.
+# Use requirements.lock.txt for the verified dependency set.
+
+fastapi==0.141.1
+uvicorn==0.52.4
+sqlalchemy==2.0.52
+alembic==1.19.1
+aiosqlite==0.22.1
+asyncpg==0.31.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+httpx==0.28.1
+httpcore==1.0.9
+sse-starlette==3.4.8
+python-jose==3.5.0
+bcrypt==5.0.0
+cryptography==50.0.1
+python-multipart==0.0.20
+Pillow==12.1.1
+boto3==1.43.90
+botocore==1.43.90
+urllib3==2.7.0
+requests==2.34.2
+alibabacloud-oss-v2==1.4.0
+filelock==3.32.6

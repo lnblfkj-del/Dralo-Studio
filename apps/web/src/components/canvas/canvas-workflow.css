@@ -1,0 +1,15 @@
+.canvas-workflow-card { min-width: 0; }
+.canvas-workflow-card .canvas-workflow-steps { list-style: none; margin: 14px 0; padding: 0; display: grid; gap: 8px; }
+.canvas-workflow-steps li { display: flex; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.canvas-workflow-steps li > div { min-width: 0; flex: 1; }
+.canvas-workflow-steps strong, .canvas-workflow-steps small { display: block; overflow-wrap: anywhere; }
+.canvas-workflow-steps p { white-space: pre-wrap; max-height: 110px; overflow: auto; }
+.workflow-step-number { width: 24px; height: 24px; flex-shrink: 0; display: grid; place-items: center; background: var(--bg-input); color: var(--accent); border-radius: 6px; }
+.canvas-workflow-card details { margin-top: 8px; }
+.canvas-workflow-card summary { cursor: pointer; font-size: 11px; color: var(--text-muted); }
+.canvas-workflow-card pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; font-size: 11px; }
+.canvas-workflow-card footer > div { display: flex; flex-wrap: wrap; gap: 6px; }
+.canvas-workflow-card button { border-radius: 7px; }
+.workflow-costs { border-top: 1px solid var(--border); padding: 8px 0; }
+.canvas-workflow-card .workflow-error { color: var(--danger, #ad414b); }
+.workflow-event { display: block; padding: 3px 0; overflow-wrap: anywhere; }

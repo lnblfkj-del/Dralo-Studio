@@ -1,0 +1,23 @@
+.style-hover-preview {
+  position: fixed;
+  z-index: 10000;
+  width: min(320px, calc(100vw - 24px));
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1px solid #ded7e5;
+  border-radius: 10px;
+  background: #fff;
+  color: #302837;
+  box-shadow: 0 12px 36px #24192d30;
+  pointer-events: none;
+}
+.style-hover-preview > div { display: grid; place-items: center; height: min(250px, 50vh); background: #f5f3f7; border-radius: 6px; overflow: hidden; }
+.style-hover-preview img { display: block; width: 100%; height: 100%; max-height: min(250px, 50vh); object-fit: contain; }
+.style-hover-preview small { display: block; margin-top: 9px; color: #85798d; font-size: 12px; }
+.style-hover-preview strong { display: block; margin-top: 4px; font-size: 16px; line-height: 1.5; overflow-wrap: anywhere; }
+.style-hover-backdrop { position: fixed; z-index: 9999; border-radius: 24px; backdrop-filter: blur(3px); background: #231c301a; pointer-events: none; }
+.style-hover-backdrop, .style-hover-preview { animation: style-preview-enter 450ms ease-out both; }
+.style-hover-backdrop[data-closing="true"], .style-hover-preview[data-closing="true"] { animation: style-preview-exit 300ms ease-out both; }
+@keyframes style-preview-enter { from { opacity: 0; } to { opacity: 1; } }
+@keyframes style-preview-exit { from { opacity: 1; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .style-hover-backdrop, .style-hover-preview { animation-duration: 1ms !important; } }

@@ -1,0 +1,13 @@
+packages:
+  - "apps/web"
+  - "packages/*"
+
+# 显式允许执行构建脚本的依赖。
+# esbuild 需要在安装时放置对应平台的二进制，否则 vite 无法工作。
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
+
+overrides:
+  fast-uri: 3.1.8

@@ -1,0 +1,712 @@
+<!DOCTYPE html><head>
+<title>弹珠碰钉</title>
+<meta charset=utf-8>
+</head>
+<script src="../templates/engineLoader.js?1780767748506"></script>
+<script src="../templates/gameFx.js?1780767748506"></script>
+<script src="../templates/textureGenerator.js?1780767748506"></script>
+<script src="../templates/workbenchBridge.js"></script>
+<script src="../templates/menus.js?1780767748506"></script>
+<script>
+'use strict';
+
+// engine settings
+canvasFixedSize = vec2(700, 1080);
+cameraScale = 35;
+
+///////////////////////////////////////////////////////////////////////////////
+// Tuning
+
+const BOARD_W = 18, BOARD_H = 28;
+const BALL_R = .5;
+const PEG_R = .4;
+const PEG_FADE = .4;       // seconds for hit peg to vanish
+const SUBSTEPS = 4;         // physics substeps per frame (prevents tunneling)
+const SHOOT_SPEED = 22;
+const GRAVITY_Y = 28;
+const SLOWMO_TIME = 3;      // seconds of slow-mo when power peg is hit
+const SLOWMO_SCALE = .35;   // gameplay time multiplier while slow-mo is active
+
+// Atlas-icon drawing: the baked circle/glow icons now fill their tile, so the
+// sprite size equals the desired visual diameter; ICON_FIT is a no-op multiplier.
+const ICON_FIT = 1.0;
+const OUTLINE = .16;        // black backing-ring thickness for solid discs
+
+///////////////////////////////////////////////////////////////////////////////
+// State
+
+let cannonPos, aimDir;
+let pegs, bucket, activeBall;
+let scorePops, stars, trail;
+let score, ballsRemaining, orangeLeft, comboCount, maxCombo;
+let win, gameOver;
+let endDialogShown;  // prevents re-triggering the game-over dialog
+let slowMoT;         // real-time seconds remaining of slow-mo
+
+let sfxShoot, sfxPeg, sfxOrange, sfxPower, sfxBucket, sfxLose, sfxWin;
+
+let icons;  // name->TileInfo map from the default sprite atlas
+
+///////////////////////////////////////////////////////////////////////////////
+// Atlas draw helpers — replace drawCircle with the baked circle/glow icons
+
+// Tinted circle/glow icon sized to a visual diameter (matches drawCircle size).
+function drawIcon(name, pos, diam, color, angle = 0)
+{
+    drawTile(pos, vec2(diam * ICON_FIT), icons[name], color, angle);
+}
+
+// Solid disc with an optional black backing ring (replaces drawCircle's outline).
+function drawDisc(pos, diam, color, outlineColor)
+{
+    if (outlineColor) drawIcon('circle', pos, diam + OUTLINE, outlineColor);
+    drawIcon('circle', pos, diam, color);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameInit()
+{
+    saveDataInit('peggle');
+    icons = initDefaultAtlas();  // bake the 16 white icons into tiles 0-15
+    whitenAtlasAlpha();          // kill the dark edge fringe on the white icons
+
+    // Peg-hit sparks run on the engine's ParticleEmitter, whose gravity comes
+    // from the global `gravity`. Match the old particle pull (-18 units/sec^2)
+    // in the emitter's per-frame model. The ball has its own fall logic, so
+    // nothing else reads the global.
+    gravity = vec2(0, -18/3600);
+
+    initSounds();
+    createStars();
+    resetGame();
+    buildMenus();
+    showMenu('title');
+}
+
+function initSounds()
+{
+    sfxShoot   = new SoundGenerator({frequency:420, release:.08, volume:.7, shapeCurve:1.4});
+    sfxPeg     = new SoundGenerator({frequency:520, release:.08, volume:.55});
+    sfxOrange  = new SoundGenerator({frequency:740, release:.14, volume:.9, slide:.5});
+    sfxPower   = new SoundGenerator({frequency:1000,release:.35, volume:1,  slide:1.6, shapeCurve:.8});
+    sfxBucket  = new SoundGenerator({frequency:260, release:.2,  volume:1,  noise:.15});
+    sfxLose    = new SoundGenerator({frequency:140, release:.2,  volume:.6, slide:-.6, shapeCurve:.7});
+    sfxWin     = new SoundGenerator({frequency:660, release:.4,  volume:1,  slide:.9});
+}
+
+function createStars()
+{
+    // stateless seeded twinkling field (gameFx.js Starfield). twSpeed is the
+    // old sin(time*[.6..1.5]) / 2π for oscillate's cycles/sec convention.
+    stars = new Starfield({
+        tile: icons.circle,
+        color: hsl(.6, .3, .75),
+        area: vec2(BOARD_W/2 - .5, BOARD_H/2 - .5),
+        count: 80,
+        sizeMin: .04, sizeMax: .1,
+        alphaMin: 1, alphaMax: 1,
+        twinkleBase: .3, twinkleAmp: .7,
+        twSpeedMin: .095, twSpeedMax: .239,
+    });
+}
+
+function resetGame()
+{
+    cannonPos = vec2(0, BOARD_H/2 - 1.7);
+    aimDir = vec2(0, -1);
+    score = 0;
+    ballsRemaining = 10;
+    activeBall = null;
+    win = gameOver = false;
+    endDialogShown = false;
+    slowMoT = 0;
+    comboCount = maxCombo = 0;
+    trail = [];
+    clearParticles();
+    scorePops = [];
+
+    createPegs();
+    createBucket();
+}
+
+function createPegs()
+{
+    pegs = [];
+
+    // Hex-offset (brick) grid
+    const cols = 10, rows = 11;
+    const hSpacing = (BOARD_W - 2.2) / (cols - 1);
+    const vSpacing = 1.55;
+    const xStart = -BOARD_W/2 + 1.1;
+    const yStart = -BOARD_H/2 + 4;
+
+    const candidates = [];
+    for (let r = 0; r < rows; r++)
+    {
+        const xOff = (r % 2) ? hSpacing/2 : 0;
+        for (let c = 0; c < cols; c++)
+        {
+            const x = xStart + xOff + c * hSpacing + rand(-.08, .08);
+            const y = yStart + r * vSpacing + rand(-.06, .06);
+            if (x < -BOARD_W/2 + .9 || x > BOARD_W/2 - .9) continue;
+            if (y > cannonPos.y - 2.5) continue;
+            candidates.push(vec2(x, y));
+        }
+    }
+
+    // Pick orange pegs that are spread apart
+    const targetOranges = 14;
+    const minDist = 2.6;
+    const shuffled = [...candidates];
+    for (let i = shuffled.length - 1; i > 0; i--)
+    {
+        const j = randInt(i + 1);
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const oranges = new Set();
+    for (const pos of shuffled)
+    {
+        if (oranges.size >= targetOranges) break;
+        let ok = true;
+        for (const o of oranges)
+            if (pos.distance(o) < minDist) { ok = false; break; }
+        if (ok) oranges.add(pos);
+    }
+
+    // One power peg per round, picked from the non-orange candidates
+    const nonOrange = candidates.filter(p => !oranges.has(p));
+    const powerPeg = nonOrange.length ? nonOrange[randInt(nonOrange.length)] : null;
+
+    for (const pos of candidates)
+        pegs.push({
+            pos,
+            r: PEG_R,
+            hit: false,
+            dead: false,
+            fadeTime: 0,
+            orange: oranges.has(pos),
+            power: pos === powerPeg,
+            phase: rand(0, PI*2),
+        });
+
+    orangeLeft = oranges.size;
+}
+
+function createBucket()
+{
+    bucket = {
+        pos: vec2(0, -BOARD_H/2 + 1.1),
+        size: vec2(4.2, .8),
+        t: 0,
+    };
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Menus
+
+function buildMenus()
+{
+    installAutoPause();
+
+    setMenuTheme({accent:'#ff7a1a'});
+    createTitleMenu({
+        title:    '弹珠碰钉',
+        titleFx: {fill:'rainbow', sparkle:true},
+        subtitle: '击中全部橙色钉子',
+        revealOnClick: false,
+        onPlay: () => { resetGame(); setPlaying(true); },
+        items: [
+            {type:'button', label:'设置', onClick: () => pushMenu('options')},
+            {type:'button', label:'玩法说明',   onClick: () => pushMenu('help')},
+        ],
+    });
+
+    createPauseMenu({
+        onQuit: () => {
+            resetGame();
+            setPlaying(false);
+            showMenu('title');
+        },
+        extraItems: [
+            {type:'button', label:'设置',
+                onClick: () => pushMenu('options')},
+        ],
+    });
+
+    createOptionsMenu({
+        persistKey: 'volume',
+    });
+
+    createMenu({
+        id: 'help',
+        title: '玩法说明',
+        dismissable: true,
+        onHide: popMenu,
+        items: [
+            {type:'text', text:'瞄准发射，在弹珠用完前击中全部橙色钉子。连续命中可增加连击倍率；落入移动桶可获得一次额外发射。'},
+            {type:'text', text: '鼠标或触摸瞄准 · 点击或空格发射'},
+            {type:'separator'},
+            {type:'button', label:'返回', onClick: () => hideMenu('help')},
+        ],
+    });
+
+    installDefaultToolbar({landscapeStack:true});
+}
+
+function showEndDialog()
+{
+    showConfirmDialog({
+        title:    win ? '胜利！' : '游戏结束',
+        icon:     win ? '🏆' : '💥',
+        message:  '得分：' + score + '\n最高连击：x' + maxCombo,
+        yesLabel: '再玩一次',
+        noLabel:  'QUIT',
+        onYes: () => { resetGame(); setPlaying(true); },
+        onNo:  () => { resetGame(); setPlaying(false); showMenu('title'); },
+    });
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameUpdate()
+{
+    // Esc / Start opens pause menu mid-game
+    if (bindPauseKey({when: () => isPlaying() && !gameOver})) return;
+
+    updateInput();
+
+    // Slow-mo timer counts down in real time; gameplay updates use a scaled dt
+    let scale = 1;
+    if (slowMoT > 0)
+    {
+        slowMoT -= timeDelta;
+        scale = SLOWMO_SCALE;
+    }
+    const dt = timeDelta * scale;
+
+    if (activeBall && !gameOver)
+    {
+        const subDt = dt / SUBSTEPS;
+        for (let i = 0; i < SUBSTEPS; i++)
+        {
+            if (!activeBall) break;
+            stepBall(subDt);
+        }
+        if (activeBall)
+        {
+            trail.push({pos: activeBall.pos.copy(), life: 1});
+            if (trail.length > 14) trail.shift();
+        }
+    }
+
+    for (let i = trail.length - 1; i >= 0; i--)
+    {
+        trail[i].life -= dt * 5;
+        if (trail[i].life <= 0) trail.splice(i, 1);
+    }
+
+    updateBucket(dt);
+    updatePegs(dt);
+    updateScorePops(dt);
+
+    if (activeBall && activeBall.pos.y < -BOARD_H/2 - 3)
+        loseBall();
+
+    // Surface end-of-round dialog once the ball is gone
+    if (gameOver && !endDialogShown && !activeBall)
+    {
+        endDialogShown = true;
+        showEndDialog();
+    }
+}
+
+function gameUpdatePost()
+{
+}
+
+function updatePegs(dt)
+{
+    for (const p of pegs)
+    {
+        if (p.hit && !p.dead)
+        {
+            p.fadeTime += dt;
+            if (p.fadeTime > PEG_FADE) p.dead = true;
+        }
+    }
+}
+
+function updateScorePops(dt)
+{
+    for (let i = scorePops.length - 1; i >= 0; i--)
+    {
+        const s = scorePops[i];
+        s.pos.y += dt * 2.5;
+        s.life -= dt * 1.2;
+        if (s.life <= 0) scorePops.splice(i, 1);
+    }
+}
+
+// Peg-hit / bucket sparks: radial additive squares that arc down via the global
+// gravity, drag .9, brighten then darken-and-fade (was a hand-rolled array).
+function emitParticles(pos, hue, count)
+{
+    const c0 = hsl(hue, .9, .9), c1 = hsl(hue, .9, .6, 0);
+    new ParticleEmitter(
+        pos, 0,                  // pos, angle
+        0,                       // emitSize (point)
+        count/600, 600,          // emitTime, emitRate -> ~count particles
+        PI,                      // emitConeAngle (radial)
+        undefined,               // tileInfo (untextured square)
+        c0, c0,                  // colorStartA/B (bright)
+        c1, c1,                  // colorEndA/B (darker, fade alpha to 0)
+        .56,                     // particleTime (life 1 at -1.8/sec)
+        .14, 0,                  // sizeStart, sizeEnd (was p.size*min(1,life*2))
+        7.5/60,                  // speed (per-frame; was per-sec rand 4-11)
+        0, .9, 1,                // angleSpeed, damping, angleDamping
+        1,                       // gravityScale (global gravity = -18/sec^2)
+        0,                       // particleConeAngle (axis-aligned squares)
+        .1,                      // fadeRate
+        .45,                     // randomness
+        false, true              // collideTiles, additive (glow)
+    );
+}
+
+// clearParticles() lives in gameFx.js (shared).
+
+function addScorePop(pos, text, hue, big)
+{
+    scorePops.push({
+        pos: pos.copy(),
+        text,
+        life: 1,
+        hue,
+        size: big ? 1.3 : .9,
+    });
+}
+
+function updateInput()
+{
+    // Aim follows the most recently used device (like the bubble shooter):
+    //  - mouse: cannon points straight at the cursor
+    //  - gamepad / keyboard: left/right (left stick, d-pad, or arrows/A-D)
+    //    sweeps the aim by fixed increments; idle holds the current angle so it
+    //    never snaps back to the mouse.
+    // Aim is constrained to a cone around straight down. Work in `off` = signed
+    // angular distance from straight-down: distanceAngle wraps cleanly across the
+    // +-PI seam (which sits exactly at straight down in .angle() convention), so a
+    // plain clamp on `off` works where a clamp on the raw angle could not.
+    const DOWN = PI, HALF_ARC = PI * .45;   // +-81deg around straight down
+    let off = distanceAngle(aimDir.angle(), DOWN);
+    if (usingMouseInput())
+    {
+        const toMouse = mousePos.subtract(cannonPos);
+        if (toMouse.length() > .01) off = distanceAngle(toMouse.angle(), DOWN);
+    }
+    else
+    {
+        const adj = clamp(gamepadStick(0).x + keyDirection().x, -1, 1); // +1 = sweep right
+        if (adj)
+        {
+            const AIM_SWEEP = 2.0; // radians per second
+            off -= adj * AIM_SWEEP * timeDelta; // right sweeps the aim toward +X
+        }
+    }
+    off = clamp(off, -HALF_ARC, HALF_ARC);
+    aimDir = vec2().setAngle(DOWN + off);
+
+    if (!isPlaying() || gameOver) return;
+    if ((mouseWasPressed(0) || keyWasPressed('Space') || gamepadWasPressed(0)) && !activeBall && ballsRemaining > 0)
+        shootBall();
+}
+
+function shootBall()
+{
+    ballsRemaining--;
+    activeBall = {
+        pos: cannonPos.add(aimDir.scale(BALL_R + 1.4)),
+        vel: aimDir.scale(SHOOT_SPEED),
+        r: BALL_R,
+    };
+    comboCount = 0;
+    sfxShoot.play();
+}
+
+function loseBall()
+{
+    activeBall = null;
+    trail = [];
+
+    if (gameOver) return; // win was already triggered mid-shot; dialog handler fires next frame
+
+    sfxLose.play();
+    if (ballsRemaining <= 0)
+    {
+        win = false;
+        gameOver = true;
+        submitBestScore(score);
+    }
+}
+
+function updateBucket(dt)
+{
+    if (gameOver) return;
+    bucket.t += dt;
+    const xRange = BOARD_W/2 - bucket.size.x/2 - .6;
+    bucket.pos.x = sin(bucket.t * 1.4) * xRange;
+
+    if (!activeBall) return;
+    if (isOverlapping(activeBall.pos, vec2(activeBall.r*2), bucket.pos, bucket.size) &&
+        activeBall.vel.y < 0)
+    {
+        score += 2500;
+        ballsRemaining++;
+        addScorePop(bucket.pos.add(vec2(0, 1)), '额外弹珠 +2500', .15, true);
+        emitParticles(bucket.pos, .15, 18);
+        activeBall = null;
+        trail = [];
+        sfxBucket.play();
+    }
+}
+
+function stepBall(dt)
+{
+    activeBall.vel.y -= GRAVITY_Y * dt;
+    activeBall.pos = activeBall.pos.add(activeBall.vel.scale(dt));
+
+    const wL = -BOARD_W/2 + activeBall.r;
+    const wR =  BOARD_W/2 - activeBall.r;
+    if (activeBall.pos.x < wL) { activeBall.pos.x = wL; activeBall.vel.x =  abs(activeBall.vel.x) * .7; }
+    if (activeBall.pos.x > wR) { activeBall.pos.x = wR; activeBall.vel.x = -abs(activeBall.vel.x) * .7; }
+
+    const top = BOARD_H/2 - activeBall.r - .2;
+    if (activeBall.pos.y > top)
+    {
+        activeBall.pos.y = top;
+        activeBall.vel.y = -abs(activeBall.vel.y) * .6;
+    }
+
+    for (const p of pegs)
+    {
+        if (p.dead || p.hit) continue;
+        const d = activeBall.pos.subtract(p.pos);
+        const dist = d.length();
+        const minDist = activeBall.r + p.r;
+        if (dist < minDist && dist > 0)
+        {
+            const n = d.scale(1 / dist);
+            activeBall.pos = p.pos.add(n.scale(minDist + .001));
+            const v = activeBall.vel;
+            const vn = n.scale(v.dot(n));
+            const vt = v.subtract(vn);
+            activeBall.vel = vt.subtract(vn).scale(.78);
+
+            p.hit = true;
+            p.fadeTime = 0;
+            comboCount++;
+            if (comboCount > maxCombo) maxCombo = comboCount;
+            const multiplier = 1 + floor((comboCount - 1) / 4);
+
+            let baseVal, hue, particleCount, popBig;
+            if (p.power)
+            {
+                baseVal = 5000;
+                hue = .33;
+                particleCount = 26;
+                popBig = true;
+                slowMoT = max(slowMoT, SLOWMO_TIME);
+                sfxPower.play();
+            }
+            else if (p.orange)
+            {
+                baseVal = 1000;
+                hue = .08;
+                particleCount = 14;
+                popBig = true;
+                orangeLeft--;
+                playPegSound(true, comboCount);
+                if (orangeLeft <= 0)
+                {
+                    win = true;
+                    gameOver = true;
+                    sfxWin.play();
+                    submitBestScore(score);
+                }
+            }
+            else
+            {
+                baseVal = 100;
+                hue = .58;
+                particleCount = 8;
+                popBig = false;
+                playPegSound(false, comboCount);
+            }
+
+            const val = baseVal * multiplier;
+            score += val;
+            addScorePop(p.pos, '+' + val, hue, popBig);
+            emitParticles(p.pos, hue, particleCount);
+
+            const sp = activeBall.vel.length();
+            if (sp < 3.5) activeBall.vel = activeBall.vel.normalize().scale(3.5);
+
+            break;
+        }
+    }
+}
+
+function playPegSound(orange, combo)
+{
+    const s = orange ? sfxOrange : sfxPeg;
+    const base = orange ? 740 : 520;
+    s.frequency = base * (1 + min(combo - 1, 14) * .07);
+    s.play();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRender()
+{
+    // Backboard
+    drawRectGradient(vec2(0, 0), vec2(BOARD_W, BOARD_H),
+        hsl(.65, .75, .14), hsl(.62, .85, .04));
+
+    // Twinkling stars
+    stars.draw();
+
+    // Board frame
+    const fT = .25;
+    const frameC = hsl(.62, .5, .35);
+    drawRect(vec2(0,  BOARD_H/2 + fT/2), vec2(BOARD_W + fT*2, fT), frameC);
+    drawRect(vec2(0, -BOARD_H/2 - fT/2), vec2(BOARD_W + fT*2, fT), frameC);
+    drawRect(vec2(-BOARD_W/2 - fT/2, 0), vec2(fT, BOARD_H + fT*2), frameC);
+    drawRect(vec2( BOARD_W/2 + fT/2, 0), vec2(fT, BOARD_H + fT*2), frameC);
+
+    // Pegs (with glow on oranges, fade-out animation on hit)
+    for (const p of pegs)
+    {
+        if (p.dead) continue;
+        let scale = 1, alpha = 1;
+        if (p.hit)
+        {
+            const t = p.fadeTime / PEG_FADE;
+            scale = 1 + t * .6;
+            alpha = 1 - t;
+        }
+        const r = p.r * scale;
+        if (p.power)
+        {
+            // Faster sparkle pulse so the player can spot it
+            const pulse = .8 + .2 * sin(time * 7 + p.phase);
+            drawIcon('glow', p.pos, r * 5,   hsl(.33, 1, .55, .25 * pulse * alpha));
+            drawIcon('glow', p.pos, r * 3.4, hsl(.33, 1, .6,  .45 * pulse * alpha));
+            drawDisc(p.pos, r * 2, hsl(.33, .95, .55 * pulse, alpha), hsl(0,0,0,alpha));
+        }
+        else if (p.orange)
+        {
+            const pulse = .85 + .15 * sin(time * 4 + p.phase);
+            drawIcon('glow', p.pos, r * 4,   hsl(.08, 1, .55, .25 * pulse * alpha));
+            drawIcon('glow', p.pos, r * 3,   hsl(.08, 1, .6,  .4  * pulse * alpha));
+            drawDisc(p.pos, r * 2, hsl(.08, .95, .55 * pulse, alpha), hsl(0,0,0,alpha));
+        }
+        else
+        {
+            drawDisc(p.pos, r * 2, hsl(.58, .65, .55, alpha), hsl(0,0,0,alpha));
+        }
+        drawIcon('circle', p.pos.add(vec2(-r*.3, r*.3)), r * .7, hsl(0, 0, 1, .32 * alpha));
+    }
+
+    // Bucket
+    drawRect(bucket.pos.add(vec2(0, -.1)), bucket.size.add(vec2(.3, .3)), hsl(.05, .3, .12));
+    drawRectGradient(bucket.pos, bucket.size,
+        hsl(.13, .85, .55), hsl(.11, .85, .35));
+    drawRect(bucket.pos.add(vec2(0, bucket.size.y/2 - .08)),
+        vec2(bucket.size.x - .4, .1), hsl(.16, .9, .85));
+
+
+    // Ball trail
+    for (const t of trail)
+        drawIcon('glow', t.pos, BALL_R * 2.4 * t.life, hsl(.55, .85, .85, t.life * .5));
+
+    // Ball
+    if (activeBall)
+    {
+        drawIcon('glow', activeBall.pos, activeBall.r * 4,   hsl(.55, .9, .8, .2));
+        drawIcon('glow', activeBall.pos, activeBall.r * 2.8, hsl(.55, .9, .85, .3));
+        drawDisc(activeBall.pos, activeBall.r * 2, hsl(.55, .7, .75), hsl(0,0,0));
+        drawIcon('circle', activeBall.pos.add(vec2(-activeBall.r*.3, activeBall.r*.3)),
+            activeBall.r * .65, hsl(0, 0, 1, .55));
+    }
+
+    // Cannon base + rotating barrel
+    drawIcon('circle', cannonPos, 1.9, hsl(.05, .4, .12));
+    drawIcon('circle', cannonPos, 1.55, hsl(.05, .55, .25));
+    {
+        const ang = aimDir.angle();
+        const barrelLen = 1.6, barrelW = .6;
+        const bc = cannonPos.add(aimDir.scale(barrelLen/2 + .25));
+        drawRect(bc, vec2(barrelW + .15, barrelLen + .15), hsl(.05, .55, .15), ang);
+        drawRect(bc, vec2(barrelW,        barrelLen),       hsl(.06, .75, .42), ang);
+        drawIcon('circle', cannonPos.add(aimDir.scale(barrelLen + .15)), .35, hsl(.05, .55, .15));
+    }
+    drawIcon('circle', cannonPos, .95, hsl(.06, .7, .45));
+    drawIcon('circle', cannonPos, .6,  hsl(.06, .5, .25));
+
+    // Aim guide
+    if (isPlaying() && !gameOver && ballsRemaining > 0 && !activeBall)
+    {
+        const start = cannonPos.add(aimDir.scale(2.1));
+        for (let i = 0; i < 6; i++)
+        {
+            const dp = start.add(aimDir.scale(i * .75));
+            const f = 1 - i / 6;
+            drawIcon('circle', dp, .22, hsl(.12, .1, 1, f * .85));
+        }
+    }
+
+    // Score pops (in front of everything in world space)
+    for (const sp of scorePops)
+    {
+        const life = min(1, sp.life * 1.3);
+        drawText(sp.text, sp.pos, sp.size,
+            hsl(sp.hue, 1, .8, life), .15, hsl(0, 0, 0, life));
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+function gameRenderPost()
+{
+    if (!isPlaying()) return;
+
+    const cx = mainCanvasSize.x / 2;
+    const top = 38;
+
+    drawTextScreen('得分  ' + score,
+        vec2(40, top), 32, hsl(0,0,1), 4, hsl(0,0,0), 'left');
+    drawTextScreen('橙色钉子  ' + orangeLeft,
+        vec2(40, top + 30), 22, hsl(.08, 1, .65), 3, hsl(0,0,0), 'left');
+    drawTextScreen('弹珠  ' + ballsRemaining + (activeBall ? '*' : ''),
+        vec2(cx, top), 32, hsl(0,0,1), 4, hsl(0,0,0), 'center');
+
+    if (comboCount >= 2 && activeBall)
+    {
+        const wobble = 1 + sin(time * 8) * .05;
+        drawTextScreen('x' + comboCount + '  连击！',
+            vec2(cx, top + 50), 38 * wobble,
+            hsl(.12, 1, .65), 5, hsl(0,0,0), 'center');
+    }
+
+    if (slowMoT > 0)
+    {
+        const fade = min(1, slowMoT);
+        const wobble = 1 + sin(time * 12) * .08;
+        drawTextScreen('能量爆发！',
+            vec2(cx, mainCanvasSize.y * .25), 72 * wobble,
+            hsl(.33, 1, .65, fade), 6, hsl(0, 0, 0, fade), 'center');
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+engineInit(gameInit, gameUpdate, gameUpdatePost, gameRender, gameRenderPost);
+
+</script>
+</body>
+</html>

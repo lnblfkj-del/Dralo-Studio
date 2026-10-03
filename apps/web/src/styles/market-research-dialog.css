@@ -1,0 +1,139 @@
+.market-explore-dialog {
+  box-sizing: border-box;
+  width: 100%;
+  background: #fff;
+}
+.market-explore-dialog .market-filter-shell { padding: 0; background: #fff; }
+.market-explore-dialog .market-filter-panel {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.market-explore-dialog .market-filter-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 24px;
+}
+.market-explore-dialog .market-filter-section {
+  display: grid;
+  grid-template-columns: 156px minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+  padding: 20px 0;
+  border: 0;
+  border-bottom: 1px solid #ebe8ed;
+}
+.market-explore-dialog .market-filter-section:first-child { border-right: 0; }
+.market-explore-dialog .market-filter-section:last-child { grid-column: 1 / -1; }
+.market-explore-dialog .market-filter-section-title { display: flex; align-items: flex-start; gap: 10px; }
+.market-explore-dialog .market-filter-section-title > span { display: grid; place-items: center; box-sizing: border-box; flex: 0 0 32px; height: 32px; border: 1px solid #e7dcf3; border-radius: 10px; background: linear-gradient(145deg,#faf7ff,#eee5f8); color: #8760a8; font-size: 11px; font-weight: 650; }
+.market-explore-dialog .market-filter-section-title > div { min-width: 0; }
+.market-explore-dialog .market-filter-section-title strong { display: block; padding-top: 5px; color: #43354f; font-size: 14px; line-height: 1.5; }
+.market-explore-dialog .market-filter-section-title small { display: block; margin-top: 6px; color: #918797; font-size: 11px; line-height: 1.6; }
+.market-explore-dialog .market-filter-scope,
+.market-explore-dialog .market-filter-condition-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; min-width: 0; }
+.market-explore-dialog .market-filter-choice-grid { display: grid; gap: 14px; min-width: 0; }
+.market-explore-dialog .market-field { display: grid; gap: 7px; min-width: 0; margin: 0; }
+.market-explore-dialog .market-field > strong { color: #69616f; font-size: 12px; font-weight: 500; }
+.market-explore-dialog .market-field strong small { margin-left: 4px; color: #a098a4; font-size: 11px; font-weight: 400; }
+.market-explore-dialog .market-field input,
+.market-explore-dialog .market-field select,
+.market-explore-dialog .market-field textarea { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #dedbe2; border-radius: 9px; background: #fff; color: #38323d; font: inherit; font-size: 13px; }
+.market-explore-dialog .market-field input,
+.market-explore-dialog .market-field select { height: 40px; padding: 0 12px; }
+.market-explore-dialog .market-field textarea { min-height: 80px; padding: 10px 12px 25px; resize: vertical; line-height: 1.6; }
+.market-explore-dialog .market-field :is(input,select,textarea):focus { outline: none; border-color: #9d7cba; box-shadow: 0 0 0 1px #9d7cba; }
+.market-explore-dialog .market-segment,
+.market-explore-dialog .market-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.market-explore-dialog .market-segment button,
+.market-explore-dialog .market-chips button { min-height: 34px; padding: 0 12px; border: 1px solid #dedbe2; border-radius: 8px; background: #fff; color: #67616d; font: inherit; font-size: 12px; cursor: pointer; }
+.market-explore-dialog .market-segment button:hover,
+.market-explore-dialog .market-chips button:hover { background: #f7f5f8; border-color: #bbb2c2; }
+.market-explore-dialog .market-segment button[aria-pressed=true],
+.market-explore-dialog .market-chips button[aria-pressed=true] { background: #f4effb; border-color: #b79bd9; color: #654496; }
+.market-explore-dialog .market-keywords { position: relative; grid-column: 2; }
+.market-explore-dialog .market-keywords > span { position: absolute; right: 12px; bottom: 8px; color: #a098a4; font-size: 11px; pointer-events: none; }
+.market-explore-dialog .market-filter-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  border-top: 0;
+  background: #fbfafc;
+}
+.market-explore-dialog .market-submit {
+  flex: 0 0 auto;
+  min-height: 42px;
+  margin: 0;
+  padding: 0 17px;
+  border-radius: 9px;
+  font-size: 12px;
+  border: 1px solid var(--app-color-accent);
+  background: var(--app-color-accent);
+  color: #fff;
+}
+.market-explore-dialog .market-submit:hover:not(:disabled) { border-color:var(--app-color-accent-hover); background:var(--app-color-accent-hover); color:#fff; }
+.market-explore-dialog .market-filter-footer p { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; min-width: 0; color: #8a828e; font-size: 11px; }
+.market-explore-dialog .market-filter-footer p i { width: 3px; height: 3px; border-radius: 50%; background: #c8c0cd; }
+.market-explore-dialog .market-filter-error { margin: 0 24px 16px; }
+@media (max-width: 640px) {
+  .market-explore-dialog .market-filter-section { grid-template-columns: minmax(0,1fr); gap: 14px; }
+  .market-explore-dialog .market-keywords { grid-column: auto; }
+  .market-explore-dialog .market-filter-footer { flex-wrap: wrap; }
+  .market-explore-dialog .market-submit { margin-left: auto; }
+  .market-explore-dialog .market-filter-scope,
+  .market-explore-dialog .market-filter-condition-grid { grid-template-columns: minmax(0,1fr); }
+}
+
+.market-index-page .market-page-state { width: min(900px, 100%); margin: 0 auto; }
+.market-index-icon {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  place-items: center;
+  border-radius: 12px;
+  background: #f0eaf5;
+  color: #795997;
+}
+
+@media (max-width: 1120px) {
+  .market-record-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .market-record-filterbar { grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(142px, 176px)); }
+  .market-record-filterbar > label:nth-of-type(4),
+  .market-record-filter-reset { grid-column: auto; }
+  .market-page-grid { grid-template-columns: 1fr; }
+  .market-page-sources { position: static; max-height: none; }
+}
+@media (max-width: 780px) {
+  .market-page { padding: 20px 14px 44px; }
+  .market-main-header,
+  .market-records-header,
+  .market-run-header { align-items: flex-start; flex-direction: column; }
+  .market-record-actions,
+  .market-run-toolbar { justify-content: flex-start; }
+  .market-record-filterbar { grid-template-columns: 1fr 1fr; }
+  .market-record-search { grid-column: 1 / -1; }
+  .market-record-filter-reset { justify-self: start; }
+  .market-report-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .market-report-metrics article:nth-child(2) { border-right: 0; }
+  .market-report-metrics article:nth-child(-n+2) { border-bottom: 1px solid #e7e4e9; }
+  .market-explore-dialog .market-filter-form { grid-template-columns: 1fr; }
+  .market-explore-dialog .market-filter-section:first-child { border-right: 0; }
+  .market-explore-dialog .market-filter-section:last-child { grid-column: auto; }
+}
+@media (max-width: 580px) {
+  .market-main-header h1 { font-size: 31px; }
+  .market-record-grid,
+  .market-record-filterbar,
+  .market-report-metrics,
+  .market-idea-grid { grid-template-columns: 1fr; }
+  .market-report-metrics article { border-right: 0; border-bottom: 1px solid #e7e4e9; }
+  .market-report-metrics article:last-child { border-bottom: 0; }
+  .market-condition-bar { display: grid; gap: 8px; }
+  .market-section-nav { overflow-x: auto; }
+  .market-section-nav button { flex: 0 0 auto; }
+  .market-page-report { padding: 20px 16px; }
+  .market-explore-dialog { width: 100%; }
+}

@@ -1,0 +1,115 @@
+@keyframes history-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1180px) {
+  .history-page .history-list-head {
+    display: none;
+  }
+
+  .history-page .history-record-row {
+    grid-template-columns: minmax(260px, 1fr) auto auto;
+  }
+
+  .history-page .history-record-row > time {
+    justify-self: end;
+  }
+
+  .history-page .history-record-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+    padding-left: 81px;
+  }
+
+  .history-page .history-records-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  .creator-app .history-page {
+    padding: 24px 16px 48px;
+  }
+
+  .history-page .history-main-header,
+  .history-page .history-library-header {
+    align-items: flex-start;
+  }
+
+  .history-page .history-main-header h1 {
+    font-size: 32px;
+  }
+
+  .history-page .history-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .history-page .history-toolbar > span {
+    justify-self: start;
+  }
+
+  .history-page .history-record-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .history-page .history-record-row > time {
+    grid-column: 1 / -1;
+    justify-self: start;
+    padding-left: 81px;
+  }
+
+  .history-page .history-record-actions {
+    padding-left: 0;
+  }
+
+  .history-page .history-records-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 580px) {
+  .history-page .history-main-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .history-page .history-refresh {
+    width: 100%;
+  }
+
+  .history-page .history-library-header {
+    gap: 14px;
+  }
+
+  .history-page .history-record-row {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .history-page .history-record-row > time {
+    padding-left: 0;
+  }
+
+  .history-page .history-record-actions {
+    flex-wrap: wrap;
+  }
+
+  .history-page .history-open {
+    flex: 1;
+  }
+
+  .history-page .history-records-grid {
+    grid-template-columns: 1fr;
+    padding: 14px;
+  }
+
+  .history-page .history-footer {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 13px 16px;
+  }
+
+  .history-page .history-footer > span:last-child {
+    text-align: center;
+  }
+}

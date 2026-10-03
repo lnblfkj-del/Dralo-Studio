@@ -1,0 +1,43 @@
+.ui-theme-preview {
+  min-height: 100dvh;
+  padding: 40px 32px 64px;
+  background: var(--app-color-bg-layout);
+  color: var(--app-color-text);
+}
+
+.ui-theme-preview__heading,
+.ui-showcase-section {
+  width: min(1120px, 100%);
+  margin-inline: auto;
+}
+
+.ui-theme-preview__heading { margin-bottom: var(--app-space-5); }
+.ui-theme-preview__heading h1 { margin: 8px 0; font-size: 30px; letter-spacing: -.03em; }
+.ui-theme-preview__heading p { margin: 0; color: var(--app-color-text-muted); }
+.ui-theme-preview__eyebrow { color: var(--app-color-accent); font-size: 12px; font-weight: 750; letter-spacing: .13em; }
+
+.ui-showcase-section {
+  padding: 24px;
+  border: 1px solid var(--app-color-border);
+  border-radius: var(--app-radius-surface);
+  margin-bottom: var(--app-space-4);
+  background: var(--app-color-bg-surface);
+  box-shadow: 0 10px 30px rgb(47 37 59 / 4%);
+}
+
+.ui-showcase-section__title { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 20px; }
+.ui-showcase-section__title > span { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border-radius: 8px; background: color-mix(in srgb, var(--app-color-accent) 10%, white); color: var(--app-color-accent); font-size: 11px; font-weight: 700; }
+.ui-showcase-section__title h2 { margin: 0 0 4px; font-size: 17px; }
+.ui-showcase-section__title p { margin: 0; color: var(--app-color-text-muted); font-size: 12px; }
+.ui-showcase-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.ui-showcase-row + .ui-showcase-row { padding-top: 14px; margin-top: 14px; border-top: 1px dashed var(--app-color-border); }
+.ui-showcase-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 20px; }
+.ui-showcase-dialog-content { display: grid; gap: 18px; }
+
+@media (max-width: 680px) {
+  .ui-theme-preview { padding: 24px 16px 48px; }
+  .ui-theme-preview__heading h1 { font-size: 25px; }
+  .ui-showcase-section { padding: 18px; }
+  .ui-showcase-fields { grid-template-columns: 1fr; }
+  .ui-showcase-row .ui-button:not(.ui-icon-button) { max-width: 100%; }
+}

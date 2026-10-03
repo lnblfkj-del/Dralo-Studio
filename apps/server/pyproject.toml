@@ -1,0 +1,29 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q"
+filterwarnings = [
+    "ignore::RuntimeWarning:site",
+]
+
+[tool.ruff]
+line-length = 100
+# Keep formatter output executable by the project's Python 3.12 runtime.
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    # 中文注释与文档字符串场景下的行宽由 formatter 控制即可
+    "E501",
+    # FastAPI 依赖注入必须在默认值位置调用 Depends
+    "B008",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试中需要在导入前设置环境变量
+"tests/conftest.py" = ["E402"]
+# 迁移文件由 alembic 生成
+"migrations/versions/*.py" = ["E402", "N999", "RUF100"]

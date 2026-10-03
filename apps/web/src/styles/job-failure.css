@@ -1,0 +1,20 @@
+.job-failure { width:100%; min-width:0; padding:20px 0; color:var(--app-color-text); font-family:var(--app-font-family); font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
+.job-failure__heading { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.job-failure__heading svg { flex-shrink:0; color:var(--app-color-accent); }
+.job-failure p { margin:8px 0; }
+.job-failure__hint { color:var(--app-color-text-muted); }
+.job-failure__actions { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0; }
+.job-failure details { border-top:1px solid var(--app-color-border); padding-top:12px; margin-top:16px; }
+.job-failure summary { cursor:pointer; font-size:12px; color:var(--app-color-text-muted); }
+.job-failure dl { margin:12px 0 0; display:grid; gap:6px; font-size:12px; }
+.job-failure dl > div { display:grid; grid-template-columns:90px minmax(0,1fr); gap:12px; }
+.job-failure dt { color:var(--app-color-text-muted); }
+.job-failure dd { margin:0; }
+.job-failure ul { margin:12px 0; padding-left:20px; }
+.overview-review-dialog .job-failure { padding:24px; }
+.asset-failed-scopes { padding:0 16px; }
+.asset-failed-scopes > article + article { border-top:1px solid var(--app-color-border); }
+@media (max-width:600px) {
+  .overview-review-dialog .job-failure { padding:16px; }
+  .job-failure dl > div { grid-template-columns:72px minmax(0,1fr); gap:8px; }
+}

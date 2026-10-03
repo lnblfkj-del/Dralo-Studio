@@ -1,0 +1,256 @@
+/* Full-screen script outline, matching the lightweight studio shell. */
+.flow-topbar > a { font-size: 28px; color: #555; text-decoration: none; }
+.flow-topbar .flow-progress { margin: auto; }
+.flow-topbar .flow-ratio { color: #777; }
+.outline-shell { min-height: calc(100vh - 68px); padding: 42px clamp(24px, 8vw, 160px) 30px; display: flex; flex-direction: column; }
+.outline-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.outline-heading p { margin: 0 0 8px; color: #777; font-size: 13px; }
+.outline-heading h1 { font-size: 28px; margin: 0 0 8px; }
+.outline-heading span { color: #999; font-size: 12px; }
+.outline-divider { height: 1px; background: #dedee2; margin: 24px 0 30px; }
+.outline-content { flex: 1; max-width: 1050px; width: 100%; margin: 0 auto; }
+.outline-kicker { font-size: 13px; font-weight: 600; color: #3d3942; }
+.outline-kicker small { margin-left: 10px; color: #999; font-weight: 400; }
+.outline-list { list-style: none; padding: 0; margin: 20px 0; }
+.outline-list li { display: flex; align-items: center; gap: 14px; min-height: 68px; border-bottom: 1px solid #e7e7ea; color: #333; }
+.outline-list li button { border: 0; font-size: 24px; color: #555; padding: 4px 8px; }
+.outline-list li strong { min-width: 75px; font-weight: 500; }
+.outline-list li span { flex: 1; color: #777; }
+.outline-list li small { color: #aaa; }
+.outline-empty { padding: 70px 0; text-align: center; color: #aaa; }
+.outline-footer { display: flex; justify-content: space-between; align-items: center; gap: 20px; border-top: 1px solid #dedee2; padding-top: 20px; color: #999; font-size: 12px; }
+.outline-footer div { display: flex; gap: 10px; }
+@media (max-width: 760px) {
+  .flow-topbar { gap: 10px; padding: 0 16px; }
+  .flow-topbar .flow-project-badge, .flow-topbar .flow-ratio { display: none; }
+  .flow-topbar .flow-progress { margin: 0 auto; gap: 4px; }
+  .flow-topbar .flow-progress b { padding: 7px 6px; font-size: 10px; }
+  .flow-topbar .flow-progress i { width: 8px; }
+  .outline-shell { padding: 28px 18px 22px; }
+  .outline-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .outline-footer { align-items: flex-start; flex-direction: column; }
+  .outline-list li { gap: 8px; }
+  .outline-list li strong { min-width: 62px; }
+  .outline-list li small { display: none; }
+}
+
+/* 项目默认工作区：进入项目后直接编辑剧本大纲。 */
+.outline-workspace{min-height:100vh;background:#f5f5f7;color:#29252f}.outline-topbar{height:68px;display:flex;align-items:center;gap:12px;padding:0 28px;background:#fff;border-bottom:1px solid #e4e1e8}.outline-topbar>a{display:grid;place-items:center;color:#777}.outline-topbar>strong{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.outline-topbar nav{display:flex;gap:8px;margin:auto}.outline-topbar nav a{padding:10px 18px;border-radius:20px;color:#716879;font-size:13px}.outline-topbar nav a.selected{background:#242127;color:#fff}.outline-save-state{font-size:11px;color:#9c98a3}.outline-save-state i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#73aa7b;margin-right:6px}.outline-layout{display:grid;grid-template-columns:252px minmax(0,1fr);min-height:calc(100vh - 68px)}.episode-sidebar{display:flex;flex-direction:column;background:#fbfafc;border-right:1px solid #e8e5eb;padding:26px 15px 18px}.episode-sidebar>header,.outline-toolbar{display:flex;align-items:center;justify-content:space-between}.episode-sidebar header button,.outline-toolbar button{border:0;padding:8px;color:#7b688f}.episode-list{display:grid;gap:5px;margin-top:20px}.episode-list>button{display:flex;align-items:center;gap:10px;text-align:left;border:0;border-radius:11px;padding:12px 10px;color:#514957}.episode-list>button.selected{background:#eee9f5;color:#6846a3}.episode-list>button>span{display:grid;gap:4px;flex:1}.episode-list small{font-size:10px;color:#a497b0;letter-spacing:1px}.episode-assets-link{display:flex;gap:10px;align-items:center;border-top:1px solid #e7e2eb;margin-top:auto;padding:20px 10px 0;color:#705394}.episode-assets-link span{display:grid;gap:3px}.episode-assets-link small{font-size:10px;color:#a49cae}.outline-main{min-width:0;padding:34px clamp(24px,7vw,130px);overflow:auto}.outline-toolbar{border-bottom:1px solid #dfdbe3;padding-bottom:18px;margin-bottom:26px}.outline-toolbar div{display:flex;align-items:center;gap:18px}.outline-toolbar span{color:#9b95a0;font-size:12px}.outline-main .manuscript{max-width:900px;margin:0 auto}.outline-main-empty{text-align:center;padding:130px 20px;color:#918b96}.outline-main-empty h2{color:#403a45;font-weight:500}.outline-main-empty p{font-size:13px}.episode-delete{display:block;margin:20px auto;border:0;color:#ad6a70;background:transparent;font-size:12px}.drama-assistant{position:fixed;right:18px;top:80px;bottom:18px;width:330px;background:#fff;border:1px solid #eeeaf2;border-radius:24px;box-shadow:0 15px 45px #3a2c4a18;display:flex;flex-direction:column;z-index:5}.drama-assistant header{display:flex;align-items:center;gap:10px;padding:20px;border-bottom:1px solid #f0edf3}.drama-assistant header>strong{flex:1}.drama-assistant header button{border:0;color:#5f5369}.assistant-history{font-size:11px}.assistant-body{padding:22px;flex:1;color:#39333e;font-size:13px;line-height:1.8}.assistant-body button{border:0;background:#e2d3ff;border-radius:20px;padding:10px 16px}.assistant-input{margin:12px;padding:14px;border:1px solid #eeeaf2;border-radius:15px}.assistant-input textarea{border:0;resize:none;width:100%;box-sizing:border-box;outline:0}.assistant-input div{display:flex;align-items:center;justify-content:space-between;color:#887e91;font-size:11px}.assistant-input button{border:0}.assistant-input button:last-child{width:28px;height:28px;border-radius:50%;background:#eeeef1}.assistant-fab{position:fixed;right:24px;bottom:24px;width:54px;height:54px;border:0;border-radius:50%;background:#201c29;color:#d9c7ff;box-shadow:0 8px 25px #33263f35;z-index:5}.assistant-fab span{font-size:24px}
+@media(max-width:760px){.outline-topbar{padding:0 15px;gap:8px}.outline-topbar nav{overflow:auto;margin-left:10px}.outline-topbar nav a{padding:8px 10px;white-space:nowrap;font-size:11px}.outline-save-state,.outline-topbar .quiet-badge{display:none}.outline-layout{display:block}.episode-sidebar{border-right:0;border-bottom:1px solid #e8e5eb;padding:12px 15px}.episode-list{display:flex;overflow:auto;margin-top:10px}.episode-list>button{min-width:145px}.episode-assets-link{display:none}.outline-main{padding:20px 15px 90px}.outline-toolbar{align-items:flex-start;gap:8px}.outline-toolbar div{gap:8px;flex-wrap:wrap}.drama-assistant{inset:70px 10px 10px;width:auto}.assistant-fab{right:18px;bottom:18px}}
+
+/* Manuscript editing and version history use the creator workspace palette. */
+.script-document-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}.script-document-heading .manuscript-kicker{margin:0}.script-version-button{border:1px solid #e9e5f2;background:#f7f4fc;color:#7757ba;border-radius:20px;padding:7px 12px;font-size:12px;cursor:pointer}.script-version-button:disabled{opacity:.5;cursor:default}.script-edit-label{display:flex;justify-content:space-between;gap:12px;margin:24px 0 12px;color:#86828d;font-size:12px}.script-edit-label label{font-weight:600;color:#403a49}.script-editor{display:block;width:100%;min-height:420px;resize:vertical;border:1px solid #e4deee;border-radius:14px;padding:22px;background:#fefdfd;outline:none;color:#302b39;font:inherit;line-height:1.95;box-sizing:border-box}.script-editor:focus{border-color:#aa91d5;box-shadow:0 0 0 3px #ac8ed314}.script-version-note{display:flex;flex-direction:column;gap:10px;font-size:12px;color:#746d7c;margin-top:20px}.script-version-note small{color:#a8a1ae;margin-left:6px}.script-version-note input{width:100%;box-sizing:border-box;border:1px solid #e9e5ed;border-radius:10px;background:#faf9fc;padding:12px;font:inherit;color:#403a49}.script-edit-footer{flex-wrap:wrap;gap:16px}.script-edit-footer>div{display:flex;align-items:center;gap:12px}.script-edit-footer button:not(.creator-primary){border:0;background:none;color:#7e758a;cursor:pointer;font-size:13px}.script-keyboard-hint{font-size:11px;color:#948b9e;line-height:1.6}.script-save-message{color:#687e63;font-size:12px}.script-conflict{border:1px solid #efd9b3;background:#fffaf1;border-radius:10px;padding:12px;font-size:13px;line-height:1.7;color:#946a28}.script-conflict button{border:0;background:transparent;color:#7955af;text-decoration:underline;margin-left:10px;cursor:pointer}.script-dialog{border-radius:22px;border:1px solid #ece8f1;padding:28px;color:#403847}.script-dialog>header{display:flex;align-items:center;justify-content:space-between;gap:16px}.script-dialog>header h2{margin:0;font-size:21px}.script-dialog>header button{display:grid;place-items:center;border:0;background:#f5f3f8;border-radius:50%;width:34px;height:34px;cursor:pointer}.script-dialog-wide{width:min(1080px,calc(100vw - 48px));max-width:1080px;max-height:88dvh}.script-history-intro{font-size:13px;color:#8b8195;line-height:1.8;margin:14px 0 24px}.script-history-layout{display:grid;grid-template-columns:215px minmax(0,1fr);gap:24px}.script-history-layout>aside{max-height:58vh;overflow:auto;padding-right:8px}.script-history-layout>aside>button{display:block;width:100%;text-align:left;border:1px solid transparent;border-radius:12px;background:#f7f6f9;padding:14px;margin-bottom:8px;cursor:pointer;color:#453c50}.script-history-layout>aside>button.selected{background:#f2edfb;border-color:#d9c9ee}.script-history-layout strong{display:flex;justify-content:space-between;font-size:14px;gap:8px}.script-history-layout strong span{font-weight:400;font-size:11px;color:#8b71b5}.script-history-layout time{display:block;color:#9a90a3;font-size:11px;margin:9px 0}.script-history-layout aside p{font-size:12px;line-height:1.6;margin:0;overflow-wrap:anywhere}.script-history-pagination{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#94899f;padding:10px 0}.script-history-pagination button{background:white;border:1px solid #eee8f4;border-radius:7px;padding:6px 10px;cursor:pointer}.script-version-preview{min-width:0}.script-comparison{display:grid;grid-template-columns:1fr 1fr;gap:14px}.script-comparison section{min-width:0;border:1px solid #ebe6f0;border-radius:12px;overflow:hidden}.script-comparison h3{margin:0;padding:13px 16px;background:#f8f6fb;font-size:12px;color:#8a719f;font-weight:500}.script-comparison pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.9;padding:18px;height:330px;overflow:auto;color:#53485e}.script-restore-controls{display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:12px;margin-top:20px}.script-restore-controls p{flex-basis:100%;font-size:12px;color:#907ca1}.script-restore-controls>button:not(.creator-primary){background:none;border:0;color:#90839b;cursor:pointer}.script-history-empty{text-align:center;padding:50px;color:#9d8bab}.script-history-empty p{font-size:16px;color:#64536f}.script-history-empty span{font-size:13px}.script-dialog button:disabled{cursor:default;opacity:.45}
+@media(max-width:760px){.script-dialog{padding:20px}.script-dialog-wide{width:calc(100vw - 24px)}.script-history-layout{grid-template-columns:minmax(0,1fr);gap:16px}.script-history-layout>aside{max-height:170px}.script-comparison{grid-template-columns:minmax(0,1fr)}.script-comparison pre{height:190px}.script-edit-label{flex-direction:column}.script-editor{padding:14px;min-height:320px}.script-edit-footer>div{width:100%;justify-content:flex-end}.script-document-heading{gap:10px}.script-dialog .wb-dialog-footer{flex-wrap:wrap}}
+
+.brief-option .brief-select-wrap { position:relative; display:inline-flex; align-items:center; }
+.brief-option .brief-select-wrap select { appearance:none; -webkit-appearance:none; }
+
+/* The flow pages share the outline page's 1050px content width. */
+.storyboard-main { width:min(1050px,calc(100% - 346px)); max-width:none; margin-left:314px; margin-right:auto; }
+@media (max-width:760px) { .asset-inner,.video-inner { width:calc(100% - 36px); padding-left:0; padding-right:0; } .storyboard-main { width:calc(100% - 24px); margin-left:0; } }
+
+.project-id-badge { display:inline-flex; align-items:center; min-height:22px; padding:0 8px; border:1px solid #e6e1e9; border-radius:4px; background:#f8f6f9; color:#786f7f; font-size:10px; font-weight:500; white-space:nowrap; }.outline-topbar-left { display:flex; align-items:center; gap:14px; min-width:0; }
+.outline-topbar-left > strong { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* 剧本大纲：与首页同族的可收起剧集目录。 */
+.outline-layout { grid-template-columns:240px minmax(0,1fr); transition:grid-template-columns .2s ease; }
+.episode-sidebar { padding:20px 12px 16px; background:#fff; }
+.episode-sidebar > header { min-height:34px; padding:0 5px; }
+.episode-sidebar > header > strong { color:#332d39; font-size:13px; font-weight:650; }
+.episode-sidebar-actions { display:flex; align-items:center; gap:2px; }
+.episode-sidebar header button { width:30px; height:30px; display:grid; place-items:center; padding:0; border:1px solid transparent; border-radius:7px; background:transparent; color:#766c7d; cursor:pointer; }
+.episode-sidebar header button:hover { border-color:#e4dfe8; background:#f8f6fa; color:#65428b; }
+.episode-sidebar header .episode-sidebar-toggle { color:#6b5a78; }
+.episode-list { gap:3px; margin-top:15px; }
+.episode-list > button { min-height:56px; gap:10px; border:1px solid transparent; border-radius:8px; padding:10px 9px; background:transparent; color:#514957; transition:background .16s ease,border-color .16s ease,color .16s ease; cursor:pointer; }
+.episode-list > button:hover { background:#f7f4f9; color:#49375d; }
+.episode-list > button.selected { border-color:#e2d8f0; background:#f0ebf7; color:#63408e; }
+.episode-list > button > svg:first-child { flex:0 0 auto; color:#887c92; }
+.episode-list > button.selected > svg:first-child { color:#7750a8; }
+.episode-list-copy { display:grid; min-width:0; gap:3px; flex:1; overflow:hidden; font-size:12px; font-weight:560; text-overflow:ellipsis; white-space:nowrap; }
+.episode-list-copy small { color:#9b90a5; font-size:9px; font-weight:600; letter-spacing:.1em; }
+.episode-list > button > svg:last-child { flex:0 0 auto; color:#a79daa; }
+.episode-compact-number { display:none; }
+.episode-assets-link { min-height:42px; margin-top:auto; padding:16px 9px 0; border-top:1px solid #eeeaf0; color:#705394; font-size:12px; }
+.episode-assets-link:hover { color:#503172; }
+.episode-assets-link > svg { flex:0 0 auto; }
+.episode-assets-link small { font-size:9px; }
+.episode-menu-collapsed { grid-template-columns:64px minmax(0,1fr); }
+.episode-menu-collapsed .episode-sidebar { padding-left:6px; padding-right:6px; }
+.episode-menu-collapsed .episode-sidebar > header { justify-content:center; padding:0; }
+.episode-menu-collapsed .episode-sidebar > header > strong,
+.episode-menu-collapsed .episode-list-copy,
+.episode-menu-collapsed .episode-list > button > svg:first-child,
+.episode-menu-collapsed .episode-list > button > svg:last-child,
+.episode-menu-collapsed .episode-assets-link > span,
+.episode-menu-collapsed .outline-empty { display:none; }
+.episode-menu-collapsed .episode-sidebar-actions { width:100%; justify-content:center; }
+.episode-menu-collapsed .episode-list > button { min-height:42px; justify-content:center; gap:0; padding:0; }
+.episode-menu-collapsed .episode-compact-number { display:inline-grid; place-items:center; width:30px; height:24px; color:#81758b; font-size:10px; font-weight:700; letter-spacing:.04em; }
+.episode-menu-collapsed .episode-list > button.selected .episode-compact-number { color:#6d45a0; }
+.episode-menu-collapsed .episode-assets-link { justify-content:center; padding-left:0; padding-right:0; }
+.episode-menu-collapsed .outline-main { padding-left:clamp(24px,5vw,88px); padding-right:clamp(24px,5vw,88px); }
+
+/* 剧本大纲完整工作区：信息层级与首页同源，但不混入分镜生产数据。 */
+.outline-workspace { background:#f6f5f7; }
+.outline-topbar { min-height:66px; height:auto; padding:0 max(24px,calc((100vw - 1430px) / 2)); box-sizing:border-box; background:rgba(255,255,255,.96); }
+.outline-topbar nav { gap:2px; padding:4px; border:1px solid #ece8ef; border-radius:9px; background:#faf9fb; }
+.outline-topbar nav a { padding:8px 15px; border-radius:6px; font-size:12px; }
+.outline-topbar nav a.selected { background:#2a2630; box-shadow:0 2px 6px rgba(35,29,43,.14); }
+.outline-page-brief { width:min(1430px,calc(100% - 48px)); box-sizing:border-box; display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:14px; margin:22px auto 0; padding:18px 20px; border:1px solid #e7e3ea; border-radius:12px; background:#fff; box-shadow:0 8px 25px rgba(51,43,60,.025); }
+.outline-page-brief-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:11px; color:#74529a; background:#f1ebf8; }
+.outline-page-brief > div:nth-child(2) { min-width:0; }
+.outline-page-brief > div:nth-child(2) > span { display:block; color:#9073b0; font-size:9px; font-weight:700; letter-spacing:.15em; }
+.outline-page-brief h1 { margin:4px 0 4px; color:#302a35; font-size:19px; font-weight:680; letter-spacing:.01em; }
+.outline-page-brief p { margin:0; color:#8d8492; font-size:11px; line-height:1.55; }
+.outline-page-brief-status { min-width:112px; display:grid; gap:3px; padding-left:20px; border-left:1px solid #eeeaf0; }
+.outline-page-brief-status > span { color:#a096a5; font-size:9px; letter-spacing:.08em; }
+.outline-page-brief-status strong { color:#504458; font-size:12px; }
+.outline-page-brief-status small { color:#9c94a0; font-size:10px; }
+.script-finalization-panel { margin-top:14px; border-radius:12px; box-shadow:0 8px 25px rgba(51,43,60,.02); }
+.script-only-workspace { min-height:auto; background:transparent; }
+.script-only-editor { min-height:auto; }
+.script-only-editor > .outline-layout { width:min(1430px,calc(100% - 48px)); min-height:calc(100vh - 250px); margin:14px auto 30px; border:1px solid #e6e2e9; border-radius:12px; overflow:hidden; background:#fff; box-shadow:0 10px 30px rgba(51,43,60,.025); }
+.outline-main { padding:18px; overflow:visible; background:#faf9fb; }
+.outline-main-surface { min-height:100%; border:1px solid #ece8ee; border-radius:10px; background:#fff; overflow:hidden; }
+.outline-main-intro { display:flex; align-items:center; justify-content:space-between; gap:28px; padding:22px 24px 19px; border-bottom:1px solid #eeeaf0; background:linear-gradient(100deg,#fff 0%,#fcfbfd 100%); }
+.outline-main-intro > div:first-child { min-width:0; }
+.outline-main-intro > div:first-child > span { display:block; margin-bottom:6px; color:#9276af; font-size:9px; font-weight:700; letter-spacing:.14em; }
+.outline-main-intro > div:first-child > strong { display:block; color:#302a35; font-size:17px; font-weight:680; }
+.outline-main-intro p { margin:5px 0 0; color:#938a98; font-size:11px; line-height:1.5; }
+.outline-main-intro dl { display:flex; align-items:stretch; flex:0 0 auto; margin:0; border:1px solid #ebe6ee; border-radius:8px; overflow:hidden; background:#fff; }
+.outline-main-intro dl > div { min-width:76px; padding:8px 11px; border-right:1px solid #eeeaf0; }
+.outline-main-intro dl > div:last-child { border-right:0; }
+.outline-main-intro dt { color:#a098a5; font-size:9px; }
+.outline-main-intro dd { margin:3px 0 0; color:#514758; font-size:11px; font-weight:650; white-space:nowrap; }
+.outline-toolbar { min-height:54px; margin:0; padding:0 24px; border-bottom:1px solid #eeeaf0; }
+.outline-toolbar > div { gap:10px; }
+.outline-toolbar > div:first-child strong { color:#554861; font-size:11px; letter-spacing:.08em; }
+.outline-toolbar > div:first-child span { max-width:300px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#938a98; font-size:11px; }
+.outline-toolbar button { min-height:30px; display:inline-flex; align-items:center; gap:5px; border:1px solid transparent; border-radius:7px; padding:0 9px; background:transparent; color:#756b7d; font-size:11px; cursor:pointer; }
+.outline-toolbar button:hover { border-color:#e3dce9; background:#faf8fc; color:#66458b; }
+.outline-toolbar .outline-new-episode { border-color:#dcd3e6; background:#fff; color:#5f407e; }
+.outline-document-area { padding:24px; }
+.outline-main .manuscript { max-width:980px; min-height:560px; margin:0; border-color:#eeeaf0; border-radius:9px; padding:40px 48px 30px; box-shadow:none; }
+.outline-document-area .manuscript h1 { color:#2c2730; font-size:31px; }
+.outline-document-area .manuscript-kicker { color:#9d80bb; }
+.outline-document-area .manuscript-synopsis { max-width:860px; padding:13px 16px; border:1px solid #eee9f1; border-radius:8px; background:#faf8fc; color:#756b7d; }
+.outline-document-area .manuscript-text { min-height:300px; color:#514a58; font-size:14px; line-height:2.05; }
+.outline-document-area .script-document-heading { margin-bottom:22px; }
+.outline-document-area .script-version-button { min-height:30px; border-radius:7px; background:#fff; }
+.outline-document-area .manuscript > footer { margin-top:28px; }
+.outline-main-empty { padding:130px 20px; }
+@media (max-width:760px) {
+  .outline-topbar { height:auto; min-height:68px; padding:10px 16px; flex-wrap:wrap; gap:9px; }
+  .outline-topbar-left { flex:1 1 100%; }
+  .outline-topbar nav { order:3; width:100%; overflow:auto; justify-content:flex-start; }
+  .outline-topbar nav a { white-space:nowrap; }
+  .outline-save-state { margin-left:auto; }
+  .outline-layout.episode-menu-collapsed { display:grid; grid-template-columns:56px minmax(0,1fr); }
+  .outline-layout.episode-menu-collapsed .episode-sidebar { min-height:calc(100vh - 68px); padding-top:10px; border-right:1px solid #e8e5eb; border-bottom:0; }
+  .outline-layout.episode-menu-collapsed .episode-list { display:grid; overflow:visible; margin-top:12px; }
+  .outline-layout.episode-menu-collapsed .outline-main { padding:20px 14px 90px; }
+  .outline-topbar { padding:10px 16px; }
+  .outline-topbar nav { padding:3px; }
+  .outline-page-brief { width:calc(100% - 24px); grid-template-columns:38px minmax(0,1fr); gap:11px; margin-top:12px; padding:15px; }
+  .outline-page-brief-icon { width:38px; height:38px; border-radius:10px; }
+  .outline-page-brief h1 { font-size:17px; }
+  .outline-page-brief-status { display:none; }
+  .script-only-editor > .outline-layout { width:calc(100% - 24px); margin-top:12px; margin-bottom:18px; border-radius:10px; }
+  .outline-main { padding:10px; }
+  .outline-main-intro { align-items:flex-start; flex-direction:column; gap:14px; padding:18px; }
+  .outline-main-intro dl { width:100%; }
+  .outline-main-intro dl > div { flex:1; min-width:0; padding:8px; }
+  .outline-toolbar { min-height:auto; align-items:flex-start; flex-direction:column; gap:8px; padding:14px 18px; }
+  .outline-toolbar > div:last-child { width:100%; justify-content:space-between; }
+  .outline-document-area { padding:12px; }
+  .outline-main .manuscript { min-height:480px; padding:28px 20px; }
+  .outline-document-area .manuscript h1 { font-size:25px; }
+}
+
+/* Keep the asset and episode pages on the same responsive canvas as the script outline. */
+.asset-page > .asset-inner,
+.video-page > .video-inner {
+  width: auto;
+  max-width: none;
+  margin: 0 clamp(24px, 8vw, 160px);
+}
+
+.video-page .episode-video-list article {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+@media (max-width: 760px) {
+  .asset-page > .asset-inner,
+  .video-page > .video-inner {
+    width: auto;
+    margin-left: 18px;
+    margin-right: 18px;
+  }
+}
+
+/* Phase 1: episode production list */
+.episode-page-heading { align-items:center; }
+.episode-heading-actions { display:flex; gap:10px; }
+.episode-heading-actions button { min-height:38px; padding:0 16px; border:1px solid #ded9e2; border-radius:10px; background:#fff; color:#4e4853; }
+.episode-heading-actions button:disabled { color:#aaa4ad; background:#f1eff2; cursor:not-allowed; }
+.episode-overview { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin-bottom:22px; border:1px solid #e5e1e8; border-radius:16px; background:#fff; overflow:hidden; }
+.episode-script-gate { display:flex; align-items:center; justify-content:space-between; gap:18px; margin-bottom:18px; padding:14px 16px; border:1px solid #ead4ad; border-radius:11px; background:#fffaf1; }
+.episode-script-gate div { display:grid; gap:4px; }
+.episode-script-gate strong { font-size:12px; color:#654d29; }
+.episode-script-gate span { color:#8f7650; font-size:10px; }
+.episode-script-gate button { border:1px solid #dec69f; border-radius:7px; padding:8px 11px; background:#fff; color:#6c512a; font-size:11px; white-space:nowrap; }
+.episode-script-gate.asset { border-color:#ddcfe7; background:#fbf8fd; }
+.episode-script-gate.asset strong { color:#674d7b; }
+.episode-script-gate.asset span { color:#806d8e; }
+.episode-script-gate.asset button { border-color:#d8c8e3; color:#674d7b; }
+.episode-asset-stale { margin:6px 0 0; color:#855e3e; font-size:10px; }
+.episode-asset-stale button { padding:0; border:0; color:#76558e; font:inherit; text-decoration:underline; }
+.episode-overview div { display:grid; gap:3px; padding:18px 22px; border-right:1px solid #eeeaf0; }
+.episode-overview div:last-child { border-right:0; }
+.episode-overview strong { font-size:22px; font-weight:650; color:#2d2930; }
+.episode-overview span { font-size:11px; color:#908993; }
+.episode-video-list { grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+.episode-video-card { min-height:170px; padding:10px !important; gap:20px !important; }
+.episode-video-cover { position:relative; flex:0 0 142px; height:142px; border-radius:14px; background:linear-gradient(145deg,#ebe9ee,#d9d6df); display:grid; place-items:center; color:#6e6878; font-size:28px; font-weight:700; }
+.episode-video-cover small { position:absolute; left:10px; bottom:10px; padding:3px 7px; border-radius:10px; background:#242127cc; color:#fff; font-size:10px; }
+.episode-video-content { min-width:0; align-content:center; }
+.episode-card-state { display:flex !important; grid-auto-flow:unset !important; flex-direction:row !important; align-items:center; justify-content:space-between; gap:8px !important; }
+.episode-status { width:max-content; padding:4px 8px; border-radius:10px; background:#f0eef2; color:#77717f !important; font-size:11px; }
+.episode-status.script { background:#f0ebfa; color:#7353aa !important; }
+.episode-status.ready { background:#eaf5ef; color:#34835b !important; }
+.episode-status.working { background:#e9f0fb; color:#35699a !important; }
+.episode-status.complete { background:#e6f5ec; color:#28754e !important; }
+.episode-status.failed { background:#fff0f0; color:#a33f47 !important; }
+.episode-synopsis { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+.episode-script-stale { padding:6px 8px; border-left:3px solid #ca9850; background:#fff8eb; color:#8e6328 !important; white-space:normal; }
+.episode-card-progress { display:block !important; height:4px; border-radius:2px; background:#eeeaf0; overflow:hidden; }
+.episode-card-progress i { display:block; height:100%; border-radius:2px; background:#8763ad; transition:width .2s ease; }
+.episode-actions { display:flex !important; flex-direction:row !important; flex-wrap:wrap; gap:8px !important; }
+.episode-actions button { border:1px solid #e2dfe6; background:#fff; }
+.episode-actions .episode-primary { background:#242127; color:#fff; }
+@media (max-width:980px) { .episode-video-list { grid-template-columns:1fr; } }
+@media (max-width:560px) { .episode-video-card { align-items:flex-start !important; } .episode-video-cover { flex-basis:96px; height:112px; } .episode-page-heading { align-items:flex-start; gap:18px; } .episode-heading-actions { width:100%; } .episode-overview { grid-template-columns:repeat(2,1fr); } .episode-overview div:nth-child(2) { border-right:0; } .episode-overview div:nth-child(-n+2) { border-bottom:1px solid #eeeaf0; } .episode-script-gate { align-items:flex-start; flex-direction:column; } }
+
+/* M5: keep script history content styling while the shared Dialog owns chrome. */
+.ui-dialog.script-dialog { padding: 0; border: 0; border-radius: 0; color: inherit; }
+.ui-dialog.script-dialog .ui-dialog__body { min-width: 0; }
+.ui-dialog.script-dialog .wb-dialog-footer { margin: 20px -24px -20px; padding: 14px 24px; }
+@media(max-width:680px) { .ui-dialog.script-dialog .wb-dialog-footer { margin: 18px -18px -18px; padding: 12px 18px; } }
+
+/* M5: keep project navigation and production actions on the shared accent system. */
+.outline-topbar nav a { border-radius: 8px; }
+.outline-topbar nav a.selected { background: var(--app-color-accent); color: #fff; }
+.episode-actions .episode-primary {
+  border-color: var(--app-color-accent);
+  border-radius: 8px;
+  background: var(--app-color-accent);
+  color: #fff;
+}
+.episode-actions .episode-primary:hover:not(:disabled) {
+  border-color: var(--app-color-accent-hover);
+  background: var(--app-color-accent-hover);
+  color: #fff;
+}

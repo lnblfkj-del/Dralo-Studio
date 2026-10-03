@@ -1,0 +1,8 @@
+.canvas-lightbox { position: fixed; inset: 0; z-index: 10000; background: #141219f2; color: white; display: flex; flex-direction: column; }
+.canvas-lightbox header { display: flex; align-items: center; gap: 10px; padding: 16px 24px; }
+.canvas-lightbox header span { flex: 1; }
+.canvas-lightbox button { padding: 7px 12px; border: 1px solid #625772; border-radius: 8px; background: #322b3e; color: white; cursor: pointer; }
+.canvas-lightbox-stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.canvas-lightbox-stage img, .canvas-lightbox-stage video { max-width: 94%; max-height: 94%; object-fit: contain; }
+.canvas-text-optimizer { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+.canvas-text-optimizer select { max-width: 150px; font-size: 11px; }

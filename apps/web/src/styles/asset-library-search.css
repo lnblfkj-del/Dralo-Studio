@@ -1,0 +1,4 @@
+.asset-library-search { display: flex; align-items: center; gap: 6px; min-width: 0; margin: 8px; border: 1px solid var(--app-color-border); border-radius: 5px; padding: 6px 8px; color: var(--app-color-text-muted); background: var(--app-color-bg-surface); }
+.asset-library-search svg { flex: 0 0 auto; }
+.asset-library-search input { box-sizing: border-box; min-width: 0; width: 100%; border: 0; padding: 0; outline: none; background: transparent; color: var(--app-color-text); font: inherit; font-size: 12px; }
+.asset-library-search:focus-within { border-color: var(--app-color-accent); }

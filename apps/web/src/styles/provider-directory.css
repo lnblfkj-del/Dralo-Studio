@@ -1,0 +1,42 @@
+.settings-provider-page .channel-directory{margin-top:22px;padding:22px;border:1px solid #e4e0e7;border-radius:11px;background:#fff;box-shadow:0 8px 28px rgba(44,34,52,.025)}
+/* Dialogs are portaled to body: do not scope their controls to the page ancestor. */
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .provider-heading-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;flex:0 0 auto}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .provider-heading-actions .icon-danger{box-sizing:border-box;display:grid;place-items:center;position:static;width:36px;min-width:36px;height:36px;min-height:36px;padding:0;margin:0;flex:0 0 36px;line-height:0;border-radius:6px}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .provider-heading-actions .icon-danger svg{display:block;width:18px;height:18px;margin:0}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .key-input{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 12px;border:1px solid #dedde2;border-radius:6px;background:#fff}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .key-input svg{position:static;flex:0 0 15px;width:15px;height:15px}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .key-input input{flex:1;min-width:0;width:100%;padding:8px 0;border:0;background:transparent}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .key-input:focus-within{outline:2px solid #c8c0df;border-color:#8b7fba}
+:is(.settings-dialog, .provider-dialog) .provider-config-panel--dialog .key-input input:focus{outline:none}
+.channel-directory-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:28px}
+.channel-directory-heading small{color:#9170aa;font-size:10px;font-weight:650;letter-spacing:1.5px}
+.channel-directory-heading h2{margin:7px 0 4px;font-size:18px;color:#302837}
+.channel-directory-heading p{margin:0;font-size:12px;color:#908499;line-height:1.6}
+.channel-directory-actions{display:flex;gap:8px;flex-wrap:wrap}
+.channel-directory :is(button,input){font-family:inherit;font-size:13px;box-sizing:border-box}
+.channel-directory-actions button,.channel-directory-card footer button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:7px 13px;border:1px solid #ddd3e7;border-radius:6px;color:#6a507d;background:white;cursor:pointer;font-weight:500}
+.channel-directory-actions button:hover,.channel-directory-card footer button:hover{background:#f4edf9;border-color:#bfa7d2}
+.channel-directory-toolbar{display:flex;gap:20px;align-items:center;justify-content:space-between;border-bottom:1px solid #e5dfea;margin-bottom:24px}
+.channel-directory-tabs{display:flex;gap:24px;flex-wrap:wrap}
+.channel-directory-tabs button{padding:12px 0;border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;color:#91829c;cursor:pointer;white-space:nowrap}
+.channel-directory-tabs button[aria-selected=true]{border-bottom-color:#6b507e;color:#302837;font-weight:600}
+.channel-directory-toolbar input{width:190px;min-width:120px;min-height:36px;padding:8px 10px;border:1px solid #e6dfee;border-radius:6px;color:#4a3f53;background:white}
+.channel-directory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.channel-directory-card{display:grid;grid-template-columns:62px minmax(0,1fr) auto;gap:12px;align-items:start;padding:18px;border:1px solid #e3dce9;border-radius:9px;background:white;min-width:0}
+.channel-directory-icon{display:grid;place-items:center;width:60px;height:60px;border:1px solid #eee8f3;border-radius:8px;background:#f7f3fa;color:#8763a2}
+.channel-directory-copy{min-width:0}
+.channel-directory-copy>small{font-size:10px;color:#9170aa;letter-spacing:.6px;overflow-wrap:anywhere}
+.channel-directory-copy h3{margin:6px 0;font-size:15px;color:#302837;overflow-wrap:anywhere}
+.channel-directory-copy p{margin:0 0 10px;font-size:12px;color:#90849a;overflow-wrap:anywhere;line-height:1.6}
+.channel-directory-copy>span{font-size:12px;color:#96899e}
+.channel-directory-status{align-self:start;padding:4px 7px;border:1px solid #e1dae5;border-radius:5px;background:#faf8fc;font-size:11px;white-space:nowrap;color:#8c7e95}
+.channel-directory-status.enabled{border-color:#bde0d1;background:#f1faf6;color:#34876b}
+.channel-enable-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font:inherit;font-size:11px}.channel-enable-switch:disabled{opacity:.5;cursor:not-allowed}.channel-enable-switch i{width:24px;height:14px;background:#b9afc1;border-radius:7px;position:relative}.channel-enable-switch i:after{content:'';position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:white;transition:transform .18s ease}.channel-enable-switch.enabled i{background:#8b6ca3}.channel-enable-switch.enabled i:after{transform:translateX(10px)}
+.settings-provider-page .model-test-dialog{width:min(947px,calc((100vw - 56px)*.667))}
+@media(max-width:850px){.settings-provider-page .model-test-dialog{width:calc(100vw - 20px)}}
+.channel-directory-card footer{grid-column:2 / -1;display:flex;justify-content:flex-end;gap:8px;padding-top:4px}
+.channel-template-card{display:flex;align-items:center;gap:16px;padding:18px;text-align:left;border:1px solid #e3dce9;border-radius:9px;background:white;color:#302837;cursor:pointer;min-width:0}
+.channel-template-card>span:last-child{flex:1;min-width:0}.channel-template-card strong{font-size:15px}.channel-template-card small{display:block;margin:7px 0;color:#90849a;font-size:12px;line-height:1.6}.channel-template-card em{font-size:12px;color:#88649f;font-style:normal}.channel-template-card:disabled{opacity:.55;cursor:not-allowed}.channel-template-card:hover:not(:disabled){background:#faf7fc;border-color:#c5afd6}
+.channel-directory-empty{padding:38px 16px;text-align:center;color:#918499;font-size:13px}.channel-directory-note{margin:20px 0 0;font-size:12px;color:#918499}
+@media(max-width:1000px){.channel-directory-grid{grid-template-columns:1fr}.channel-directory-toolbar{align-items:flex-start;flex-direction:column;gap:10px;padding-bottom:12px}.channel-directory-toolbar input{width:100%}}
+@media(max-width:600px){.channel-directory-heading{flex-direction:column}.channel-directory-tabs{gap:16px}.channel-directory-card{grid-template-columns:42px minmax(0,1fr)}.channel-directory-icon{width:42px;height:42px}.channel-directory-status{grid-column:2}.channel-directory-card footer{grid-column:1/-1}.settings-provider-page .channel-directory{padding:16px}}

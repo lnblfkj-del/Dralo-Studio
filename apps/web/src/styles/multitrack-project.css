@@ -1,0 +1,209 @@
+.independent-editor-status { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 8px; min-height: 38px; padding: 4px 12px; border-bottom: 1px solid var(--app-color-border); font-size: 12px; }
+.independent-editor-status > span { min-width: 0; overflow-wrap: anywhere; }
+.independent-editor-status [role="alert"] { display: flex; align-items: center; gap: 6px; color: var(--app-color-danger); }
+.independent-editor-status [role="alert"] svg { flex: 0 0 auto; }
+.multitrack-dismiss-alert { flex: 0 0 auto; display: grid; width: 24px; height: 24px; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--app-color-text-muted); }
+.assembly-workspace .production-panel > .assembly-workspace-header .assembly-workspace-actions .multitrack-collapse { flex: 0 0 auto; width: auto; padding: 0 9px; color: var(--app-color-text); }
+.assembly-workspace-title [aria-label="剪辑保存状态"] { font-size: 11px; }
+@media (max-width: 600px) {
+  .assembly-workspace .production-panel > .assembly-workspace-header { grid-template-columns: minmax(0, 1fr); gap: 4px; padding: 8px 12px; }
+  .assembly-workspace .assembly-workspace-actions { justify-content: flex-start; flex-wrap: wrap; gap: 6px; }
+}
+.independent-editor-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.independent-editor-tools select { flex: 0 0 96px; width: 96px; min-width: 0; height: 32px; padding: 0 8px; }
+.independent-editor-tools button,
+.independent-inspector > button,
+.multitrack-selection-fields > button { display: inline-grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--app-color-border); border-radius: 4px; padding: 0; background: var(--app-color-bg-surface); color: var(--app-color-text); }
+.independent-editor-tools button:disabled,
+.independent-inspector button:disabled { opacity: 0.4; }
+.independent-inspector label { display: grid; gap: 6px; min-width: 0; font-size: 12px; }
+.independent-inspector input { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.independent-inspector textarea { box-sizing: border-box; width: 100%; min-height: 80px; max-width: 100%; resize: vertical; border: 1px solid var(--app-color-border); border-radius: 4px; padding: 8px; background: var(--app-color-bg-surface); color: var(--app-color-text); font: inherit; }
+.independent-inspector input[type="checkbox"] { width: auto; justify-self: start; }
+.independent-inspector label:has(> input[type="checkbox"]) { display: flex; align-items: center; gap: 8px; }
+.independent-inspector small { overflow-wrap: anywhere; color: var(--app-color-text-muted); }
+.independent-inspector p { overflow-wrap: anywhere; }
+.multitrack-selection-fields { display: grid; grid-column: 1 / -1; gap: 14px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.multitrack-selection-fields:disabled { opacity: .55; }
+.multitrack-selection-fields select { width: 100%; min-width: 0; padding: 7px; border: 1px solid var(--app-color-border); border-radius: 4px; background: var(--app-color-bg-surface); color: var(--app-color-text); }
+.independent-asr-panel { display: flex; flex-direction: column; align-items: stretch; gap: 18px; min-width: 0; max-width: 100%; padding: 20px; box-sizing: border-box; }
+.independent-asr-panel label { display: grid; gap: 6px; min-width: 0; font-size: 12px; color: var(--app-color-text-muted); }
+.independent-asr-panel select { box-sizing: border-box; min-width: 0; width: 100%; height: 34px; border: 1px solid var(--app-color-border); border-radius: 4px; padding: 6px; background: var(--app-color-bg-surface); color: var(--app-color-text); }
+.independent-asr-panel small { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; color: var(--app-color-text-muted); }
+.independent-asr-panel .multitrack-asr-primary { display: inline-flex; gap: 6px; width: auto; min-height: 34px; padding: 0 12px; color: var(--app-color-accent); border-color: var(--app-color-accent); }
+.independent-asr-panel [role="alert"] { color: var(--app-color-danger); }
+.independent-asr-panel .independent-asr-option { display: flex; align-items: center; gap: 6px; }
+.independent-asr-option input { flex: 0 0 14px; width: 14px; height: 14px; min-height: 0; margin: 0; accent-color: var(--app-color-accent); }
+.multitrack-tool-trigger { display: inline-flex; flex: 0 0 auto; }
+.multitrack-timeline-tools .multitrack-caption-command { width: auto; gap: 6px; padding: 0 9px; color: var(--app-color-accent); background: var(--app-color-bg-layout); font-size: 12px; white-space: nowrap; }
+.multitrack-timeline-tools { display: flex; align-items: center; gap: 4px; }
+@media (max-width: 700px) {
+  .independent-timeline .multitrack-timeline-tools { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  .independent-timeline .multitrack-timeline-tools button { flex-shrink: 0; }
+}
+.multitrack-timeline-tools button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--app-color-text-muted); }
+.multitrack-timeline-tools button:hover:not(:disabled) { background: var(--app-color-bg-layout); color: var(--app-color-accent); }
+.multitrack-timeline-tools button:disabled { opacity: .35; }
+.independent-timeline .assembly-editor-toolbar { flex: 0 0 auto; position: sticky; top: 0; z-index: 10; flex-wrap: wrap; gap: 6px; padding: 5px 10px; background: var(--app-color-bg-surface); }
+.independent-timeline .independent-drop-target { outline: 1px solid var(--app-color-accent); outline-offset: -1px; background: var(--app-color-bg-layout); }
+.independent-timeline .assembly-editor-body { flex: 1 1 auto; min-height: 0; overflow: auto; grid-template-columns: 184px minmax(0, 1fr); }
+.independent-timeline .multitrack-track-label { position: relative; gap: 3px; padding: 0 10px; justify-content: flex-end; background: var(--app-color-bg-surface); border-bottom: 1px solid var(--app-color-border); }
+.multitrack-track-label b { flex: 1; min-width: 0; overflow: hidden; font-weight: 500; text-overflow: ellipsis; }
+.multitrack-track-label button { flex: 0 0 20px; display: grid; width: 20px; height: 24px; place-items: center; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--app-color-text-muted); }
+.multitrack-track-label button[aria-pressed="true"] { color: var(--app-color-accent); background: var(--app-color-bg-surface); }
+.multitrack-clip-visual { position: relative; width: 100%; height: 46px; min-width: 0; overflow: hidden; pointer-events: none; }
+.multitrack-filmstrip { position: absolute; inset: 0; display: flex; pointer-events: none; }
+.multitrack-filmstrip img { flex: 1 1 0; width: 0; min-width: 0; height: 100%; object-fit: cover; background: #111; }
+.multitrack-clip-visual > svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.multitrack-clip-visual line { stroke: #21857e; stroke-width: 2; }
+.multitrack-clip-label { position: relative; z-index: 1; display: block; overflow: hidden; padding: 2px 8px; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.multitrack-clip-visual.is-video .multitrack-clip-label { color: white; text-shadow: 0 1px 2px #000; background: transparent; }
+.multitrack-action-content { width: 100%; min-width: 0; height: 46px; pointer-events: none; }
+.independent-timeline .assembly-editor-body { user-select: none; -webkit-user-select: none; }
+.independent-timeline .assembly-editor-body img { -webkit-user-drag: none; }
+.independent-timeline input,
+.independent-timeline textarea,
+.independent-timeline [contenteditable="true"] { user-select: text; -webkit-user-select: text; }
+.multitrack-action-content > span { display: -webkit-box; overflow: hidden; padding: 3px 8px; font-size: 11px; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.independent-timeline .timeline-editor-action { min-height: 46px; }
+.independent-timeline .timeline-editor-action-selected { box-shadow: inset 0 0 0 1px #687780; outline: none; border-color: #687780; }
+.independent-timeline .timeline-editor-action { margin-top: 0; border-radius: 3px; }
+.independent-timeline .timeline-editor-action :is(.timeline-editor-action-left-stretch,.timeline-editor-action-right-stretch) { z-index: 5; width: 10px; cursor: ew-resize; opacity: 0; }
+.independent-timeline .timeline-editor-action-selected :is(.timeline-editor-action-left-stretch,.timeline-editor-action-right-stretch) { opacity: 1; background: #687780; border-radius: 0; width: 7px; top: 1px; bottom: 1px; height: calc(100% - 2px); }
+.independent-timeline .timeline-editor-action :is(.timeline-editor-action-left-stretch,.timeline-editor-action-right-stretch)::after { content: ""; width: 2px; height: 16px; inset: 0; margin: auto; border: 0; background: #fff; border-radius: 1px; }
+.multitrack-context-menu { position: fixed; z-index: 50; display: grid; width: 230px; max-height: calc(100dvh - 8px); overflow: auto; padding: 6px; border: 1px solid var(--app-color-border); border-radius: 6px; background: var(--app-color-bg-surface); box-shadow: 0 8px 24px #0002; }
+.multitrack-context-menu button { display: flex; align-items: center; gap: 9px; height: 36px; padding: 0 9px; border: 0; border-radius: 4px; background: transparent; color: var(--app-color-text); text-align: left; font-size: 12px; }
+.multitrack-context-menu button:hover:not(:disabled) { background: var(--app-color-bg-layout); }
+.multitrack-context-menu button:disabled { opacity: .35; }
+.multitrack-context-menu kbd { margin-left: auto; color: var(--app-color-text-muted); font: inherit; font-size: 10px; }
+.independent-timeline .assembly-editor-toolbar input[type="range"] { width: 100px; height: 24px; padding: 0; accent-color: var(--app-color-accent); }
+.assembly-workspace .assembly-stage { container-type: size; padding: 8px; background: #ebeced; }
+.assembly-workspace .assembly-stage-frame { flex: 0 0 auto; width: min(100%, 2050px, calc((100cqh - 44px) * 2050 / 1150)); height: auto; aspect-ratio: 2050 / 1150; max-width: 2050px; max-height: none; background: #000; }
+.assembly-workspace .assembly-stage-caption { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; max-width: 2050px; min-height: 30px; }
+.assembly-stage-caption > span:last-child { text-align: right; }
+.assembly-workspace .assembly-stage-caption .multitrack-preview-play { display: flex; align-items: center; justify-content: center; justify-self: center; width: 30px; height: 30px; min-width: 30px; padding: 0; margin: 0; line-height: 1; border: 0; border-radius: 4px; background: transparent; color: var(--app-color-text); }
+.multitrack-preview-play svg { display: block; flex: 0 0 auto; margin: 0; }
+.independent-timeline .multitrack-track-label[data-selected="true"] { background: color-mix(in srgb, var(--app-color-accent) 10%, var(--app-color-bg-surface)); box-shadow: inset 3px 0 var(--app-color-accent); }
+.independent-timeline .multitrack-track-label .multitrack-track-select { position: absolute; inset: 0; width: 100%; height: 100%; display: flex; justify-content: flex-start; text-align: left; padding: 0 10px; border-radius: 0; background: transparent; color: var(--app-color-text); z-index: 0; }
+.independent-timeline .multitrack-track-select b { flex: 0 1 auto; max-width: 74px; font-size: 12px; }
+.independent-timeline .multitrack-track-label > button:not(.multitrack-track-select) { position: relative; z-index: 1; flex: 0 0 21px; width: 21px; height: 28px; }
+.independent-timeline .multitrack-track-label > button:not(.multitrack-track-select):hover { background: var(--app-color-bg-layout); color: var(--app-color-accent); }
+.independent-timeline .multitrack-track-label .multitrack-track-select[aria-pressed="true"] { background: transparent; color: var(--app-color-accent); }
+.independent-timeline .multitrack-track-select:focus-visible { outline: 2px solid var(--app-color-accent); outline-offset: -2px; }
+@media (max-width: 600px) { .independent-timeline .assembly-editor-body { grid-template-columns: 156px minmax(0,1fr); } }
+.multitrack-preview-play:hover:not(:disabled) { background: var(--app-color-bg-surface); color: var(--app-color-accent); }
+.multitrack-preview-play:disabled { opacity: .4; }
+.multitrack-font-select { width: 100%; min-width: 0; max-width: 100%; }
+.multitrack-font-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.assembly-workspace .assembly-stage-caption { color: var(--app-color-text-muted); }
+.assembly-workspace .assembly-editor-shell { grid-template-columns: clamp(214px, 17vw, 280px) minmax(0, 1fr) 680px; }
+.assembly-workspace[data-library-collapsed="true"] .assembly-editor-shell { grid-template-columns: 72px minmax(0, 1fr) 680px; }
+@media (min-width: 701px) and (max-width: 1199px) {
+  .assembly-workspace .assembly-editor-shell { grid-template-columns: 214px minmax(0, 1fr) min(680px, 45vw); }
+  .assembly-workspace[data-library-collapsed="true"] .assembly-editor-shell { grid-template-columns: 72px minmax(0, 1fr) min(680px, 45vw); }
+}
+@media (max-width: 700px) {
+  .assembly-workspace .assembly-editor-shell,
+  .assembly-workspace[data-library-collapsed="true"] .assembly-editor-shell { grid-template-columns: minmax(0, 1fr); }
+}
+.multitrack-visual-error { position: absolute; right: 3px; bottom: 1px; font-size: 8px; color: var(--app-color-text-muted); }
+.independent-timeline .timeline-editor-action-effect-bgm,
+.independent-timeline .timeline-editor-action-effect-ambience,
+.independent-timeline .timeline-editor-action-effect-sfx,
+.independent-timeline .timeline-editor-action-effect-dialogue { border-color: #5ca49d; background: #e4f2ef; color: #225c57; }
+@media (max-width: 700px) { .independent-timeline .assembly-editor-body { grid-template-columns: 112px minmax(0, 1fr); } }
+.independent-stage-frame { position: relative; }
+.assembly-workspace .multitrack-library-search { padding: 12px 14px 0; }
+.assembly-workspace .multitrack-library-search .asset-library-search { margin: 0; }
+.assembly-workspace .multitrack-library-menu { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 10px 14px; }
+.assembly-workspace .multitrack-library-menu button { justify-content: center; gap: 5px; padding: 0 4px; font-size: 12px; }
+.assembly-workspace .multitrack-entry-list { padding: 12px 14px; }
+.assembly-workspace .multitrack-entry-list h3 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--app-color-text-muted); }
+.assembly-workspace .multitrack-entry-list > button { width: 100%; min-height: 44px; padding: 10px 0; border: 0; border-bottom: 1px solid var(--app-color-border); border-radius: 0; background: transparent; text-align: left; font-size: 13px; }
+.assembly-workspace .assembly-media-list { padding: 0 14px 14px; }
+.assembly-workspace .assembly-media-list > button { padding: 12px 0; border: 0; border-bottom: 1px solid var(--app-color-border); border-radius: 0; background: transparent; }
+.assembly-workspace .assembly-media-icon { width: 44px; height: 44px; }
+.assembly-workspace .multitrack-audio-item { min-height: 44px; border-bottom: 1px solid var(--app-color-border); }
+.assembly-workspace .independent-stage-frame { container-type: size; }
+.assembly-workspace .independent-stage-frame video { position: absolute; left: 50%; top: 50%; width: auto; height: 74%; max-width: 86%; object-fit: contain; transform-origin: center; }
+.independent-preview-subtitles { position: absolute; inset: 0; pointer-events: none; color: white; text-shadow: 0 1px 3px black; overflow-wrap: anywhere; }
+.multitrack-properties { display: grid; gap: 18px; padding-top: 16px; border-top: 1px solid var(--app-color-border); }
+.multitrack-properties h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.multitrack-property > div { display: grid; grid-template-columns: minmax(0, 1fr) 84px 24px; align-items: center; gap: 12px; }
+.multitrack-property input[type="range"] { padding: 0; accent-color: var(--app-color-accent); }
+.multitrack-toggle { display: flex!important; flex-direction: row; justify-content: space-between; align-items: center; }
+.multitrack-toggle input { accent-color: var(--app-color-accent); }
+.multitrack-color { display: grid!important; grid-template-columns: minmax(0, 1fr) 40px 100px; align-items: center; }
+.multitrack-color input[type="color"] { height: 32px; padding: 2px; }
+.multitrack-color code { font-size: 12px; }
+.multitrack-stage-object { position: absolute; z-index: 3; user-select: none; touch-action: none; }
+.stage-video-object { pointer-events: none; }
+.stage-video-object.is-selected { outline: 1px solid #fff; }
+.stage-object-drag { position: absolute; inset: 0; pointer-events: auto; cursor: move; }
+.stage-caption-object { max-width: 90%; width: max-content; white-space: pre-wrap; overflow-wrap: anywhere; cursor: move; }
+.stage-caption-object.is-selected { outline: 1px dashed #fff; outline-offset: 4px; }
+.stage-caption-object textarea { width: 100%; min-width: 180px; font: inherit; color: inherit; background: #161616; border: 1px solid #fff; -webkit-text-stroke: 0; cursor: text; }
+.stage-handle { position: absolute; width: 10px; height: 10px; padding: 0; border: 1px solid #999; background: #fff; border-radius: 50%; pointer-events: auto; }
+.stage-handle-nw { left: -5px; top: -5px; cursor: nwse-resize; }
+.stage-handle-ne { right: -5px; top: -5px; cursor: nesw-resize; }
+.stage-handle-sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.stage-handle-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.stage-handle-n { left: calc(50% - 5px); top: -5px; cursor: ns-resize; }
+.stage-handle-s { left: calc(50% - 5px); bottom: -5px; cursor: ns-resize; }
+.stage-handle-e { right: -5px; top: calc(50% - 5px); cursor: ew-resize; }
+.stage-handle-w { left: -5px; top: calc(50% - 5px); cursor: ew-resize; }
+.stage-rotate-handle { position: absolute; left: 50%; bottom: -34px; transform: translateX(-50%); pointer-events: auto; background: #fff; color: #222; border: 0; padding: 4px; cursor: grab; }
+.stage-center-mark { position: absolute; left: 50%; top: -10px; height: calc(100% + 20px); width: 1px; background: #a98be6; pointer-events: none; }
+.multitrack-export-panel { display: grid; gap: 18px; min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; padding: 20px 24px; overflow-x: hidden; }
+.multitrack-export-panel * { box-sizing: border-box; min-width: 0; }
+.multitrack-export-panel dl { display: grid; grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; margin: 0; padding: 12px 0; border-block: 1px solid var(--app-color-border); font-size: 13px; }
+.multitrack-export-panel dd { margin: 0; }
+.multitrack-export-panel label { display: grid; gap: 8px; min-width: 0; }
+.multitrack-export-panel label.multitrack-export-field { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.multitrack-export-panel select { width: 100%; min-width: 0; max-width: 280px; height: 36px; padding: 6px 10px; border: 1px solid var(--app-color-border); border-radius: 6px; background: var(--app-color-bg-surface); color: var(--app-color-text); font: inherit; }
+.multitrack-export-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 34px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.multitrack-export-panel progress { width: 100%; accent-color: var(--app-color-accent); }
+.multitrack-export-panel > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--app-color-border); }
+.multitrack-export-panel > div > span, .multitrack-export-panel > div > p { flex-basis: 100%; overflow-wrap: anywhere; }
+.multitrack-export-panel h3 { margin: 8px 0 0; font-size: 14px; }
+.multitrack-export-panel details { min-width: 0; }
+.multitrack-export-panel details button { display: flex; width: 100%; margin-top: 8px; }
+.multitrack-export-panel > .multitrack-export-actions { padding: 0 0 20px; gap: 10px; }
+.multitrack-export-actions button { width: auto; padding: 8px 16px; }
+.multitrack-export-history-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.multitrack-export-history-heading h3 { margin: 0; }
+.multitrack-export-history-heading button { width: 34px; height: 34px; padding: 0; }
+.multitrack-export-empty { margin: 0; padding: 16px 0; color: var(--app-color-text-muted); font-size: 12px; }
+.assembly-workspace { font-family: var(--app-font-family); font-size: 12px; line-height: 1.5; }
+.assembly-workspace :is(.assembly-side-panel,.assembly-library,.assembly-workspace-header,.assembly-editor-toolbar) :is(button,input,select,textarea,label,p,dt,dd,span) { font-family: var(--app-font-family); font-size: 12px; }
+.assembly-workspace .assembly-side-panel :is(h3,strong) { font-family: var(--app-font-family); font-size: 13px; font-weight: 600; }
+.assembly-workspace .assembly-side-panel small { font-family: var(--app-font-family); font-size: 11px; }
+.assembly-workspace .multitrack-export-panel { gap: 16px; padding: 20px; }
+.assembly-workspace .multitrack-export-panel > h3 { display: none; }
+.assembly-workspace .multitrack-export-panel select { flex: 0 1 240px; width: 240px; max-width: 60%; height: 34px; }
+.assembly-workspace .multitrack-export-panel dl { grid-template-columns: 1fr auto; gap: 10px; border: 0; padding: 4px 0 16px; border-bottom: 1px solid var(--app-color-border); }
+.assembly-workspace .multitrack-export-panel dt { color: var(--app-color-text-muted); }
+.assembly-workspace .multitrack-export-actions { justify-content: flex-end; }
+.assembly-workspace .multitrack-export-actions button { min-height: 34px; border: 1px solid var(--app-color-border); border-radius: 4px; background: var(--app-color-bg-surface); color: var(--app-color-text); }
+.assembly-workspace .multitrack-export-actions button:last-child { background: var(--app-color-accent); color: #fff; border-color: var(--app-color-accent); }
+.assembly-workspace .multitrack-export-actions button:disabled { opacity: .4; }
+.multitrack-export-panel :is(p,li,small) { overflow-wrap: anywhere; }
+.assembly-workspace .assembly-media-panel :is(button,summary,p,b,small,label) { color: var(--app-color-text); }
+.multitrack-added-badge { display: inline-flex; margin-left: 6px; padding: 1px 4px; border-radius: 3px; background: var(--app-color-bg-layout); font-size: 10px; font-style: normal; }
+.multitrack-library-icons { display: grid; justify-items: center; gap: 10px; padding: 14px 10px; }
+.multitrack-subtitle-library { padding: 0 14px 14px; display: grid; gap: 4px; }
+.multitrack-subtitle-library button { display: grid; grid-template-columns: 16px minmax(0,1fr) auto; align-items: center; gap: 8px; padding: 12px 4px; border: 0; border-bottom: 1px solid var(--app-color-border); background: transparent; text-align: left; }
+.multitrack-subtitle-library button span { overflow-wrap: anywhere; }
+.multitrack-subtitle-library button small { font-size: 10px; white-space: nowrap; }
+.multitrack-subtitle-library button:hover { background: var(--app-color-bg-layout); }
+.multitrack-library-icons button { display: grid; place-items: center; width: 40px; height: 40px; border: 0; border-radius: 6px; background: transparent; }
+.multitrack-library-icons button[aria-pressed="true"] { background: var(--app-color-bg-layout); color: var(--app-color-accent); }
+.independent-timeline .assembly-editor-labels .multitrack-track-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 12px; font-size: 12px; color: var(--app-color-text); }
+.multitrack-track-heading small { font-size: 11px; font-weight: 400; }
+.independent-timeline .timeline-editor-time-unit-scale { overflow: visible; min-width: 38px; transform: translate(100%, -100%); }
+.independent-timeline .multitrack-time-tick { display: block; min-width: 38px; font-variant-numeric: tabular-nums; font-size: 11px; color: var(--app-color-text); white-space: nowrap; }
+@media (max-width: 600px) {
+  .multitrack-export-panel { padding: 16px; }
+  .multitrack-export-panel label.multitrack-export-field { grid-template-columns: 72px minmax(0,1fr); gap: 8px; }
+  .multitrack-export-panel dl { grid-template-columns: 72px minmax(0,1fr); }
+}

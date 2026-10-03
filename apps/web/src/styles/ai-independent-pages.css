@@ -1,0 +1,30 @@
+/* Independent settings directories; intentionally excludes style/channel pages. */
+.settings-dialog:has(.skill-editor) :is(.ant-modal-container,.ant-modal-content){display:flex;flex-direction:column;overflow:hidden}
+.settings-dialog:has(.skill-editor) .ant-modal-header{flex-shrink:0}
+.settings-dialog:has(.skill-editor) .settings-dialog__form{min-height:0;max-height:none;overflow:hidden}
+.settings-dialog:has(.skill-editor) .settings-dialog__body{min-height:0}
+.skill-editor .control-config-header{padding:0 0 14px;margin:0;display:flex;align-items:center;gap:12px}
+.skill-editor .control-config-header>div{flex:1}
+.skill-editor .control-config-header h2,.skill-editor .control-config-header p,.skill-editor .control-config-icon{display:none}
+.skill-editor .control-config-body{display:grid;grid-template-columns:1fr;gap:16px;padding:0}
+.skill-editor .control-config-section{padding:16px;min-width:0}
+.skill-editor .control-field-grid,.skill-editor .control-textarea-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.skill-editor .control-field small{font-size:11px}
+.skill-editor .control-field input,.skill-editor .control-field select,.skill-editor .control-field textarea{font-size:13px;min-width:0;width:100%;box-sizing:border-box}
+.skill-editor .control-instruction-field textarea{min-height:240px;line-height:1.75;resize:vertical}
+.skill-editor .control-json-field textarea{min-height:120px;line-height:1.6}
+.settings-dialog:has(.skill-editor) .settings-dialog__footer .ui-button--danger{margin-right:auto}
+@media(max-width:650px){.skill-editor .control-field-grid,.skill-editor .control-textarea-grid{grid-template-columns:1fr}}
+.agent-settings-page .agent-directory,.agent-settings-page .business-executors,.model-routing-page .control-directory,.skills-management-page .control-directory{margin-top:22px;padding:22px;border:1px solid #e4e0e7;border-radius:11px;background:#fff;box-shadow:0 8px 28px rgba(44,34,52,.025)}
+.agent-settings-page .agent-directory-grid,.agent-settings-page .business-executor-grid,.model-routing-page .control-directory-grid,.skills-management-page .control-directory-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.agent-settings-page .agent-directory-card,.agent-settings-page .business-executor-grid>button,.model-routing-page .control-directory-card{display:flex;align-items:flex-start;min-height:140px;padding:18px;gap:12px;border:1px solid #e3dce9;border-radius:9px;background:#fff;position:relative;text-align:left}
+.agent-settings-page .agent-directory-card:last-child,.agent-settings-page .business-executor-grid>button:last-child{border-bottom:1px solid #e3dce9}
+.agent-settings-page .agent-directory-card::after,.agent-settings-page .business-executor-grid>button::after{position:absolute;right:18px;bottom:16px;content:'配置 ›'}
+.agent-settings-page .agent-directory-card>.agent-status,.agent-settings-page .business-executor-grid>button>em,.model-routing-page .control-directory-card>.control-status{position:static;margin:0;flex-shrink:0;font-size:11px}
+.agent-settings-page .agent-directory-copy,.agent-settings-page .business-executor-grid>button>div,.model-routing-page .control-directory-copy{padding-bottom:24px;min-width:0;flex:1}
+.agent-settings-page .agent-directory-copy>span,.agent-settings-page .business-executor-grid p{font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+.skills-management-page .control-directory-card{min-height:155px;padding:18px;border:1px solid #e3dce9;border-radius:9px}
+.skills-management-page .control-directory-card .control-directory-copy>span{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.skills-management-page .control-directory-card .control-directory-copy>em{overflow-wrap:anywhere}
+@media(max-width:1050px){.agent-settings-page .agent-directory-grid,.agent-settings-page .business-executor-grid,.model-routing-page .control-directory-grid,.skills-management-page .control-directory-grid{grid-template-columns:1fr}}
+@media(max-width:650px){.agent-settings-page .agent-directory,.agent-settings-page .business-executors,.model-routing-page .control-directory,.skills-management-page .control-directory{padding:16px}}

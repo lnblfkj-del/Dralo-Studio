@@ -1,0 +1,6 @@
+.canvas-director-node{width:100%;padding:18px;background:#fff;border:1px solid #ded7e6;border-radius:10px;box-sizing:border-box;color:#302936}
+.canvas-director-node.selected{border-color:#806098;box-shadow:0 0 0 1px #806098}
+.canvas-director-node strong{font-size:17px}
+.canvas-director-node p{font-size:11px;color:#807487;line-height:1.6}
+.canvas-director-node button{border:1px solid #dcd5e3;border-radius:6px;background:white;padding:8px 12px;color:#392e42;font:inherit;font-size:12px;cursor:pointer}
+.canvas-director-node button:disabled{opacity:.45;cursor:default}

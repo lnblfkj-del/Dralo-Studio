@@ -1,0 +1,48 @@
+.character-batch-review-dialog .ui-dialog__body { padding: 0; overflow: hidden; }
+.agent-character-review { display: flex; height: min(640px, calc(100dvh - 170px)); min-height: 0; flex-direction: column; color: var(--app-color-text); font-family: var(--app-font-family); font-size: 14px; }
+.agent-character-review__summary,
+.agent-character-review > footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: none; padding: 13px 24px; border-bottom: 1px solid var(--app-color-border); background: var(--app-color-bg-surface); }
+.agent-character-review__summary span:first-child { font-weight: 600; }
+.agent-character-review__summary span:last-child { color: var(--app-color-text-muted); font-size: 12px; }
+.agent-character-review__main { display: grid; min-height: 0; flex: 1; grid-template-columns: 240px minmax(0, 1fr); }
+.agent-character-review__nav { min-width: 0; overflow: auto; border-right: 1px solid var(--app-color-border); background: var(--app-color-bg-input); }
+.agent-character-review__nav-row { display: flex; align-items: center; min-width: 0; border-bottom: 1px solid var(--app-color-border); border-left: 3px solid transparent; }
+.agent-character-review__nav-row[data-active="true"] { border-left-color: var(--app-color-accent); background: var(--app-color-accent-soft); }
+.agent-character-review__nav-row > input { width: 16px; height: 16px; flex: none; margin: 0 0 0 15px; accent-color: var(--app-color-accent); cursor: pointer; }
+.agent-character-review__nav-row > input:disabled { cursor: not-allowed; }
+.agent-character-review__nav-row > button { display: flex; align-items: flex-start; gap: 10px; width: 100%; min-width: 0; padding: 12px 10px; border: 0; background: transparent; color: var(--app-color-text); font: inherit; text-align: left; cursor: pointer; }
+.agent-character-review__nav-row > button:hover { color: var(--app-color-accent); }
+.agent-character-review__nav-row > button:focus-visible { outline: 2px solid var(--app-color-accent); outline-offset: -3px; }
+.agent-character-review__nav-row > button > span:last-child { min-width: 0; }
+.agent-character-review__nav-row strong { display: block; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.agent-character-review__nav-row small { display: block; margin-top: 2px; color: var(--app-color-text-muted); font-size: 12px; line-height: 1.5; }
+.agent-character-review__index { padding-top: 2px; color: var(--app-color-accent); font-size: 11px; }
+.agent-character-review__detail { min-width: 0; overflow: auto; padding: 22px 30px; overscroll-behavior: contain; }
+.agent-character-review__detail > header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; padding-bottom: 17px; border-bottom: 1px solid var(--app-color-border); }
+.agent-character-review__detail > header span { color: var(--app-color-accent); font-size: 11px; font-weight: 700; }
+.agent-character-review__detail h3 { margin: 3px 0 0; font-size: 21px; line-height: 1.4; }
+.agent-character-review__detail > header small { color: var(--app-color-text-muted); white-space: nowrap; }
+.agent-character-review__detail dl { margin: 0; }
+.agent-character-review__detail dl > div { display: grid; grid-template-columns: 124px minmax(0, 1fr); gap: 18px; padding: 17px 0; border-bottom: 1px solid var(--app-color-border); }
+.agent-character-review__detail dt { color: var(--app-color-text-muted); font-size: 13px; }
+.agent-character-review__detail dd { min-width: 0; margin: 0; }
+.agent-character-review__detail dd > small { display: block; margin-bottom: 8px; color: var(--app-color-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-character-review__detail dd > p { margin: 0; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-character-review__missing,
+.agent-character-review__empty { margin: 20px 0 0; color: var(--app-color-text-muted); line-height: 1.6; }
+.agent-character-review > footer { border-top: 1px solid var(--app-color-border); border-bottom: 0; }
+.agent-character-review > footer > small { min-width: 0; color: var(--app-color-text-muted); overflow-wrap: anywhere; }
+.agent-character-review > footer > div { display: flex; align-items: center; gap: 9px; }
+.agent-character-review > footer > div > span { margin-right: 6px; color: var(--app-color-text-muted); font-size: 12px; white-space: nowrap; }
+@media (max-width: 700px) {
+  .agent-character-review { height: min(700px, calc(100dvh - 130px)); }
+  .agent-character-review__summary,
+  .agent-character-review > footer { padding: 12px 16px; }
+  .agent-character-review__main { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .agent-character-review__nav { display: flex; border-right: 0; border-bottom: 1px solid var(--app-color-border); overflow-x: auto; overflow-y: hidden; }
+  .agent-character-review__nav-row { flex: none; min-width: 170px; border-bottom: 0; }
+  .agent-character-review__detail { padding: 18px; }
+  .agent-character-review__detail dl > div { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .agent-character-review > footer { align-items: stretch; flex-direction: column; }
+  .agent-character-review > footer > div { justify-content: flex-end; flex-wrap: wrap; }
+}

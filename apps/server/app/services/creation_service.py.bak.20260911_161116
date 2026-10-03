@@ -1,0 +1,2751 @@
+"""M3 创作会话与 Story Bible 业务逻辑。"""
+
+import json
+import re
+from typing import Any
+
+from pydantic import ValidationError
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.services.team_access import owner_scope, same_team
+
+from app.core.errors import ConflictError, NotFoundError, ProviderError
+from app.models import (
+    ARTIFACT_STATUS_CONFIRMED,
+    ARTIFACT_STATUS_DRAFT,
+    ARTIFACT_STATUS_SUPERSEDED,
+    ARTIFACT_TYPE_EPISODE_OUTLINE,
+    ARTIFACT_TYPE_EPISODE_SCRIPT,
+    ARTIFACT_TYPE_SCENE_SHOT_DRAFT,
+    ARTIFACT_TYPE_STORY_BIBLE,
+    ASSET_TYPE_CHARACTER,
+    ASSET_TYPE_PROP,
+    ASSET_TYPE_SCENE,
+    JOB_STATUS_PROCESSING,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RETRYING,
+    JOB_STATUS_RUNNING,
+    JOB_TARGET_OUTLINE_AGENT,
+    SESSION_STATUS_BREAKDOWN_COMPLETED,
+    SESSION_STATUS_BREAKDOWN_GENERATING,
+    SESSION_STATUS_BREAKDOWN_REVIEWING,
+    SESSION_STATUS_COMPLETED,
+    SESSION_STATUS_CONFIRMED,
+    SESSION_STATUS_DRAFT,
+    SESSION_STATUS_GENERATING,
+    SESSION_STATUS_OUTLINE_CONFIRMED,
+    SESSION_STATUS_OUTLINE_GENERATING,
+    SESSION_STATUS_OUTLINE_REVIEWING,
+    SESSION_STATUS_REVIEWING,
+    SESSION_STATUS_SCRIPT_GENERATING,
+    SESSION_STATUS_SCRIPT_REVIEWING,
+    Asset,
+    AssetUsage,
+    CreationArtifact,
+    CreationMessage,
+    CreationSession,
+    Episode,
+    EpisodeProduction,
+    Job,
+    Project,
+    ProviderModel,
+    User,
+)
+from app.schemas.creation import (
+    EpisodeOutlineContent,
+    EpisodeScriptContent,
+    EpisodeScriptOptimizationResult,
+    OutlineAgentResult,
+    SceneShotDraftContent,
+    ScriptAssetBreakdownResult,
+    ScriptStudyBatchResult,
+    StoryBibleContent,
+    UploadedScriptOptimizationResult,
+)
+from app.services import (
+    asset_service,
+    job_service,
+    project_service,
+    provider_service,
+    script_finalization_service,
+    script_version_service,
+)
+from app.services.project_source_service import synchronize_source_fields
+
+JOB_TARGET_SCRIPT_IMPORT = "script_import_optimization"
+JOB_TARGET_SCRIPT_STUDY_BATCH = "script_study_batch"
+JOB_TARGET_SCRIPT_STUDY_BATCH_GROUP = "script_study_batch_group"
+JOB_TARGET_SCRIPT_ASSET_BREAKDOWN = "script_asset_breakdown"
+JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH = "script_asset_breakdown_batch"
+JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_GROUP = "script_asset_breakdown_group"
+JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION = "episode_script_optimization"
+JOB_TARGET_EPISODE_SCRIPT_GENERATION = "episode_script_generation"
+JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL = "episode_scene_shot_proposal"
+SCRIPT_STUDY_BATCH_SIZE = 5
+
+CREATION_ARTIFACT_TYPES = {
+    ARTIFACT_TYPE_STORY_BIBLE,
+    ARTIFACT_TYPE_EPISODE_OUTLINE,
+    ARTIFACT_TYPE_EPISODE_SCRIPT,
+    ARTIFACT_TYPE_SCENE_SHOT_DRAFT,
+    JOB_TARGET_OUTLINE_AGENT,
+    JOB_TARGET_SCRIPT_IMPORT,
+    JOB_TARGET_SCRIPT_STUDY_BATCH,
+    JOB_TARGET_SCRIPT_STUDY_BATCH_GROUP,
+    JOB_TARGET_SCRIPT_ASSET_BREAKDOWN,
+    JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH,
+    JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_GROUP,
+    JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION,
+    JOB_TARGET_EPISODE_SCRIPT_GENERATION,
+    JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL,
+}
+
+REFERENCE_CHUNK_CHARS = 6000
+
+
+async def _resolve_agent_execution(
+    session: AsyncSession,
+    agent_key: str,
+    surface: str,
+) -> tuple[ProviderModel, dict[str, Any], str]:
+    """Resolve and snapshot the Agent configuration used by a creation task.
+
+    Standard creation flows remain compatible with installations that have no
+    fixed Skill yet. Once a Skill is explicitly configured it is validated and
+    becomes part of both the prompt and the immutable job audit snapshot.
+    """
+    model, route_source = await provider_service.resolve_agent_model(
+        session, agent_key
+    )
+    settings = await provider_service.get_ai_settings(session)
+    if agent_key == "outline":
+        instruction = settings.outline_agent_instruction
+    elif agent_key == "script":
+        instruction = settings.script_agent_instruction
+    else:
+        raise ConflictError("当前创作流程没有对应的专业 Agent")
+    from app.services.skill_runtime import creation_contract, creation_skills
+
+    configured_skills = await provider_service.get_agent_skills(session, agent_key)
+    bound_skills = creation_skills(configured_skills, agent_key, surface)
+    skill = next((item for item in bound_skills if item.output_modality == "text"), None)
+    execution = {
+        "agent": agent_key,
+        "surface": surface,
+        "route_source": route_source,
+        "provider_model_id": model.id,
+        "model_id": model.model_id,
+        "instruction": instruction,
+        "skill_selection_surface": surface,
+        "excluded_skill_keys": [item.key for item in configured_skills if item not in bound_skills],
+        "skill_id": skill.id if skill is not None else None,
+        "skill_key": skill.key if skill is not None else None,
+        "skill_name": skill.name if skill is not None else None,
+        "skill_version": skill.version if skill is not None else None,
+        "skills": [
+            {"id": item.id, "key": item.key, "name": item.name, "version": item.version,
+             "capability_type": item.capability_type, "allowed_tools": list(item.allowed_tools),
+             "write_policy": item.write_policy, "instruction": item.instruction}
+            for item in bound_skills
+        ],
+    }
+    prompt_parts = [f"专业 Agent 运行边界：{instruction}"]
+    for item in bound_skills:
+        prompt_parts.append(f"已绑定 Skill {item.name}（{item.key}，V{item.version}）：{item.instruction}")
+    prompt_parts.append(creation_contract(surface))
+    return model, execution, "\n".join(prompt_parts)
+
+
+def _attach_agent_execution(job: Job, execution: dict[str, Any]) -> None:
+    job.payload = {**job.payload, "agent_execution": execution}
+
+
+async def create_session(
+    session: AsyncSession,
+    owner_id: int,
+    *,
+    title: str,
+    brief: str,
+    settings: dict[str, Any],
+    project_id: int | None = None,
+) -> CreationSession:
+    item = CreationSession(
+        owner_id=owner_id,
+        project_id=project_id,
+        title=title.strip(),
+        brief=brief.strip(),
+        settings=settings,
+        status=SESSION_STATUS_DRAFT,
+    )
+    session.add(item)
+    await session.flush()
+    session.add(CreationMessage(
+        session_id=item.id, role="user", message_type="brief", content=item.brief, sequence=1
+    ))
+    await session.flush()
+    return item
+
+
+async def get_session(
+    session: AsyncSession, session_id: int, owner_id: int
+) -> CreationSession:
+    item = await session.scalar(select(CreationSession).where(
+        CreationSession.id == session_id, owner_scope(CreationSession.owner_id, owner_id)
+    ))
+    if item is None:
+        raise NotFoundError("创作会话不存在")
+    return item
+
+
+async def get_or_create_project_session(
+    session: AsyncSession, project: Project
+) -> CreationSession:
+    item = await session.scalar(
+        select(CreationSession)
+        .where(
+            CreationSession.project_id == project.id,
+            CreationSession.owner_id == project.owner_id,
+        )
+        .order_by(CreationSession.id.desc())
+        .limit(1)
+    )
+    if item is not None:
+        synchronized = synchronize_source_fields(item.settings, project.creation_settings)
+        if synchronized != item.settings:
+            item.settings = synchronized
+            await session.flush()
+        return item
+    settings = dict(project.creation_settings or {})
+    brief = str(settings.get("brief") or project.description or "从空白项目开始创作。")
+    return await create_session(
+        session,
+        project.owner_id,
+        title=project.name,
+        brief=brief,
+        settings=settings,
+        project_id=project.id,
+    )
+
+
+async def to_session_out(session: AsyncSession, item: CreationSession) -> dict[str, Any]:
+    messages = list((await session.execute(
+        select(CreationMessage).where(CreationMessage.session_id == item.id)
+        .order_by(CreationMessage.sequence)
+    )).scalars())
+    artifacts = list((await session.execute(
+        select(CreationArtifact).where(CreationArtifact.session_id == item.id)
+        .order_by(CreationArtifact.version.desc())
+    )).scalars())
+    active_job_id = await session.scalar(
+        select(Job.id).where(
+            Job.owner_id == item.owner_id,
+            Job.target_type.in_(CREATION_ARTIFACT_TYPES),
+            Job.target_id == item.id,
+            Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+        ).order_by(Job.id.desc()).limit(1)
+    )
+    latest_job = await session.scalar(
+        select(Job).where(
+            Job.owner_id == item.owner_id,
+            Job.target_type.in_(CREATION_ARTIFACT_TYPES),
+            Job.target_id == item.id,
+        ).order_by(Job.id.desc()).limit(1)
+    )
+    return {
+        "id": item.id,
+        "owner_id": item.owner_id,
+        "project_id": item.project_id,
+        "title": item.title,
+        "brief": item.brief,
+        "settings": item.settings,
+        "status": item.status,
+        "active_job_id": active_job_id,
+        "latest_job_id": latest_job.id if latest_job is not None else None,
+        "latest_job_target": latest_job.target_type if latest_job is not None else None,
+        "latest_job_status": latest_job.status if latest_job is not None else None,
+        "latest_job_error": latest_job.error_message if latest_job is not None else None,
+        "messages": messages,
+        "artifacts": artifacts,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+async def create_story_bible_job(
+    session: AsyncSession, item: CreationSession
+) -> Job:
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == item.owner_id,
+        Job.target_type == ARTIFACT_TYPE_STORY_BIBLE,
+        Job.target_id == item.id,
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+    ))
+    if active is not None:
+        raise ConflictError("故事设定正在生成，请等待当前任务完成")
+    if item.status not in {SESSION_STATUS_DRAFT, SESSION_STATUS_REVIEWING}:
+        raise ConflictError("故事设定已确认，不能重新生成")
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "outline", "story_bible"
+    )
+    prompt = f"{instruction_prefix}\n\n{build_story_bible_prompt(item)}"
+    job = await job_service.create_text_job(
+        session,
+        item.owner_id,
+        provider_model_id=model.id,
+        prompt=prompt,
+        project_id=None,
+        parameters={},
+    )
+    job.target_type = ARTIFACT_TYPE_STORY_BIBLE
+    job.target_id = item.id
+    _attach_agent_execution(job, execution)
+    item.status = SESSION_STATUS_GENERATING
+    await session.flush()
+    return job
+
+
+def build_story_bible_prompt(item: CreationSession) -> str:
+    settings = dict(item.settings)
+    reference_text = str(settings.pop("reference_text", "") or item.brief)
+    chunks = chunk_reference_text(reference_text)
+    source_context = chunks[0]["content"] if chunks else item.brief
+    return f"""你是短剧策划。根据用户灵感生成故事设定，只输出一个 JSON 对象，不要 Markdown。
+JSON 字段必须为：title, logline, genre, tone, audience, world, themes, characters, event_timeline。
+title、logline、genre、tone、audience、world 必须是字符串；themes 必须是字符串数组。
+characters 是数组，每项字段必须为：name, role, goal, conflict, arc。
+event_timeline 是关键事件数组，每项字段为：title, summary, episode_hint；episode_hint 只能是 1 到 100 的整数，事件说明只写在 summary。
+标题：{item.title}
+用户灵感：{item.brief}
+当前参考片段（1/{max(1, len(chunks))}）：{source_context}
+创作设置：{json.dumps(settings, ensure_ascii=False)}"""
+
+
+def chunk_reference_text(text: str, max_chars: int = REFERENCE_CHUNK_CHARS) -> list[dict[str, Any]]:
+    normalized = text.replace("\r\n", "\n").strip()
+    if not normalized:
+        return []
+    sections = re.split(
+        r"(?=^(?:#{1,3}\s+.+|第.{1,20}[章节集幕](?:\s|$).*))",
+        normalized,
+        flags=re.MULTILINE,
+    )
+    chunks: list[dict[str, Any]] = []
+    for section in (part.strip() for part in sections if part.strip()):
+        for offset in range(0, len(section), max_chars):
+            content = section[offset:offset + max_chars]
+            first_line = content.splitlines()[0].lstrip("# ").strip()
+            chunks.append({
+                "id": len(chunks),
+                "title": first_line[:80] or f"片段 {len(chunks) + 1}",
+                "char_count": len(content),
+                "preview": content[:160],
+                "content": content,
+            })
+    return chunks
+
+
+def list_reference_chunks(item: CreationSession) -> list[dict[str, Any]]:
+    source = str(item.settings.get("reference_text") or item.brief)
+    return [
+        {key: value for key, value in chunk.items() if key != "content"}
+        for chunk in chunk_reference_text(source)
+    ]
+
+
+def parse_story_bible(text: str) -> dict[str, Any]:
+    return parse_structured_result(text, StoryBibleContent, "故事设定")
+
+
+def parse_structured_result(text: str, schema, label: str) -> dict[str, Any]:
+    value = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", value, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        value = fenced.group(1)
+    try:
+        decoded = json.loads(value)
+    except ValueError:
+        try:
+            start = value.index("{")
+            decoded, _end = json.JSONDecoder().raw_decode(value[start:])
+        except ValueError as exc:
+            raise ProviderError(f"模型未返回有效的{label} JSON，请重新生成") from exc
+    try:
+        return schema.model_validate(decoded).model_dump()
+    except ValidationError as exc:
+        invalid_fields = []
+        for error in exc.errors(include_url=False, include_input=False):
+            field = ".".join(str(part) for part in error.get("loc", ())) or "根对象"
+            if field not in invalid_fields:
+                invalid_fields.append(field)
+        detail = "、".join(invalid_fields[:6])
+        raise ProviderError(f"模型返回的{label}结构不完整（字段：{detail}），请重新生成") from exc
+
+
+async def finalize_creation_job(
+    session: AsyncSession, job: Job, result: dict[str, Any]
+) -> None:
+    if job.target_type not in CREATION_ARTIFACT_TYPES or job.target_id is None:
+        return
+    if job.target_type == JOB_TARGET_EPISODE_SCRIPT_GENERATION:
+        episode = await session.get(Episode, job.target_id)
+        if episode is None or episode.owner_id != job.owner_id:
+            raise NotFoundError("分集不存在")
+        generated = parse_structured_result(
+            str(result.get("text", "")), EpisodeScriptContent, "单集剧本生成结果"
+        )
+        if generated["episode_number"] != episode.number:
+            raise ProviderError(f"模型返回第 {generated['episode_number']} 集，预期为第 {episode.number} 集")
+        parameters = dict(job.payload.get("parameters") or {})
+        expected_revision = int(parameters.get("source_revision", episode.script_revision))
+        if episode.script_revision != expected_revision:
+            raise ConflictError("本集剧本已更新，生成结果未覆盖现有版本")
+        updated = await script_version_service.save_script(
+            session, episode, generated["script"], expected=expected_revision,
+            actor_id=job.owner_id, note="AI 生成分集正文", source="ai",
+        )
+        updated.title = generated["title"]
+        updated.synopsis = generated["synopsis"]
+        creation_session_id = int(parameters.get("session_id") or 0)
+        if creation_session_id:
+            workflow_session = await session.get(CreationSession, creation_session_id)
+            if workflow_session is not None and workflow_session.owner_id == job.owner_id:
+                workflow_session.status = SESSION_STATUS_SCRIPT_REVIEWING
+                await append_message(
+                    session, workflow_session.id, "assistant", "episode_script_generated",
+                    f"第 {episode.number} 集正文已生成并保存为 R{updated.script_revision}。",
+                    job_id=job.id,
+                )
+        result["applied_revision"] = updated.script_revision
+        return
+    if job.target_type == JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION:
+        episode = await session.get(Episode, job.target_id)
+        if episode is None or episode.owner_id != job.owner_id:
+            raise NotFoundError("分集不存在")
+        proposal = parse_structured_result(
+            str(result.get("text", "")),
+            EpisodeScriptOptimizationResult,
+            "单集剧本优化结果",
+        )
+        parameters = dict(job.payload.get("parameters") or {})
+        proposal_data = {
+            **proposal,
+            "episode_id": episode.id,
+            "source_revision": int(parameters.get("source_revision", episode.script_revision)),
+            "source_script": str(parameters.get("source_script", episode.script or "")),
+        }
+        result["proposal"] = proposal_data
+        result["action_preview"] = {
+            "kind": "episode_script",
+            "status": "pending",
+            "title": f"第 {episode.number} 集剧本优化",
+            "summary": proposal["reply"],
+            "target_type": ARTIFACT_TYPE_EPISODE_SCRIPT,
+            "source": {
+                "id": episode.id,
+                "revision": proposal_data["source_revision"],
+                "title": episode.title or "",
+                "synopsis": episode.synopsis or "",
+                "script": proposal_data["source_script"],
+            },
+            "proposed": {
+                "title": proposal["title"],
+                "synopsis": proposal["synopsis"],
+                "script": proposal["script"],
+            },
+            "trace": {
+                "job_id": job.id,
+                "provider": job.provider,
+                "model": job.model,
+                "model_id": job.payload.get("provider_model_id"),
+                "agent_workspace": parameters.get("agent_workspace"),
+            },
+        }
+        return
+    if job.target_type == JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL:
+        episode = await session.get(Episode, job.target_id)
+        if episode is None or episode.owner_id != job.owner_id:
+            raise NotFoundError("分集不存在")
+        proposal = parse_structured_result(
+            str(result.get("text", "")),
+            SceneShotDraftContent,
+            "单集场景分镜拆解结果",
+        )
+        if proposal["episode_number"] != episode.number:
+            raise ProviderError(
+                f"模型返回第 {proposal['episode_number']} 集，预期为第 {episode.number} 集"
+            )
+        parameters = dict(job.payload.get("parameters") or {})
+        source_revision = int(parameters.get("source_revision", episode.script_revision))
+        result["proposal"] = proposal
+        result["action_preview"] = {
+            "kind": "episode_scene_shot",
+            "status": "pending",
+            "title": f"第 {episode.number} 集场景分镜拆解",
+            "summary": (
+                f"已生成 {len(proposal['scenes'])} 个场景、"
+                f"{sum(len(scene['shots']) for scene in proposal['scenes'])} 个分镜；确认前不会写入正式结构。"
+            ),
+            "target_type": JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL,
+            "source": {
+                "id": episode.id,
+                "revision": source_revision,
+                "script": str(parameters.get("source_script", episode.script or "")),
+            },
+            "proposed": proposal,
+            "trace": {
+                "job_id": job.id,
+                "provider": job.provider,
+                "model": job.model,
+                "model_id": job.payload.get("provider_model_id"),
+                "agent_workspace": parameters.get("agent_workspace"),
+            },
+        }
+        return
+    item = await session.get(CreationSession, job.target_id)
+    if item is None or item.owner_id != job.owner_id:
+        raise NotFoundError("创作会话不存在")
+    if job.target_type == JOB_TARGET_SCRIPT_STUDY_BATCH:
+        batch = parse_structured_result(
+            str(result.get("text", "")),
+            ScriptStudyBatchResult,
+            "分批剧本研读结果",
+        )
+        parameters = dict(job.payload.get("parameters") or {})
+        batch_index = int(parameters.get("batch_index", 0))
+        total_batches = int(parameters.get("total_batches", 1))
+        expected_numbers = [int(value) for value in parameters.get("episode_numbers", [])]
+        actual_numbers = [entry["number"] for entry in batch["episodes"]]
+        if actual_numbers != expected_numbers:
+            raise ProviderError(
+                f"第 {batch_index + 1} 批返回集号 {actual_numbers}，预期为 {expected_numbers}"
+            )
+        settings = dict(item.settings)
+        study = dict(settings.get("script_study") or {})
+        batches = dict(study.get("batches") or {})
+        batches[str(batch_index)] = batch
+        completed_batches = len(batches)
+        study.update({
+            "status": "failed" if study.get("failed_batch") is not None else "running",
+            "batch_size": SCRIPT_STUDY_BATCH_SIZE,
+            "total_batches": total_batches,
+            "completed_batches": completed_batches,
+            "batches": batches,
+            "parent_job_id": job.parent_job_id,
+        })
+        settings["script_study"] = study
+        item.settings = settings
+        if completed_batches == total_batches:
+            combined = {
+                "episodes": [
+                    episode
+                    for index in range(total_batches)
+                    for episode in batches[str(index)]["episodes"]
+                ]
+            }
+            validated = EpisodeOutlineContent.model_validate(combined).model_dump()
+            await create_artifact(
+                session,
+                item,
+                job,
+                ARTIFACT_TYPE_EPISODE_OUTLINE,
+                validated,
+                "分批研读完成，已生成可编辑的分集规划。",
+            )
+            final_settings = dict(item.settings)
+            final_study = dict(final_settings.get("script_study") or study)
+            final_study.update({"status": "completed", "completed_batches": total_batches})
+            final_study.pop("failed_batch", None)
+            final_settings["script_study"] = final_study
+            item.settings = final_settings
+            item.status = SESSION_STATUS_OUTLINE_REVIEWING
+            await append_message(
+                session,
+                item.id,
+                "assistant",
+                "agent_reply",
+                f"AI 已分 {total_batches} 批完成 {len(validated['episodes'])} 集研读。",
+                job_id=job.id,
+            )
+        await session.flush()
+        return
+    if job.target_type in {JOB_TARGET_SCRIPT_ASSET_BREAKDOWN, JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH}:
+        breakdown = parse_structured_result(
+            str(result.get("text", "")),
+            ScriptAssetBreakdownResult,
+            "剧本资产拆解结果",
+        )
+        source_revisions: dict[str, Any] = {}
+        if job.target_type == JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH:
+            parameters = dict(job.payload.get("parameters") or {})
+            batch_index = int(parameters.get("batch_index", 0))
+            total_batches = int(parameters.get("total_batches", 1))
+            expected_numbers = {int(value) for value in parameters.get("episode_numbers", [])}
+            returned_numbers = {
+                int(number)
+                for group in ("characters", "scenes", "props")
+                for entry in breakdown[group]
+                for number in entry.get("episode_numbers", [])
+            }
+            if not returned_numbers.issubset(expected_numbers):
+                raise ProviderError(f"第 {batch_index + 1} 批资产返回了输入范围外的集号")
+            settings = dict(item.settings)
+            progress = dict(settings.get("asset_breakdown") or {})
+            source_revisions = dict(progress.get("source_script_revisions") or {})
+            batches = dict(progress.get("batches") or {})
+            batches[str(batch_index)] = breakdown
+            progress.update({
+                "status": "running", "completed": False, "total_batches": total_batches,
+                "completed_batches": len(batches), "batches": batches,
+                "parent_job_id": job.parent_job_id,
+            })
+            settings["asset_breakdown"] = progress
+            item.settings = settings
+            if len(batches) < total_batches:
+                await session.flush()
+                return
+            if not await script_finalization_service.revisions_are_current(
+                session, item.project_id or 0, source_revisions
+            ):
+                progress.update({
+                    "status": "stale",
+                    "completed": False,
+                    "stale_reason": "正式剧本版本已变化，本次资产拆解结果未写入待确认区",
+                })
+                settings["asset_breakdown"] = progress
+                item.settings = settings
+                await append_message(
+                    session,
+                    item.id,
+                    "assistant",
+                    "agent_error",
+                    "资产拆解期间正式剧本发生变化；结果已停止应用，请基于最新确认版本重新拆解。",
+                    job_id=job.id,
+                )
+                await session.flush()
+                return
+            breakdown = {
+                "reply": "全部批次资产拆解完成",
+                "characters": [entry for index in range(total_batches) for entry in batches[str(index)]["characters"]],
+                "scenes": [entry for index in range(total_batches) for entry in batches[str(index)]["scenes"]],
+                "props": [entry for index in range(total_batches) for entry in batches[str(index)]["props"]],
+            }
+        if item.project_id is None:
+            raise ConflictError("当前创作会话尚未关联项目")
+        existing_assets = await asset_service.list_assets(session, item.project_id)
+        existing_by_key = {
+            (entry["asset_type"], entry["name"].strip().casefold()): entry["id"]
+            for entry in existing_assets
+        }
+        candidates: list[dict[str, Any]] = []
+        groups = (
+            (ASSET_TYPE_CHARACTER, breakdown["characters"]),
+            (ASSET_TYPE_SCENE, breakdown["scenes"]),
+            (ASSET_TYPE_PROP, breakdown["props"]),
+        )
+        for asset_type, entries in groups:
+            for entry in entries:
+                aliases = [
+                    value.strip()
+                    for value in [entry["name"], *entry.get("aliases", [])]
+                    if value.strip()
+                ]
+                normalized = {value.casefold() for value in aliases}
+                matched = next((
+                    candidate for candidate in candidates
+                    if candidate["asset_type"] == asset_type
+                    and normalized.intersection(candidate["normalized_aliases"])
+                ), None)
+                if matched is not None:
+                    matched["aliases"] = list(dict.fromkeys([*matched["aliases"], *aliases]))
+                    matched["normalized_aliases"] = sorted(
+                        set(matched["normalized_aliases"]).union(normalized)
+                    )
+                    matched["episode_numbers"] = sorted(set(
+                        matched["episode_numbers"] + entry.get("episode_numbers", [])
+                    ))
+                    if len(entry["description"]) > len(matched["description"]):
+                        matched["description"] = entry["description"]
+                    matched["attributes"] = {**matched["attributes"], **entry["attributes"]}
+                    continue
+                candidates.append({
+                    "candidate_id": len(candidates) + 1,
+                    "asset_type": asset_type,
+                    "name": entry["name"].strip(),
+                    "aliases": aliases,
+                    "normalized_aliases": sorted(normalized),
+                    "episode_numbers": sorted(set(entry.get("episode_numbers", []))),
+                    "description": entry["description"].strip(),
+                    "prompt_anchor": entry["prompt_anchor"].strip(),
+                    "attributes": entry["attributes"],
+                    "selected": True,
+                    "matched_asset_id": existing_by_key.get(
+                        (asset_type, entry["name"].strip().casefold())
+                    ),
+                })
+        counts = {
+            asset_type: sum(candidate["asset_type"] == asset_type for candidate in candidates)
+            for asset_type in (ASSET_TYPE_CHARACTER, ASSET_TYPE_SCENE, ASSET_TYPE_PROP)
+        }
+        settings = dict(item.settings)
+        settings["asset_breakdown"] = {
+            "status": "awaiting_confirmation",
+            "completed": False,
+            "job_id": job.id,
+            "candidate_counts": counts,
+            "candidates": candidates,
+            "source_script_revisions": source_revisions,
+        }
+        item.settings = settings
+        await append_message(
+            session,
+            item.id,
+            "assistant",
+            "asset_breakdown",
+            f"资产方案已生成，共 {len(candidates)} 项；确认后才会写入资产库。",
+            job_id=job.id,
+            parameters={"candidate_counts": counts},
+        )
+        await session.flush()
+        return
+    if job.target_type == JOB_TARGET_OUTLINE_AGENT:
+        agent_result = parse_structured_result(
+            str(result.get("text", "")), OutlineAgentResult, "Agent 修改结果"
+        )
+        proposed_type = None
+        proposed_content = None
+        if agent_result.get("story_bible") is not None:
+            proposed_type = ARTIFACT_TYPE_STORY_BIBLE
+            proposed_content = agent_result["story_bible"]
+        elif agent_result.get("episode_outline") is not None:
+            proposed_type = ARTIFACT_TYPE_EPISODE_OUTLINE
+            proposed_content = agent_result["episode_outline"]
+        parameters = dict(job.payload.get("parameters") or {})
+        if proposed_type is not None:
+            source = dict((parameters.get("source_artifacts") or {}).get(proposed_type) or {})
+            result["action_preview"] = {
+                "kind": "creation_artifact",
+                "status": "pending",
+                "title": "故事设定调整" if proposed_type == ARTIFACT_TYPE_STORY_BIBLE else "分集大纲调整",
+                "summary": agent_result["reply"],
+                "target_type": proposed_type,
+                "source": {
+                    "id": source.get("id"),
+                    "version": int(source.get("version") or 0),
+                },
+                "proposed": proposed_content,
+                "trace": {
+                    "job_id": job.id,
+                    "provider": job.provider,
+                    "model": job.model,
+                    "model_id": job.payload.get("provider_model_id"),
+                    "skill_id": parameters.get("skill_id"),
+                    "skill_key": parameters.get("skill_key"),
+                    "skill_version": parameters.get("skill_instruction_version"),
+                    "source_reference_version": parameters.get("source_reference_version"),
+                    "agent_workspace": parameters.get("agent_workspace"),
+                },
+            }
+        reply = agent_result["reply"]
+        await append_message(
+            session,
+            item.id,
+            "assistant",
+            "agent_reply",
+            (
+                f"{reply}（已生成待审阅提案，确认前不会修改正式内容）"
+                if proposed_type is not None
+                else f"{reply}（未修改结构化内容）"
+            ),
+            job_id=job.id,
+            parameters={**parameters, "action_preview_job_id": job.id if proposed_type else None},
+        )
+        await session.flush()
+        return
+    if job.target_type == JOB_TARGET_SCRIPT_IMPORT:
+        result_schema = UploadedScriptOptimizationResult
+        result_label = "上传剧本优化结果" if job.target_type == JOB_TARGET_SCRIPT_IMPORT else "Agent 修改结果"
+        agent_result = parse_structured_result(
+            str(result.get("text", "")), result_schema, result_label
+        )
+        changed = False
+        if agent_result.get("story_bible") is not None:
+            await create_artifact(
+                session, item, job, ARTIFACT_TYPE_STORY_BIBLE,
+                agent_result["story_bible"],
+                "已生成可编辑的故事设定。",
+            )
+            item.status = SESSION_STATUS_REVIEWING
+            changed = True
+        if agent_result.get("episode_outline") is not None:
+            expected_count = int(item.settings.get("episode_count") or 1)
+            outline_count = len(agent_result["episode_outline"]["episodes"])
+            if job.target_type == JOB_TARGET_SCRIPT_IMPORT and outline_count != expected_count:
+                raise ProviderError(
+                    f"AI 返回了 {outline_count} 集分集大纲，结构化解析结果为 {expected_count} 集，请重试"
+                )
+            await create_artifact(
+                session, item, job, ARTIFACT_TYPE_EPISODE_OUTLINE,
+                agent_result["episode_outline"],
+                "已生成可编辑的分集规划。",
+            )
+            item.status = SESSION_STATUS_OUTLINE_REVIEWING
+            changed = True
+        reply = agent_result["reply"]
+        await append_message(
+            session,
+            item.id,
+            "assistant",
+            "agent_reply",
+            reply if changed else f"{reply}（未修改结构化内容）",
+            job_id=job.id,
+            parameters=dict(job.payload.get("parameters") or {}),
+        )
+        if job.target_type == JOB_TARGET_SCRIPT_IMPORT:
+            settings = dict(item.settings)
+            settings["script_study"] = {
+                "status": "completed",
+                "detected_episode_count": int(settings.get("episode_count") or 1),
+                "job_id": job.id,
+            }
+            item.settings = settings
+        await session.flush()
+        return
+    if job.target_type == ARTIFACT_TYPE_STORY_BIBLE:
+        content = parse_story_bible(str(result.get("text", "")))
+        next_status = SESSION_STATUS_REVIEWING
+        message = "故事设定已生成，请查看并确认。"
+    elif job.target_type == ARTIFACT_TYPE_EPISODE_OUTLINE:
+        content = parse_structured_result(
+            str(result.get("text", "")), EpisodeOutlineContent, "分集大纲"
+        )
+        expected_count = int(item.settings.get("episode_count", 10))
+        if len(content["episodes"]) != expected_count:
+            raise ProviderError(f"模型返回了 {len(content['episodes'])} 集大纲，预期为 {expected_count} 集，请重新生成")
+        next_status = SESSION_STATUS_OUTLINE_REVIEWING
+        message = "分集大纲已生成，请逐集检查并确认。"
+    elif job.target_type == ARTIFACT_TYPE_EPISODE_SCRIPT:
+        content = parse_structured_result(
+            str(result.get("text", "")), EpisodeScriptContent, "第一集正文"
+        )
+        if content["episode_number"] != 1:
+            raise ProviderError("模型返回的不是第一集正文，请重新生成")
+        next_status = SESSION_STATUS_SCRIPT_REVIEWING
+        message = "第一集正文已生成，请编辑确认后创建项目。"
+    else:
+        content = parse_structured_result(
+            str(result.get("text", "")), SceneShotDraftContent, "场景分镜草稿"
+        )
+        if content["episode_number"] != 1:
+            raise ProviderError("模型返回的不是第一集场景分镜，请重新生成")
+        next_status = SESSION_STATUS_BREAKDOWN_REVIEWING
+        message = "第一集场景和分镜草稿已生成，请检查后确认写入。"
+    await create_artifact(session, item, job, job.target_type, content, message)
+    item.status = next_status
+    await session.flush()
+
+
+async def create_artifact(
+    session: AsyncSession,
+    item: CreationSession,
+    job: Job,
+    artifact_type: str,
+    content: dict[str, Any],
+    message: str,
+) -> CreationArtifact:
+    existing = list((await session.execute(select(CreationArtifact).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == artifact_type,
+        CreationArtifact.status == ARTIFACT_STATUS_DRAFT,
+    ))).scalars())
+    for artifact in existing:
+        artifact.status = ARTIFACT_STATUS_SUPERSEDED
+    version = int(await session.scalar(select(func.coalesce(func.max(CreationArtifact.version), 0)).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == artifact_type,
+    ))) + 1
+    artifact = CreationArtifact(
+        session_id=item.id,
+        artifact_type=artifact_type,
+        version=version,
+        status=ARTIFACT_STATUS_DRAFT,
+        content=content,
+        source_job_id=job.id,
+    )
+    session.add(artifact)
+    await append_message(session, item.id, "assistant", artifact_type, message)
+    await session.flush()
+    return artifact
+
+
+async def append_message(
+    session: AsyncSession,
+    session_id: int,
+    role: str,
+    message_type: str,
+    content: str,
+    *,
+    job_id: int | None = None,
+    parameters: dict[str, Any] | None = None,
+) -> CreationMessage:
+    sequence = int(await session.scalar(select(func.coalesce(func.max(CreationMessage.sequence), 0)).where(
+        CreationMessage.session_id == session_id
+    ))) + 1
+    message = CreationMessage(
+        session_id=session_id,
+        role=role,
+        message_type=message_type,
+        content=content,
+        sequence=sequence,
+        job_id=job_id,
+        parameters=parameters or {},
+    )
+    session.add(message)
+    await session.flush()
+    return message
+
+
+async def mark_creation_job_failed(session: AsyncSession, job: Job) -> None:
+    if job.target_type not in CREATION_ARTIFACT_TYPES or job.target_id is None:
+        return
+    if job.target_type in {JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION, JOB_TARGET_EPISODE_SCRIPT_GENERATION}:
+        return
+    item = await session.get(CreationSession, job.target_id)
+    if item is None or item.owner_id != job.owner_id:
+        return
+    if job.target_type == JOB_TARGET_SCRIPT_STUDY_BATCH:
+        settings = dict(item.settings)
+        study = dict(settings.get("script_study") or {})
+        parameters = dict(job.payload.get("parameters") or {})
+        study.update({
+            "status": "failed",
+            "failed_batch": int(parameters.get("batch_index", 0)),
+            "parent_job_id": job.parent_job_id,
+        })
+        settings["script_study"] = study
+        item.settings = settings
+        await append_message(
+            session,
+            item.id,
+            "assistant",
+            "agent_error",
+            f"第 {int(parameters.get('batch_index', 0)) + 1} 批研读失败，可重试失败批次；已完成批次和原始剧本均已保留。",
+            job_id=job.id,
+        )
+        await session.flush()
+        return
+    if job.target_type in {JOB_TARGET_SCRIPT_ASSET_BREAKDOWN, JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH}:
+        if job.target_type == JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH:
+            settings = dict(item.settings)
+            progress = dict(settings.get("asset_breakdown") or {})
+            parameters = dict(job.payload.get("parameters") or {})
+            progress.update({
+                "status": "failed", "failed_batch": int(parameters.get("batch_index", 0)),
+                "parent_job_id": job.parent_job_id,
+            })
+            settings["asset_breakdown"] = progress
+            item.settings = settings
+        await append_message(
+            session,
+            item.id,
+            "assistant",
+            "agent_error",
+            "剧本资产拆解未完成，请稍后重试；现有资产未被修改。",
+            job_id=job.id,
+        )
+        await session.flush()
+        return
+    if job.target_type in {JOB_TARGET_OUTLINE_AGENT, JOB_TARGET_SCRIPT_IMPORT}:
+        message = (
+            "AI 研读失败：返回内容未通过结构校验，请重试。原始剧本和已识别分集均已保留。"
+            if job.target_type == JOB_TARGET_SCRIPT_IMPORT
+            else "修改未完成，请稍后重试。"
+        )
+        if job.target_type == JOB_TARGET_SCRIPT_IMPORT:
+            settings = dict(item.settings)
+            settings["script_study"] = {
+                "status": "failed",
+                "detected_episode_count": int(settings.get("episode_count") or 1),
+                "job_id": job.id,
+            }
+            item.settings = settings
+        await append_message(session, item.id, "assistant", "agent_error", message)
+        return
+    has_draft = await session.scalar(select(CreationArtifact.id).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == job.target_type,
+        CreationArtifact.status == ARTIFACT_STATUS_DRAFT,
+    ))
+    if job.target_type == ARTIFACT_TYPE_STORY_BIBLE:
+        item.status = SESSION_STATUS_REVIEWING if has_draft is not None else SESSION_STATUS_DRAFT
+    elif job.target_type == ARTIFACT_TYPE_EPISODE_OUTLINE:
+        item.status = SESSION_STATUS_OUTLINE_REVIEWING if has_draft is not None else SESSION_STATUS_CONFIRMED
+    elif job.target_type == ARTIFACT_TYPE_EPISODE_SCRIPT:
+        item.status = SESSION_STATUS_SCRIPT_REVIEWING if has_draft is not None else SESSION_STATUS_OUTLINE_CONFIRMED
+    else:
+        item.status = SESSION_STATUS_BREAKDOWN_REVIEWING if has_draft is not None else SESSION_STATUS_COMPLETED
+    await session.flush()
+
+
+async def update_story_bible(
+    session: AsyncSession, item: CreationSession, artifact_id: int, content: dict[str, Any]
+) -> CreationArtifact:
+    artifact = await session.get(CreationArtifact, artifact_id)
+    if artifact is None or artifact.session_id != item.id or artifact.status != ARTIFACT_STATUS_DRAFT:
+        raise NotFoundError("可编辑的故事设定不存在")
+    artifact.content = content
+    await session.flush()
+    return artifact
+
+
+async def confirm_story_bible(
+    session: AsyncSession, item: CreationSession, artifact_id: int
+) -> CreationArtifact:
+    artifact = await session.get(CreationArtifact, artifact_id)
+    if artifact is None or artifact.session_id != item.id or artifact.status != ARTIFACT_STATUS_DRAFT:
+        raise NotFoundError("可确认的故事设定不存在")
+    artifact.status = ARTIFACT_STATUS_CONFIRMED
+    item.status = SESSION_STATUS_CONFIRMED
+    if item.project_id is not None:
+        project = await project_service.get_project(session, item.project_id, item.owner_id)
+        content = StoryBibleContent.model_validate(artifact.content)
+        await project_service.update_project(session, project, {
+            "name": content.title,
+            "description": content.logline,
+            "genre": content.genre[:64],
+        })
+    await session.flush()
+    return artifact
+
+
+async def get_artifact(
+    session: AsyncSession,
+    item: CreationSession,
+    artifact_type: str,
+    *,
+    status: str,
+) -> CreationArtifact:
+    artifact = await session.scalar(
+        select(CreationArtifact).where(
+            CreationArtifact.session_id == item.id,
+            CreationArtifact.artifact_type == artifact_type,
+            CreationArtifact.status == status,
+        ).order_by(CreationArtifact.version.desc()).limit(1)
+    )
+    if artifact is None:
+        raise ConflictError("创作阶段数据不完整，请返回上一步检查")
+    return artifact
+
+
+async def create_episode_outline_job(session: AsyncSession, item: CreationSession) -> Job:
+    if item.status not in {SESSION_STATUS_CONFIRMED, SESSION_STATUS_OUTLINE_REVIEWING}:
+        raise ConflictError("请先确认故事设定")
+    bible = await get_artifact(
+        session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    episode_count = int(item.settings.get("episode_count", 10))
+    prompt = f"""你是短剧总编剧。根据已确认故事设定生成 {episode_count} 集分集大纲，只输出 JSON，不要 Markdown。
+JSON 顶层字段为 episodes；每集字段必须为 number, title, synopsis, dramatic_goal, cliffhanger。
+number 必须从 1 到 {episode_count} 连续排列，episodes 必须恰好 {episode_count} 项。
+故事设定：{json.dumps(bible.content, ensure_ascii=False)}"""
+    job = await create_creation_job(
+        session, item, ARTIFACT_TYPE_EPISODE_OUTLINE, prompt, "分集大纲正在生成",
+        agent_key="outline", execution_surface="episode_outline",
+    )
+    item.status = SESSION_STATUS_OUTLINE_GENERATING
+    return job
+
+
+async def create_episode_script_job(session: AsyncSession, item: CreationSession) -> Job:
+    if item.status not in {SESSION_STATUS_OUTLINE_CONFIRMED, SESSION_STATUS_SCRIPT_REVIEWING}:
+        raise ConflictError("请先确认分集大纲")
+    bible = await get_artifact(
+        session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    outline = await get_artifact(
+        session, item, ARTIFACT_TYPE_EPISODE_OUTLINE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    first_episode = outline.content["episodes"][0]
+    prompt = f"""你是短剧编剧。根据故事设定与第一集大纲生成第一集完整可拍摄正文，只输出 JSON，不要 Markdown。
+JSON 字段必须为 episode_number, title, synopsis, script；episode_number 必须为 1。
+script 使用中文剧本格式，明确场景、时间、人物、动作和对白，不要输出分镜。
+故事设定：{json.dumps(bible.content, ensure_ascii=False)}
+第一集大纲：{json.dumps(first_episode, ensure_ascii=False)}"""
+    job = await create_creation_job(
+        session, item, ARTIFACT_TYPE_EPISODE_SCRIPT, prompt, "第一集正文正在生成",
+        agent_key="script", execution_surface="episode_script",
+    )
+    item.status = SESSION_STATUS_SCRIPT_GENERATING
+    return job
+
+
+async def create_creation_job(
+    session: AsyncSession,
+    item: CreationSession,
+    target_type: str,
+    prompt: str,
+    active_message: str,
+    provider_model_id: int | None = None,
+    parameters: dict[str, Any] | None = None,
+    agent_key: str | None = None,
+    execution_surface: str | None = None,
+) -> Job:
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == item.owner_id,
+        Job.target_type.in_(CREATION_ARTIFACT_TYPES),
+        Job.target_id == item.id,
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+    ))
+    if active is not None:
+        raise ConflictError(active_message)
+    execution: dict[str, Any] | None = None
+    if agent_key is not None:
+        model, execution, instruction_prefix = await _resolve_agent_execution(
+            session, agent_key, execution_surface or target_type
+        )
+        if provider_model_id is not None and provider_model_id != model.id:
+            raise ConflictError("任务指定模型与 Agent 路由不一致")
+        prompt = f"{instruction_prefix}\n\n{prompt}"
+    else:
+        model = (
+            await session.get(ProviderModel, provider_model_id)
+            if provider_model_id is not None
+            else await provider_service.get_default_text_model(session)
+        )
+    if model is None:
+        raise ConflictError("配置的文本模型不存在")
+    job = await job_service.create_text_job(
+        session, item.owner_id, provider_model_id=model.id, prompt=prompt,
+        project_id=item.project_id, parameters=parameters or {},
+    )
+    job.target_type = target_type
+    job.target_id = item.id
+    if execution is not None:
+        _attach_agent_execution(job, execution)
+    await session.flush()
+    return job
+
+
+async def create_batched_script_study_job(
+    session: AsyncSession, item: CreationSession
+) -> Job:
+    if item.project_id is None:
+        raise ConflictError("当前创作会话尚未关联项目")
+    episodes = await project_service.list_episodes(session, item.project_id)
+    if not episodes:
+        raise ConflictError("未识别到可研读的分集")
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == item.owner_id,
+        Job.target_type.in_({JOB_TARGET_SCRIPT_STUDY_BATCH, JOB_TARGET_SCRIPT_STUDY_BATCH_GROUP}),
+        Job.target_id == item.id,
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+    ))
+    if active is not None:
+        raise ConflictError("剧本正在分批研读")
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "script", "script_study"
+    )
+
+    batches = [
+        episodes[offset:offset + SCRIPT_STUDY_BATCH_SIZE]
+        for offset in range(0, len(episodes), SCRIPT_STUDY_BATCH_SIZE)
+    ]
+    parent = Job(
+        owner_id=item.owner_id,
+        project_id=item.project_id,
+        job_type="text",
+        status=JOB_STATUS_PROCESSING,
+        progress=0,
+        target_type=JOB_TARGET_SCRIPT_STUDY_BATCH_GROUP,
+        target_id=item.id,
+        provider_id=model.provider_id,
+        model=model.model_id,
+        payload={
+            "batch_size": SCRIPT_STUDY_BATCH_SIZE,
+            "total_batches": len(batches),
+            "agent_execution": execution,
+        },
+        result={"total": len(batches), "completed": 0, "child_job_ids": []},
+    )
+    session.add(parent)
+    await session.flush()
+
+    children: list[Job] = []
+    for batch_index, batch_episodes in enumerate(batches):
+        inputs = [
+            {
+                "number": episode.number,
+                "title": episode.title,
+                "script": episode.script or "",
+            }
+            for episode in batch_episodes
+        ]
+        expected_numbers = [episode.number for episode in batch_episodes]
+        prompt = f"""{instruction_prefix}
+
+你是短剧总编剧。逐集研读下列剧本，优化每集标题、摘要、戏剧目标和结尾悬念；保留核心剧情、人物关系和集号。
+严格输出单个 JSON 对象，不要 Markdown、代码围栏或解释文字：
+{{"reply":"本批研读说明","episodes":[{{"number":1,"title":"","synopsis":"","dramatic_goal":"","cliffhanger":""}}]}}
+episodes 必须按输入顺序返回，集号必须严格等于 {expected_numbers}，不得增删、合并或拆分分集。
+本批剧本：{json.dumps(inputs, ensure_ascii=False)}"""
+        child = await job_service.create_text_job(
+            session,
+            item.owner_id,
+            provider_model_id=model.id,
+            prompt=prompt,
+            project_id=item.project_id,
+            parameters={
+                "agent_workspace": "script_study_batch",
+                "batch_index": batch_index,
+                "total_batches": len(batches),
+                "episode_numbers": expected_numbers,
+            },
+        )
+        child.target_type = JOB_TARGET_SCRIPT_STUDY_BATCH
+        child.target_id = item.id
+        child.parent_job_id = parent.id
+        _attach_agent_execution(child, execution)
+        children.append(child)
+    parent.result = {
+        "total": len(children),
+        "completed": 0,
+        "child_job_ids": [child.id for child in children],
+    }
+    settings = dict(item.settings)
+    settings["script_study"] = {
+        "status": "running",
+        "batch_size": SCRIPT_STUDY_BATCH_SIZE,
+        "total_batches": len(batches),
+        "completed_batches": 0,
+        "detected_episode_count": len(episodes),
+        "parent_job_id": parent.id,
+        "batches": {},
+    }
+    item.settings = settings
+    await append_message(
+        session,
+        item.id,
+        "user",
+        "script_study_request",
+        f"已保留原始剧本和本地识别的 {len(episodes)} 集，开始分 {len(batches)} 批执行 AI 研读。",
+        job_id=parent.id,
+    )
+    await session.flush()
+    return parent
+
+
+async def create_uploaded_script_optimization_job(
+    session: AsyncSession, item: CreationSession
+) -> Job:
+    """兼容旧调用；新流程统一使用可续跑的分批研读。"""
+    return await create_batched_script_study_job(session, item)
+
+
+async def create_script_asset_breakdown_job(
+    session: AsyncSession,
+    item: CreationSession,
+) -> Job:
+    if item.project_id is None:
+        raise ConflictError("当前创作会话尚未关联项目")
+    episodes = await script_finalization_service.require_project_scripts_finalized(
+        session, item.project_id, item.owner_id
+    )
+    source_revisions = {str(episode.id): episode.script_revision for episode in episodes}
+    scripted = [episode for episode in episodes if (episode.script or "").strip()]
+    if scripted and len(scripted) != len(episodes):
+        missing = [episode.number for episode in episodes if not (episode.script or "").strip()]
+        raise ConflictError(f"请先完成全部分集正文，缺少第 {missing} 集")
+    bible = await session.scalar(
+        select(CreationArtifact)
+        .where(
+            CreationArtifact.session_id == item.id,
+            CreationArtifact.artifact_type == ARTIFACT_TYPE_STORY_BIBLE,
+            CreationArtifact.status != ARTIFACT_STATUS_SUPERSEDED,
+        )
+        .order_by(CreationArtifact.version.desc())
+        .limit(1)
+    )
+    if not scripted:
+        source = str(item.settings.get("reference_text") or item.brief).strip()
+        if not source:
+            raise ConflictError("剧本正文为空，无法拆解资产")
+        context = {"story_bible": bible.content if bible is not None else None, "script": source}
+        prompt = _asset_breakdown_prompt(context)
+        await append_message(session, item.id, "user", "asset_breakdown_request", "剧本资产拆解")
+        return await create_creation_job(
+            session, item, JOB_TARGET_SCRIPT_ASSET_BREAKDOWN, prompt, "剧本资产正在拆解",
+            parameters={"agent_workspace": "script_asset_breakdown"},
+            agent_key="outline", execution_surface="asset_breakdown",
+        )
+
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == item.owner_id,
+        Job.target_type.in_({JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH, JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_GROUP}),
+        Job.target_id == item.id,
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+    ))
+    if active is not None:
+        raise ConflictError("剧本资产正在分批拆解")
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "outline", "asset_breakdown"
+    )
+    batches = [scripted[offset:offset + SCRIPT_STUDY_BATCH_SIZE] for offset in range(0, len(scripted), SCRIPT_STUDY_BATCH_SIZE)]
+    parent = Job(
+        owner_id=item.owner_id, project_id=item.project_id, job_type="text",
+        status=JOB_STATUS_PROCESSING, progress=0,
+        target_type=JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_GROUP, target_id=item.id,
+        provider_id=model.provider_id, model=model.model_id,
+        payload={
+            "batch_size": SCRIPT_STUDY_BATCH_SIZE,
+            "total_batches": len(batches),
+            "agent_execution": execution,
+            "source_script_revisions": source_revisions,
+        },
+        result={"total": len(batches), "completed": 0, "child_job_ids": []},
+    )
+    session.add(parent)
+    await session.flush()
+    children: list[Job] = []
+    for batch_index, batch_episodes in enumerate(batches):
+        episode_payload = [
+            {"number": episode.number, "title": episode.title, "script": episode.script}
+            for episode in batch_episodes
+        ]
+        prompt = f"{instruction_prefix}\n\n" + _asset_breakdown_prompt({
+            "story_bible": bible.content if bible is not None else None,
+            "episodes": episode_payload,
+        })
+        child = await job_service.create_text_job(
+            session, item.owner_id, provider_model_id=model.id, prompt=prompt,
+            project_id=item.project_id,
+            parameters={
+                "agent_workspace": "script_asset_breakdown_batch",
+                "batch_index": batch_index,
+                "total_batches": len(batches),
+                "episode_numbers": [episode.number for episode in batch_episodes],
+                "source_script_revisions": {
+                    str(episode.id): episode.script_revision for episode in batch_episodes
+                },
+            },
+        )
+        child.target_type = JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH
+        child.target_id = item.id
+        child.parent_job_id = parent.id
+        _attach_agent_execution(child, execution)
+        children.append(child)
+    parent.result = {"total": len(children), "completed": 0, "child_job_ids": [child.id for child in children]}
+    settings = dict(item.settings)
+    settings["asset_breakdown"] = {
+        "status": "running", "completed": False, "batch_size": SCRIPT_STUDY_BATCH_SIZE,
+        "total_batches": len(batches), "completed_batches": 0, "parent_job_id": parent.id, "batches": {},
+        "source_script_revisions": source_revisions,
+    }
+    item.settings = settings
+    await append_message(
+        session, item.id, "user", "asset_breakdown_request",
+        f"开始分 {len(batches)} 批拆解 {len(scripted)} 集剧本资产。", job_id=parent.id,
+    )
+    await session.flush()
+    return parent
+
+
+def _asset_breakdown_prompt(context: dict[str, Any]) -> str:
+    return f"""你是影视制片资产统筹。请从本批剧本中提取需要保持视觉一致性的角色、场景和关键道具。
+严格输出单个 JSON 对象，不要 Markdown、代码围栏或解释文字。结构必须为：
+{{"reply":"拆解说明","characters":[],"scenes":[],"props":[]}}
+characters、scenes、props 每项都必须包含 name、aliases、episode_numbers、description、prompt_anchor、attributes。
+aliases 是同一资产在不同分集中的别名数组；episode_numbers 只能使用输入中的真实集号。
+角色 attributes 可含 role、appearance、costume；场景 attributes 可含 location、time、atmosphere；道具 attributes 可含 owner、material、story_function。
+同一批次内合并同名资产和别名，只保留剧本中实际出现或明确需要的资产，不生成分镜、图片或视频。
+剧本上下文：{json.dumps(context, ensure_ascii=False)}"""
+
+
+async def _asset_breakdown_for_review(
+    session: AsyncSession, item: CreationSession
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if item.project_id is None:
+        raise ConflictError("当前创作会话尚未关联项目")
+    settings = dict(item.settings)
+    breakdown = dict(settings.get("asset_breakdown") or {})
+    if breakdown.get("status") != "awaiting_confirmation":
+        raise ConflictError("没有待审阅的资产拆解方案")
+    source_revisions = dict(breakdown.get("source_script_revisions") or {})
+    if not await script_finalization_service.revisions_are_current(
+        session, item.project_id, source_revisions
+    ):
+        breakdown.update({
+            "status": "stale",
+            "completed": False,
+            "stale_reason": "正式剧本版本已变化，请重新执行资产拆解",
+        })
+        settings["asset_breakdown"] = breakdown
+        item.settings = settings
+        await session.flush()
+        raise ConflictError("正式剧本版本已变化，请重新执行资产拆解")
+    return settings, breakdown
+
+
+def _refresh_asset_candidate_counts(breakdown: dict[str, Any]) -> None:
+    candidates = list(breakdown.get("candidates") or [])
+    breakdown["candidate_counts"] = {
+        asset_type: sum(
+            candidate.get("asset_type") == asset_type
+            and candidate.get("selected", True)
+            and not candidate.get("merged_into_candidate_id")
+            for candidate in candidates
+        )
+        for asset_type in (ASSET_TYPE_CHARACTER, ASSET_TYPE_SCENE, ASSET_TYPE_PROP)
+    }
+    breakdown["selected_count"] = sum(
+        candidate.get("selected", True)
+        and not candidate.get("merged_into_candidate_id")
+        for candidate in candidates
+    )
+
+
+async def update_script_asset_candidate(
+    session: AsyncSession,
+    item: CreationSession,
+    candidate_id: int,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    settings, breakdown = await _asset_breakdown_for_review(session, item)
+    candidates = [dict(candidate) for candidate in breakdown.get("candidates") or []]
+    candidate = next(
+        (entry for entry in candidates if int(entry.get("candidate_id", 0)) == candidate_id),
+        None,
+    )
+    if candidate is None:
+        raise NotFoundError("资产候选不存在")
+    if candidate.get("merged_into_candidate_id"):
+        raise ConflictError("已合并的资产候选不能继续编辑")
+
+    if "episode_numbers" in data:
+        valid_numbers = {
+            episode.number
+            for episode in await project_service.list_episodes(session, item.project_id)
+        }
+        invalid = sorted(set(data["episode_numbers"] or []) - valid_numbers)
+        if invalid:
+            raise ConflictError(f"资产候选包含不存在的分集: {invalid}")
+    if "matched_asset_id" in data and data["matched_asset_id"] is not None:
+        matched = await asset_service.get_asset(
+            session, item.project_id, int(data["matched_asset_id"])
+        )
+        if matched.asset_type != candidate.get("asset_type"):
+            raise ConflictError("只能匹配相同类型的正式资产")
+
+    candidate.update(data)
+    if "name" in data or "aliases" in data:
+        candidate["normalized_aliases"] = sorted({
+            str(value).strip().casefold()
+            for value in [candidate.get("name", ""), *(candidate.get("aliases") or [])]
+            if str(value).strip()
+        })
+    breakdown["candidates"] = candidates
+    _refresh_asset_candidate_counts(breakdown)
+    settings["asset_breakdown"] = breakdown
+    item.settings = settings
+    await session.flush()
+    return candidate
+
+
+async def merge_script_asset_candidate(
+    session: AsyncSession,
+    item: CreationSession,
+    candidate_id: int,
+    target_candidate_id: int,
+) -> dict[str, Any]:
+    if candidate_id == target_candidate_id:
+        raise ConflictError("资产候选不能合并到自身")
+    settings, breakdown = await _asset_breakdown_for_review(session, item)
+    candidates = [dict(candidate) for candidate in breakdown.get("candidates") or []]
+    source = next(
+        (entry for entry in candidates if int(entry.get("candidate_id", 0)) == candidate_id),
+        None,
+    )
+    target = next(
+        (entry for entry in candidates if int(entry.get("candidate_id", 0)) == target_candidate_id),
+        None,
+    )
+    if source is None or target is None:
+        raise NotFoundError("资产候选不存在")
+    if source.get("merged_into_candidate_id") or target.get("merged_into_candidate_id"):
+        raise ConflictError("已合并的资产候选不能再次合并")
+    if source.get("asset_type") != target.get("asset_type"):
+        raise ConflictError("只有相同类型的资产候选可以合并")
+
+    target["aliases"] = list(dict.fromkeys([
+        *(target.get("aliases") or []),
+        source.get("name", ""),
+        *(source.get("aliases") or []),
+    ]))[:20]
+    target["normalized_aliases"] = sorted({
+        str(value).strip().casefold()
+        for value in [target.get("name", ""), *target["aliases"]]
+        if str(value).strip()
+    })
+    target["episode_numbers"] = sorted(set(
+        (target.get("episode_numbers") or []) + (source.get("episode_numbers") or [])
+    ))
+    target["attributes"] = {
+        **dict(source.get("attributes") or {}),
+        **dict(target.get("attributes") or {}),
+    }
+    if len(str(source.get("description") or "")) > len(str(target.get("description") or "")):
+        target["description"] = source.get("description")
+    if not target.get("prompt_anchor"):
+        target["prompt_anchor"] = source.get("prompt_anchor") or ""
+    source["selected"] = False
+    source["merged_into_candidate_id"] = target_candidate_id
+    breakdown["candidates"] = candidates
+    _refresh_asset_candidate_counts(breakdown)
+    settings["asset_breakdown"] = breakdown
+    item.settings = settings
+    await session.flush()
+    return target
+
+
+async def confirm_script_asset_breakdown(
+    session: AsyncSession, item: CreationSession
+) -> dict[str, Any]:
+    if item.project_id is None:
+        raise ConflictError("当前创作会话尚未关联项目")
+    settings = dict(item.settings)
+    breakdown = dict(settings.get("asset_breakdown") or {})
+    if breakdown.get("status") == "completed":
+        return dict(breakdown.get("created_counts") or {})
+    if breakdown.get("status") != "awaiting_confirmation":
+        raise ConflictError("没有待确认的资产拆解方案")
+
+    source_revisions = dict(breakdown.get("source_script_revisions") or {})
+    if not await script_finalization_service.revisions_are_current(
+        session, item.project_id, source_revisions
+    ):
+        breakdown.update({
+            "status": "stale",
+            "completed": False,
+            "stale_reason": "正式剧本版本已变化，请重新执行资产拆解",
+        })
+        settings["asset_breakdown"] = breakdown
+        item.settings = settings
+        await session.flush()
+        raise ConflictError("正式剧本版本已变化，请重新执行资产拆解")
+
+    project = await project_service.get_project(session, item.project_id, item.owner_id)
+    existing_assets = await asset_service.list_assets(session, item.project_id)
+    used_slugs = {entry["slug"] for entry in existing_assets}
+    existing_by_id = {entry["id"]: entry for entry in existing_assets}
+    existing_ids = set(existing_by_id)
+    selected_candidates = [
+        candidate
+        for candidate in breakdown.get("candidates", [])
+        if candidate.get("selected", True) and not candidate.get("merged_into_candidate_id")
+    ]
+    if not selected_candidates:
+        raise ConflictError("请至少保留一个资产候选")
+    seen_names: dict[tuple[str, str], int] = {}
+    seen_matches: set[int] = set()
+    for candidate in selected_candidates:
+        key = (
+            str(candidate.get("asset_type") or ""),
+            str(candidate.get("name") or "").strip().casefold(),
+        )
+        if not key[1]:
+            raise ConflictError("资产候选名称不能为空")
+        if key in seen_names:
+            raise ConflictError("存在同类型同名候选，请先合并或改名")
+        seen_names[key] = int(candidate.get("candidate_id") or 0)
+        matched_id = candidate.get("matched_asset_id")
+        if matched_id is not None:
+            if matched_id in seen_matches:
+                raise ConflictError("多个候选不能重复匹配同一个正式资产")
+            seen_matches.add(matched_id)
+    created_counts = {
+        ASSET_TYPE_CHARACTER: 0,
+        ASSET_TYPE_SCENE: 0,
+        ASSET_TYPE_PROP: 0,
+    }
+    formal_asset_ids: list[int] = []
+    matched_count = 0
+    for candidate in breakdown.get("candidates", []):
+        if not candidate.get("selected", True) or candidate.get("merged_into_candidate_id"):
+            continue
+        matched_asset_id = candidate.get("matched_asset_id")
+        if matched_asset_id in existing_ids:
+            matched = await asset_service.get_asset(session, project.id, matched_asset_id)
+            formal_asset_ids.append(matched.id)
+            matched_count += 1
+            if matched.project_id is not None:
+                attributes = dict(matched.attributes or {})
+                attributes["aliases"] = list(dict.fromkeys([
+                    *(attributes.get("aliases") or []),
+                    *(candidate.get("aliases") or []),
+                ]))
+                attributes["episode_numbers"] = sorted(set(
+                    (attributes.get("episode_numbers") or [])
+                    + (candidate.get("episode_numbers") or [])
+                ))
+                attributes["source_kind"] = "script_asset_breakdown"
+                attributes["source_script_revisions"] = source_revisions
+                attributes["script_dependency_status"] = "current"
+                matched.attributes = attributes
+                if not matched.description and candidate.get("description"):
+                    matched.description = candidate["description"]
+                if not matched.prompt_anchor and candidate.get("prompt_anchor"):
+                    matched.prompt_anchor = candidate["prompt_anchor"]
+            continue
+        base_slug = re.sub(
+            r"[^\w\u4e00-\u9fff-]+", "-", str(candidate.get("name") or "")
+        ).strip("-") or f"asset-{candidate.get('candidate_id', 0)}"
+        slug = base_slug
+        suffix = 2
+        while slug in used_slugs:
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
+        used_slugs.add(slug)
+        attributes = dict(candidate.get("attributes") or {})
+        attributes["aliases"] = list(candidate.get("aliases") or [])
+        attributes["episode_numbers"] = list(candidate.get("episode_numbers") or [])
+        attributes["source_kind"] = "script_asset_breakdown"
+        attributes["source_script_revisions"] = source_revisions
+        attributes["script_dependency_status"] = "current"
+        created = await asset_service.create_asset(
+            session,
+            project,
+            {
+                "asset_type": candidate["asset_type"],
+                "name": candidate["name"],
+                "slug": slug,
+                "description": candidate.get("description") or "",
+                "prompt_anchor": candidate.get("prompt_anchor") or "",
+                "attributes": attributes,
+            },
+        )
+        formal_asset_ids.append(created.id)
+        created_counts[candidate["asset_type"]] += 1
+
+    breakdown.update({
+        "status": "completed",
+        "completed": True,
+        "created_counts": created_counts,
+        "matched_count": matched_count,
+        "formal_asset_ids": formal_asset_ids,
+    })
+    settings["asset_breakdown"] = breakdown
+    item.settings = settings
+    await append_message(
+        session,
+        item.id,
+        "assistant",
+        "asset_breakdown_confirmed",
+        "资产方案已确认并写入资产库。",
+        parameters={"created_counts": created_counts},
+    )
+    await session.flush()
+    return created_counts
+
+
+async def reject_script_asset_breakdown(
+    session: AsyncSession, item: CreationSession
+) -> dict[str, Any]:
+    settings = dict(item.settings)
+    breakdown = dict(settings.get("asset_breakdown") or {})
+    if breakdown.get("status") == "rejected":
+        return breakdown
+    if breakdown.get("status") != "awaiting_confirmation":
+        raise ConflictError("没有待放弃的资产拆解方案")
+    breakdown.update({"status": "rejected", "completed": False})
+    settings["asset_breakdown"] = breakdown
+    item.settings = settings
+    await append_message(
+        session,
+        item.id,
+        "assistant",
+        "asset_breakdown_rejected",
+        "已放弃本次资产拆解方案，资产库未发生变化。",
+        job_id=breakdown.get("job_id"),
+    )
+    await session.flush()
+    return breakdown
+
+
+async def create_episode_script_generation_jobs(
+    session: AsyncSession,
+    item: CreationSession,
+    episode_numbers: list[int],
+    overwrite: bool,
+) -> list[Job]:
+    if item.status not in {SESSION_STATUS_OUTLINE_CONFIRMED, SESSION_STATUS_SCRIPT_REVIEWING}:
+        raise ConflictError("请先确认分集大纲")
+    if item.project_id is None:
+        raise ConflictError("当前创作会话尚未关联项目")
+    bible = await get_artifact(
+        session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    outline = await get_artifact(
+        session, item, ARTIFACT_TYPE_EPISODE_OUTLINE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    episodes = await project_service.list_episodes(session, item.project_id)
+    by_number = {episode.number: episode for episode in episodes}
+    requested = episode_numbers or sorted(by_number)
+    missing = [number for number in requested if number not in by_number]
+    if missing:
+        raise ConflictError(f"分集不存在：{missing}")
+    outline_by_number = {entry["number"]: entry for entry in outline.content["episodes"]}
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "script", "episode_script_generation"
+    )
+    jobs: list[Job] = []
+    for number in requested:
+        episode = by_number[number]
+        if (episode.script or "").strip() and not overwrite:
+            continue
+        active = await session.scalar(select(Job.id).where(
+            Job.owner_id == item.owner_id,
+            Job.target_type == JOB_TARGET_EPISODE_SCRIPT_GENERATION,
+            Job.target_id == episode.id,
+            Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+        ))
+        if active is not None:
+            continue
+        outline_entry = outline_by_number.get(number)
+        if outline_entry is None:
+            raise ConflictError(f"第 {number} 集缺少已确认大纲")
+        prompt = f"""{instruction_prefix}
+
+你是短剧编剧。根据已确认故事设定与本集大纲，生成第 {number} 集完整可拍摄正文，只输出 JSON，不要 Markdown。
+JSON 字段必须为 episode_number, title, synopsis, script；episode_number 必须为 {number}。
+script 使用中文剧本格式，明确场景、时间、人物、动作和对白，不输出分镜；剧情必须承接前后集并落实集尾钩子。
+故事设定：{json.dumps(bible.content, ensure_ascii=False)}
+本集大纲：{json.dumps(outline_entry, ensure_ascii=False)}"""
+        job = await job_service.create_text_job(
+            session, item.owner_id, provider_model_id=model.id, prompt=prompt,
+            project_id=item.project_id,
+            parameters={"session_id": item.id, "episode_number": number, "source_revision": episode.script_revision},
+        )
+        job.target_type = JOB_TARGET_EPISODE_SCRIPT_GENERATION
+        job.target_id = episode.id
+        _attach_agent_execution(job, execution)
+        jobs.append(job)
+    if not jobs:
+        raise ConflictError("所选分集已有正文或正在生成")
+    item.status = SESSION_STATUS_SCRIPT_GENERATING
+    await session.flush()
+    return jobs
+
+
+async def create_episode_script_optimization_job(
+    session: AsyncSession,
+    episode: Episode,
+    instruction: str,
+) -> Job:
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == episode.owner_id,
+        Job.target_type == JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION,
+        Job.target_id == episode.id,
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+    ))
+    if active is not None:
+        raise ConflictError("本集剧本正在优化")
+    source = (episode.script or "").strip()
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "script", "episode_script_optimization"
+    )
+    task = "优化" if source else "创作"
+    prompt = f"""{instruction_prefix}
+
+你是短剧编剧。根据用户要求{task}单集剧本，保留既有核心剧情和人物关系，不得输出分镜。
+严格输出单个 JSON 对象，不要 Markdown、代码围栏或解释文字：
+{{"reply":"优化说明","title":"","synopsis":"","script":""}}
+script 必须是完整、可编辑的中文剧本正文；title 和 synopsis 必须与优化后的正文一致。
+用户要求：{instruction.strip() or ("优化节奏、人物动机和对白，保留核心剧情。" if source else "根据标题与摘要创作完整可拍摄正文。")}
+当前集号：{episode.number}
+当前标题：{episode.title or ""}
+当前摘要：{episode.synopsis or ""}
+当前正文：{source or "尚无正文，请根据标题与摘要创作。"}"""
+    job = await job_service.create_text_job(
+        session,
+        episode.owner_id,
+        provider_model_id=model.id,
+        prompt=prompt,
+        project_id=episode.project_id,
+        parameters={
+            "agent_workspace": "episode_script_optimization",
+            "source_revision": episode.script_revision,
+            "source_script": episode.script or "",
+            "instruction": instruction.strip(),
+        },
+    )
+    job.target_type = JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION
+    job.target_id = episode.id
+    _attach_agent_execution(job, execution)
+    await session.flush()
+    return job
+
+
+async def create_episode_scene_shot_proposal_job(
+    session: AsyncSession,
+    episode: Episode,
+) -> Job:
+    await script_finalization_service.require_project_scripts_finalized(
+        session, episode.project_id, episode.owner_id
+    )
+    source = (episode.script or "").strip()
+    if not source:
+        raise ConflictError("请先导入、编写或确认本集剧本")
+    if await project_service.list_scenes(session, episode.id):
+        raise ConflictError("本集已经包含正式场景，不能用 AI 提案覆盖")
+    active = await session.scalar(select(Job.id).where(
+        Job.owner_id == episode.owner_id,
+        Job.target_type == JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL,
+        Job.target_id == episode.id,
+        Job.status.in_([
+            JOB_STATUS_QUEUED,
+            JOB_STATUS_RUNNING,
+            JOB_STATUS_PROCESSING,
+            JOB_STATUS_RETRYING,
+        ]),
+    ))
+    if active is not None:
+        raise ConflictError("本集场景分镜正在拆解")
+
+    production = await project_service.get_episode_production(session, episode)
+    selected_asset_ids = [int(value) for value in production["settings"].get("asset_ids", [])]
+    asset_catalog: list[dict[str, Any]] = []
+    for asset_id in selected_asset_ids:
+        asset = await asset_service.get_asset(session, episode.project_id, asset_id)
+        asset_catalog.append({
+            "id": asset.id,
+            "type": asset.asset_type,
+            "name": asset.name,
+            "description": asset.description or "",
+        })
+
+    model, execution, instruction_prefix = await _resolve_agent_execution(
+        session, "script", "episode_scene_shot_breakdown"
+    )
+    prompt = f"""{instruction_prefix}
+
+你是短剧分镜师。把第 {episode.number} 集剧本拆成可拍摄的场景和分镜，只输出 JSON，不要 Markdown。
+JSON 顶层字段为 episode_number 和 scenes，episode_number 必须为 {episode.number}。
+每个 scene 字段为 number, name, location, time_of_day, description, shots。
+每个 shot 字段为 number, duration, shot_size, camera_angle, camera_movement, action, dialogue, audio_note, characters, asset_ids。
+scene 和 shot 的 number 都必须各自从 1 连续排列；总分镜不超过 200；不要生成图片或视频 Prompt。
+asset_ids 只能从“本集已绑定资产”中选择与该分镜实际有关的编号，没有则返回空数组。
+本集已绑定资产：{json.dumps(asset_catalog, ensure_ascii=False)}
+本集剧本：{source}"""
+    job = await job_service.create_text_job(
+        session,
+        episode.owner_id,
+        provider_model_id=model.id,
+        prompt=prompt,
+        project_id=episode.project_id,
+        parameters={
+            "agent_workspace": "episode_scene_shot_breakdown",
+            "source_revision": episode.script_revision,
+            "source_script": episode.script or "",
+            "asset_ids": selected_asset_ids,
+        },
+    )
+    job.target_type = JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL
+    job.target_id = episode.id
+    _attach_agent_execution(job, execution)
+    await session.flush()
+    return job
+
+
+async def apply_episode_scene_shot_proposal(
+    session: AsyncSession,
+    episode: Episode,
+    job_id: int,
+    expected_script_revision: int,
+    content: dict[str, Any],
+    actor_id: int,
+) -> dict[str, int]:
+    await script_finalization_service.require_project_scripts_finalized(
+        session, episode.project_id, actor_id
+    )
+    job = await job_service.get_job(session, job_id, actor_id)
+    if (
+        job.project_id != episode.project_id
+        or job.target_type != JOB_TARGET_EPISODE_SCENE_SHOT_PROPOSAL
+        or job.target_id != episode.id
+        or job.status != "succeeded"
+    ):
+        raise ConflictError("场景分镜提案尚未完成或不属于本集")
+    result = dict(job.result or {})
+    preview = dict(result.get("action_preview") or {})
+    if preview.get("status") == "applied":
+        return dict(result.get("apply_result") or {})
+    if preview.get("status") == "rejected":
+        raise ConflictError("该场景分镜提案已放弃")
+    source_revision = int(dict(preview.get("source") or {}).get("revision", -1))
+    if source_revision != expected_script_revision or episode.script_revision != expected_script_revision:
+        raise ConflictError("本集剧本已更新，请基于最新版本重新拆分")
+    if await project_service.list_scenes(session, episode.id):
+        raise ConflictError("本集已经包含正式场景，不能覆盖现有内容")
+
+    draft = SceneShotDraftContent.model_validate(content)
+    if draft.episode_number != episode.number:
+        raise ConflictError("场景分镜提案不属于当前分集")
+    allowed_asset_ids = {
+        int(value) for value in dict(job.payload.get("parameters") or {}).get("asset_ids", [])
+    }
+    referenced_asset_ids = {
+        asset_id
+        for scene_data in draft.scenes
+        for shot_data in scene_data.shots
+        for asset_id in shot_data.asset_ids
+    }
+    if not referenced_asset_ids.issubset(allowed_asset_ids):
+        raise ConflictError("提案引用了未绑定到本集的资产")
+    assets: dict[int, Asset] = {}
+    for asset_id in referenced_asset_ids:
+        assets[asset_id] = await asset_service.get_asset(
+            session, episode.project_id, asset_id
+        )
+
+    shot_count = 0
+    asset_usage_count = 0
+    for scene_data in draft.scenes:
+        scene = await project_service.create_scene(session, episode, {
+            "order": scene_data.number - 1,
+            "name": scene_data.name,
+            "location": scene_data.location,
+            "time_of_day": scene_data.time_of_day or None,
+            "description": scene_data.description or None,
+        })
+        for shot_data in scene_data.shots:
+            shot = await project_service.create_shot(session, scene, {
+                "order": shot_data.number - 1,
+                "duration": shot_data.duration,
+                "shot_size": shot_data.shot_size,
+                "camera_angle": shot_data.camera_angle or None,
+                "camera_movement": shot_data.camera_movement or None,
+                "action": shot_data.action,
+                "dialogue": shot_data.dialogue or None,
+                "audio_note": shot_data.audio_note or None,
+                "refs": {
+                    "characters": shot_data.characters,
+                    "asset_ids": shot_data.asset_ids,
+                },
+            })
+            for asset_id in shot_data.asset_ids:
+                session.add(AssetUsage(
+                    project_id=episode.project_id,
+                    asset_id=asset_id,
+                    episode_id=episode.id,
+                    scene_id=scene.id,
+                    shot_id=shot.id,
+                    usage_type=assets[asset_id].asset_type,
+                ))
+                asset_usage_count += 1
+            shot_count += 1
+
+    apply_result = {
+        "project_id": episode.project_id,
+        "episode_id": episode.id,
+        "scene_count": len(draft.scenes),
+        "shot_count": shot_count,
+        "asset_usage_count": asset_usage_count,
+    }
+    production = await session.scalar(
+        select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+    )
+    if production is not None:
+        production.source_script_revision = episode.script_revision
+        production.script_stale = False
+        production.script_stale_reason = None
+    preview.update({"status": "applied", **apply_result})
+    job.result = {**result, "action_preview": preview, "apply_result": apply_result}
+    await session.flush()
+    return apply_result
+
+
+async def apply_episode_script_optimization(
+    session: AsyncSession,
+    episode: Episode,
+    job_id: int,
+    expected_revision: int,
+    actor_id: int,
+) -> Episode:
+    job = await job_service.get_job(session, job_id, actor_id)
+    if (
+        job.target_type != JOB_TARGET_EPISODE_SCRIPT_OPTIMIZATION
+        or job.target_id != episode.id
+        or job.status != "succeeded"
+    ):
+        raise ConflictError("AI 优化结果尚未完成或不属于本集")
+    job_result = dict(job.result or {})
+    preview = dict(job_result.get("action_preview") or {})
+    if preview.get("status") == "applied":
+        return episode
+    if preview.get("status") == "rejected":
+        raise ConflictError("该 AI 优化提案已放弃")
+    proposal = dict(job_result.get("proposal") or {})
+    if not proposal:
+        raise ConflictError("AI 优化结果不存在")
+    source_revision = int(proposal.get("source_revision", -1))
+    if source_revision != expected_revision or episode.script_revision != expected_revision:
+        raise ConflictError("剧本已更新，请基于最新版本重新执行 AI 优化")
+    updated = await script_version_service.save_script(
+        session,
+        episode,
+        str(proposal["script"]),
+        expected=expected_revision,
+        actor_id=actor_id,
+        note=str(proposal.get("reply") or "AI 优化"),
+        source="ai",
+    )
+    updated.title = str(proposal.get("title") or updated.title or "")
+    updated.synopsis = str(proposal.get("synopsis") or updated.synopsis or "")
+    preview.update({
+        "status": "applied",
+        "applied_revision": updated.script_revision,
+    })
+    job.result = {
+        **job_result,
+        "applied_revision": updated.script_revision,
+        "action_preview": preview,
+    }
+    await session.flush()
+    return updated
+
+
+async def apply_outline_agent_action(
+    session: AsyncSession,
+    item: CreationSession,
+    job_id: int,
+    expected_source_version: int,
+    actor_id: int,
+) -> CreationSession:
+    job = await job_service.get_job(session, job_id, actor_id)
+    if (
+        job.target_type != JOB_TARGET_OUTLINE_AGENT
+        or job.target_id != item.id
+        or job.status != "succeeded"
+    ):
+        raise ConflictError("Agent 提案尚未完成或不属于当前项目")
+    job_result = dict(job.result or {})
+    preview = dict(job_result.get("action_preview") or {})
+    if not preview:
+        raise ConflictError("Agent 本轮没有可应用的结构化提案")
+    if preview.get("status") == "applied":
+        return item
+    if preview.get("status") == "rejected":
+        raise ConflictError("该 Agent 提案已放弃")
+    target_type = str(preview.get("target_type") or "")
+    if target_type not in {ARTIFACT_TYPE_STORY_BIBLE, ARTIFACT_TYPE_EPISODE_OUTLINE}:
+        raise ConflictError("Agent 提案类型不支持")
+    source = dict(preview.get("source") or {})
+    source_version = int(source.get("version") or 0)
+    if source_version != expected_source_version:
+        raise ConflictError("提案源版本校验失败，请刷新后重试")
+    current = await session.scalar(
+        select(CreationArtifact)
+        .where(
+            CreationArtifact.session_id == item.id,
+            CreationArtifact.artifact_type == target_type,
+            CreationArtifact.status != ARTIFACT_STATUS_SUPERSEDED,
+        )
+        .order_by(CreationArtifact.version.desc())
+        .limit(1)
+    )
+    current_version = current.version if current is not None else 0
+    current_id = current.id if current is not None else None
+    if current_version != source_version or current_id != source.get("id"):
+        raise ConflictError("正式内容已产生新版本，请基于最新版本重新生成提案")
+    proposed = dict(preview.get("proposed") or {})
+    if target_type == ARTIFACT_TYPE_STORY_BIBLE:
+        proposed = StoryBibleContent.model_validate(proposed).model_dump()
+        item.status = SESSION_STATUS_REVIEWING
+        message = "Agent 提案已应用为新的故事设定草稿。"
+    else:
+        proposed = EpisodeOutlineContent.model_validate(proposed).model_dump()
+        item.status = SESSION_STATUS_OUTLINE_REVIEWING
+        message = "Agent 提案已应用为新的分集大纲草稿。"
+    artifact = await create_artifact(session, item, job, target_type, proposed, message)
+    preview.update({
+        "status": "applied",
+        "applied_artifact_id": artifact.id,
+        "applied_version": artifact.version,
+    })
+    job.result = {**job_result, "action_preview": preview}
+    await append_message(
+        session,
+        item.id,
+        "assistant",
+        "agent_action_applied",
+        f"已确认应用“{preview.get('title') or 'Agent 提案'}”为 V{artifact.version}。",
+        job_id=job.id,
+        parameters={"artifact_id": artifact.id, "artifact_version": artifact.version},
+    )
+    await session.flush()
+    return item
+
+
+async def reject_agent_action(
+    session: AsyncSession,
+    job_id: int,
+    actor_id: int,
+    project_id: int,
+) -> Job:
+    job = await job_service.get_job(session, job_id, actor_id)
+    if job.project_id != project_id or job.status != "succeeded":
+        raise ConflictError("Agent 提案尚未完成或不属于当前项目")
+    job_result = dict(job.result or {})
+    preview = dict(job_result.get("action_preview") or {})
+    if not preview:
+        raise ConflictError("当前任务没有可放弃的 Agent 提案")
+    if preview.get("status") == "applied":
+        raise ConflictError("已应用的 Agent 提案不能放弃，可使用版本历史恢复")
+    if preview.get("status") == "rejected":
+        return job
+    preview["status"] = "rejected"
+    job.result = {**job_result, "action_preview": preview}
+    if job.target_type == JOB_TARGET_OUTLINE_AGENT and job.target_id is not None:
+        await append_message(
+            session,
+            job.target_id,
+            "assistant",
+            "agent_action_rejected",
+            f"已放弃“{preview.get('title') or 'Agent 提案'}”，正式内容未改变。",
+            job_id=job.id,
+        )
+    await session.flush()
+    return job
+
+
+async def create_outline_agent_job(
+    session: AsyncSession,
+    item: CreationSession,
+    message: str,
+    attachment_chunk_ids: list[int],
+    uploaded_attachments: list[dict[str, str]] | None = None,
+) -> Job:
+    ai_settings = await provider_service.get_ai_settings(session)
+    if not ai_settings.outline_agent_enabled:
+        raise ConflictError("大纲 Agent 已由管理员停用")
+    uploaded_attachments = uploaded_attachments or []
+    chunks = chunk_reference_text(str(item.settings.get("reference_text") or item.brief))
+    selected_chunk_ids = (
+        attachment_chunk_ids
+        if attachment_chunk_ids
+        else [] if uploaded_attachments else list(
+            range(min(len(chunks), ai_settings.outline_agent_max_chunks))
+        )
+    )
+    if len(selected_chunk_ids) > ai_settings.outline_agent_max_chunks:
+        raise ConflictError(
+            f"大纲 Agent 每次最多读取 {ai_settings.outline_agent_max_chunks} 个剧本片段"
+        )
+    if len(set(selected_chunk_ids)) != len(selected_chunk_ids) or any(
+        chunk_id < 0 or chunk_id >= len(chunks) for chunk_id in selected_chunk_ids
+    ):
+        raise ConflictError("剧本片段不存在，请刷新后重试")
+    latest: dict[str, Any] = {}
+    source_artifacts: dict[str, dict[str, int | None]] = {}
+    for artifact_type in (ARTIFACT_TYPE_STORY_BIBLE, ARTIFACT_TYPE_EPISODE_OUTLINE):
+        artifact = await session.scalar(
+            select(CreationArtifact)
+            .where(
+                CreationArtifact.session_id == item.id,
+                CreationArtifact.artifact_type == artifact_type,
+                CreationArtifact.status != ARTIFACT_STATUS_SUPERSEDED,
+            )
+            .order_by(CreationArtifact.version.desc())
+            .limit(1)
+        )
+        source_artifacts[artifact_type] = {
+            "id": artifact.id if artifact is not None else None,
+            "version": artifact.version if artifact is not None else 0,
+        }
+        if artifact is not None:
+            latest[artifact_type] = artifact.content
+    source_attachments = [
+        {**chunks[chunk_id], "source_name": "项目原稿"}
+        for chunk_id in selected_chunk_ids
+    ]
+    uploaded_chunks: list[dict[str, Any]] = []
+    uploaded_metadata: list[dict[str, Any]] = []
+    for attachment in uploaded_attachments:
+        name = attachment["name"].strip()
+        content = attachment["content"].strip()
+        file_chunks = chunk_reference_text(content)
+        uploaded_metadata.append({
+            "name": name,
+            "char_count": len(content),
+            "chunk_count": len(file_chunks),
+        })
+        uploaded_chunks.extend(
+            {**chunk, "source_name": name}
+            for chunk in file_chunks
+        )
+    attachments = [*source_attachments, *uploaded_chunks]
+    if len(attachments) > ai_settings.outline_agent_max_chunks:
+        raise ConflictError(
+            f"本轮附件共拆分为 {len(attachments)} 个片段，最多允许 "
+            f"{ai_settings.outline_agent_max_chunks} 个；请缩短附件后重试"
+        )
+    skill = await provider_service.get_outline_agent_skill(session)
+    prompt = f"""你是短剧大纲 Agent。根据用户要求决定是否修改结构化内容，只输出 JSON，不要 Markdown。
+JSON 顶层只能使用 reply, story_bible, episode_outline。reply 必填；无需修改的结构化字段必须填 null。
+story_bible 必须包含 title, logline, genre, tone, audience, world, themes, characters, event_timeline；title、logline、genre、tone、audience、world 必须是字符串，themes 必须是字符串数组。
+characters 必须是对象数组，每项只能使用 name, role, goal, conflict, arc；五个字段都必须是字符串，goal、conflict、arc 没有内容时填空字符串。
+event_timeline 必须是对象数组，每项只能使用 title, summary, episode_hint；title、summary 必须是字符串，episode_hint 只能是 1-100 的整数或 null。
+episode_outline 顶层为 episodes，每集字段为 number, title, synopsis, dramatic_goal, cliffhanger，编号必须连续。一次只能生成 story_bible 或 episode_outline，另一个字段必须为 null。
+Agent 运行边界：{ai_settings.outline_agent_instruction}
+固定 Skill：{skill.name}（{skill.key}）
+固定 Skill 指令：{skill.instruction}
+入口约定：本轮只讨论或提议故事设定、分集大纲；即使技能包含其他职责也不执行资产提取、媒体生成或正式写入。仅依据下方实际提供的资料，不宣称已读完整项目。输出严格遵守上方 JSON 契约。
+用户要求：{message.strip()}
+当前结构化内容：{json.dumps(latest, ensure_ascii=False)}
+用户选择的附件片段：{json.dumps(attachments, ensure_ascii=False)}"""
+    audit_parameters = {
+        "agent_workspace": "outline",
+        "skill_id": skill.id,
+        "skill_key": skill.key,
+        "skill_instruction_version": skill.version,
+        "source_reference_version": item.updated_at.isoformat(),
+        "source_artifacts": source_artifacts,
+        "attachment_chunk_ids": selected_chunk_ids,
+        "uploaded_attachments": uploaded_metadata,
+    }
+    request_message = await append_message(
+        session, item.id, "user", "agent_request", message.strip(), parameters=audit_parameters
+    )
+    model, route_source = await provider_service.resolve_agent_model(
+        session, "outline"
+    )
+    job = await create_creation_job(
+        session,
+        item,
+        JOB_TARGET_OUTLINE_AGENT,
+        prompt,
+        "Agent 正在处理上一条消息",
+        provider_model_id=model.id,
+        parameters=audit_parameters,
+    )
+    _attach_agent_execution(job, {
+        "agent": "outline",
+        "surface": "outline_chat",
+        "route_source": route_source,
+        "provider_model_id": model.id,
+        "model_id": model.model_id,
+        "instruction": ai_settings.outline_agent_instruction,
+        "skill_id": skill.id,
+        "skill_key": skill.key,
+        "skill_name": skill.name,
+        "skill_version": skill.version,
+    })
+    request_message.job_id = job.id
+    await session.flush()
+    return job
+
+
+CREATIVE_DIRECTION_OPTIONS = {
+    "recommended": {
+        "title": "按原创意继续",
+        "description": "根据原始创意判断题材、人物关系、核心冲突与集尾钩子，不预设固定类型。",
+    },
+    "character": {
+        "title": "人物关系推进",
+        "description": "把人物目标、关系变化和信任重建作为连续剧情的主要推动力。",
+    },
+    "conflict": {
+        "title": "冲突与博弈",
+        "description": "提高危机密度与反转频率，让每集结尾都形成明确追看悬念。",
+    },
+}
+
+
+def _resolve_creative_direction(selected_option: str) -> dict[str, str]:
+    option = CREATIVE_DIRECTION_OPTIONS.get(selected_option)
+    if option is not None:
+        return {
+            "value": selected_option,
+            "title": option["title"],
+            "description": option["description"],
+        }
+
+    cleaned = selected_option.strip()
+    if not cleaned:
+        raise ConflictError("创作方向不能为空")
+    return {
+        "value": cleaned,
+        "title": cleaned,
+        "description": f"用户自定义方向：{cleaned}",
+    }
+
+
+async def submit_creative_direction(
+    session: AsyncSession,
+    item: CreationSession,
+    selected_option: str,
+    extra_requirements: str,
+    proposal: dict[str, Any] | None = None,
+) -> CreationSession:
+    direction = _resolve_creative_direction(selected_option.strip())
+    if proposal is not None:
+        # 快照是选中方案内容的唯一来源；标题必须与快照同源，
+        # 否则会出现“旧标题配新内容”。
+        direction = {
+            "value": direction["value"],
+            "title": str(proposal.get("title") or direction["title"]),
+            "description": str(proposal.get("difference") or direction["description"]),
+        }
+    settings = dict(item.settings)
+    workflow = dict(settings.get("creative_workflow") or {})
+    workflow.update({
+        "stage": "awaiting_story_confirmation",
+        "selected_option": direction["value"],
+        "selected_title": direction["title"],
+        "extra_requirements": extra_requirements.strip(),
+    })
+    # 重新选择时必须清除旧快照，避免留着上一次的方案内容。
+    if proposal is not None:
+        workflow["selected_proposal"] = dict(proposal)
+    else:
+        workflow.pop("selected_proposal", None)
+    settings["creative_workflow"] = workflow
+    item.settings = settings
+    await append_message(
+        session,
+        item.id,
+        "user",
+        "direction_selection",
+        direction["title"],
+        parameters={
+            "selected_option": direction["value"],
+            "selected_title": direction["title"],
+            "extra_requirements": extra_requirements.strip(),
+        },
+    )
+    await append_message(
+        session,
+        item.id,
+        "assistant",
+        "story_confirmation",
+        "已整理创作方向。确认后将写入故事设定，并生成可编辑的结构化内容。",
+        parameters={
+            "selected_option": direction["value"],
+            "selected_title": direction["title"],
+            "description": direction["description"],
+            "extra_requirements": extra_requirements.strip(),
+        },
+    )
+    await session.flush()
+    return item
+
+
+async def propose_creative_directions(
+    item: CreationSession,
+    *,
+    genre: str = "",
+    conflict: str = "",
+    characters: str = "",
+    tone: str = "",
+) -> dict[str, Any]:
+    from app.services.story_direction_proposals import (
+        propose_creative_directions as build_proposals,
+        understanding_fingerprint,
+    )
+
+    return {
+        "proposals": build_proposals(
+            brief=item.brief,
+            genre=genre,
+            conflict=conflict,
+            characters=characters,
+            tone=tone,
+        ),
+        # 指纹跟着候选一起返回，前端才能判断“理解改了、候选过期”。
+        "fingerprint": understanding_fingerprint(
+            brief=item.brief,
+            genre=genre,
+            conflict=conflict,
+            characters=characters,
+            tone=tone,
+        ),
+    }
+
+
+async def update_creative_specs(
+    session: AsyncSession,
+    item: CreationSession,
+    project: Project,
+    *,
+    episode_count: int,
+    episode_duration: int,
+    market: str,
+) -> CreationSession:
+    patch = {
+        "episode_count": episode_count,
+        "episode_duration": episode_duration,
+        "market": market,
+    }
+    session_settings = dict(item.settings or {})
+    session_settings.update(patch)
+    item.settings = session_settings
+    project_settings = dict(project.creation_settings or {})
+    project_settings.update(patch)
+    project.creation_settings = project_settings
+    await session.flush()
+    return item
+
+
+async def confirm_creative_story(
+    session: AsyncSession,
+    item: CreationSession,
+    action: str,
+    adjustment: str,
+) -> Job | None:
+    settings = dict(item.settings)
+    workflow = dict(settings.get("creative_workflow") or {})
+    selected_option = str(workflow.get("selected_option") or "")
+    direction = _resolve_creative_direction(selected_option)
+    if action == "adjust":
+        workflow.update({
+            "stage": "awaiting_direction",
+            "adjustment": adjustment.strip(),
+        })
+        settings["creative_workflow"] = workflow
+        item.settings = settings
+        await append_message(
+            session,
+            item.id,
+            "user",
+            "story_adjustment",
+            adjustment.strip() or "返回调整创作方向",
+        )
+        await session.flush()
+        return None
+
+    workflow["stage"] = "generating_story_bible"
+    settings["creative_workflow"] = workflow
+    item.settings = settings
+    market = "海外市场" if settings.get("market") == "overseas" else "国内市场"
+    episode_count = int(settings.get("episode_count") or 10)
+    episode_duration = int(settings.get("episode_duration") or 0)
+    duration_line = f"每集目标时长：{episode_duration} 秒。" if 1 <= episode_duration <= 3600 else "每集目标时长尚未确定，不要擅自写成固定秒数。"
+    prompt = f"""请根据以下创作输入生成故事设定。只修改 story_bible，不要生成 episode_outline。
+必须返回符合当前 Agent JSON 协议的 reply 和 story_bible；story_bible 必须完整包含 title、logline、genre、tone、audience、world、themes、characters、event_timeline。
+创作方向：{direction['title']}。方向说明：{direction['description']}
+目标市场：{market}。计划集数：{episode_count} 集。{duration_line}
+不要预设喜剧或其他固定类型；题材、冲突和基调必须从原始创意与创作方向推导。
+补充要求：{workflow.get('extra_requirements') or '无'}
+用户原始创意：{item.brief}
+请确保设定适合后续逐集生成，人物目标、冲突和世界规则明确。"""
+    return await create_outline_agent_job(session, item, prompt, [])
+
+
+async def restore_artifact_version(
+    session: AsyncSession,
+    item: CreationSession,
+    artifact_id: int,
+    artifact_type: str,
+) -> CreationArtifact:
+    source = await session.get(CreationArtifact, artifact_id)
+    if source is None or source.session_id != item.id or source.artifact_type != artifact_type:
+        raise NotFoundError("要恢复的版本不存在")
+    drafts = list((await session.execute(select(CreationArtifact).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == artifact_type,
+        CreationArtifact.status == ARTIFACT_STATUS_DRAFT,
+    ))).scalars())
+    for draft in drafts:
+        draft.status = ARTIFACT_STATUS_SUPERSEDED
+    version = int(await session.scalar(select(func.coalesce(func.max(CreationArtifact.version), 0)).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == artifact_type,
+    ))) + 1
+    restored = CreationArtifact(
+        session_id=item.id,
+        artifact_type=artifact_type,
+        version=version,
+        status=ARTIFACT_STATUS_DRAFT,
+        content=source.content,
+        source_job_id=source.source_job_id,
+    )
+    session.add(restored)
+    item.status = (
+        SESSION_STATUS_REVIEWING
+        if artifact_type == ARTIFACT_TYPE_STORY_BIBLE
+        else SESSION_STATUS_OUTLINE_REVIEWING
+    )
+    await append_message(
+        session, item.id, "assistant", "version_restore",
+        f"已将 {artifact_type} v{source.version} 恢复为 v{version} 草稿。",
+    )
+    await session.flush()
+    return restored
+
+
+async def update_creation_artifact(
+    session: AsyncSession,
+    item: CreationSession,
+    artifact_id: int,
+    artifact_type: str,
+    content: dict[str, Any],
+    expected_revision: int | None = None,
+) -> CreationArtifact:
+    artifact = await session.get(CreationArtifact, artifact_id)
+    if (
+        artifact is None
+        or artifact.session_id != item.id
+        or artifact.artifact_type != artifact_type
+        or artifact.status != ARTIFACT_STATUS_DRAFT
+    ):
+        raise NotFoundError("可编辑的创作产物不存在")
+    if expected_revision is not None and artifact.revision != expected_revision:
+        raise ConflictError("大纲已被其他窗口修改，请刷新后重试")
+    artifact.content = content
+    artifact.revision += 1
+    await session.flush()
+    return artifact
+
+
+async def save_episode_outline_version(
+    session: AsyncSession,
+    item: CreationSession,
+    artifact_id: int,
+    content: dict[str, Any],
+) -> CreationArtifact:
+    current = await session.get(CreationArtifact, artifact_id)
+    if (
+        current is None
+        or current.session_id != item.id
+        or current.artifact_type != ARTIFACT_TYPE_EPISODE_OUTLINE
+        or current.status != ARTIFACT_STATUS_DRAFT
+    ):
+        raise NotFoundError("可保存的分集大纲不存在")
+    validated = EpisodeOutlineContent.model_validate(content).model_dump()
+    current.status = ARTIFACT_STATUS_SUPERSEDED
+    version = int(await session.scalar(select(func.coalesce(func.max(CreationArtifact.version), 0)).where(
+        CreationArtifact.session_id == item.id,
+        CreationArtifact.artifact_type == ARTIFACT_TYPE_EPISODE_OUTLINE,
+    ))) + 1
+    snapshot = CreationArtifact(
+        session_id=item.id,
+        artifact_type=ARTIFACT_TYPE_EPISODE_OUTLINE,
+        version=version,
+        status=ARTIFACT_STATUS_DRAFT,
+        content=validated,
+        source_job_id=current.source_job_id,
+    )
+    session.add(snapshot)
+    item.status = SESSION_STATUS_OUTLINE_REVIEWING
+    await append_message(
+        session,
+        item.id,
+        "assistant",
+        "outline_version_saved",
+        f"分集大纲已保存为 v{version}。",
+        parameters={"source_artifact_id": current.id, "version": version},
+    )
+    await session.flush()
+    return snapshot
+
+
+async def confirm_episode_outline(
+    session: AsyncSession,
+    item: CreationSession,
+    artifact_id: int,
+    content: dict[str, Any] | None = None,
+    expected_revision: int | None = None,
+) -> CreationArtifact:
+    # 内容与版本号必须成对出现，否则调用方可能以为做了版本校验而实际没有。
+    if (content is None) != (expected_revision is None):
+        raise ConflictError("保存并确认需要同时提供内容与版本号")
+    if item.status != SESSION_STATUS_OUTLINE_REVIEWING:
+        raise ConflictError("当前分集大纲不能确认")
+    artifact = await session.get(CreationArtifact, artifact_id)
+    if (
+        artifact is None
+        or artifact.session_id != item.id
+        or artifact.artifact_type != ARTIFACT_TYPE_EPISODE_OUTLINE
+        or artifact.status != ARTIFACT_STATUS_DRAFT
+    ):
+        raise NotFoundError("可确认的分集大纲不存在")
+    # 原子入口：先按版本校验写入当前编辑内容，再确认，避免确认吞掉未保存的改动。
+    if expected_revision is not None:
+        if artifact.revision != expected_revision:
+            raise ConflictError("大纲已被其他窗口修改，请刷新后重试")
+        artifact.content = EpisodeOutlineContent.model_validate(content).model_dump()
+        artifact.revision += 1
+    artifact.status = ARTIFACT_STATUS_CONFIRMED
+    item.status = SESSION_STATUS_OUTLINE_CONFIRMED
+    if item.project_id is not None:
+        project = await project_service.get_project(session, item.project_id, item.owner_id)
+        existing = {
+            episode.number: episode
+            for episode in await project_service.list_episodes(session, project.id)
+        }
+        content = EpisodeOutlineContent.model_validate(artifact.content)
+        inherited_duration = int((item.settings or {}).get("episode_duration") or 0)
+        if inherited_duration < 1 or inherited_duration > 3600:
+            inherited_duration = 0
+        for episode_data in content.episodes:
+            # 时长三级优先级：分集已有值 > 大纲规划值 > 会话设定值。
+            # 一律只填空不覆盖——已有分集时长不允许被大纲导入静默改写。
+            planned_duration = episode_data.duration_seconds or inherited_duration
+            values = {
+                "title": episode_data.title,
+                "synopsis": episode_data.synopsis,
+            }
+            episode = existing.get(episode_data.number)
+            if episode is None:
+                if planned_duration:
+                    values["duration_estimate"] = planned_duration
+                await project_service.create_episode(
+                    session, project, {"number": episode_data.number, **values}
+                )
+            else:
+                if planned_duration and not episode.duration_estimate:
+                    values["duration_estimate"] = planned_duration
+                await project_service.update_episode(session, episode, values)
+    await session.flush()
+    return artifact
+
+
+async def publish_first_episode(
+    session: AsyncSession, item: CreationSession, artifact_id: int, owner: User
+) -> Project:
+    if item.project_id is not None:
+        return await project_service.get_project(session, item.project_id, owner.id)
+    if item.status != SESSION_STATUS_SCRIPT_REVIEWING:
+        raise ConflictError("请先生成并检查第一集正文")
+    bible = await get_artifact(
+        session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    outline = await get_artifact(
+        session, item, ARTIFACT_TYPE_EPISODE_OUTLINE, status=ARTIFACT_STATUS_CONFIRMED
+    )
+    script_artifact = await session.get(CreationArtifact, artifact_id)
+    if (
+        script_artifact is None
+        or script_artifact.session_id != item.id
+        or script_artifact.artifact_type != ARTIFACT_TYPE_EPISODE_SCRIPT
+        or script_artifact.status != ARTIFACT_STATUS_DRAFT
+    ):
+        raise NotFoundError("可发布的第一集正文不存在")
+    script = EpisodeScriptContent.model_validate(script_artifact.content)
+    project = await project_service.create_project(session, owner, {
+        "name": bible.content["title"],
+        "description": bible.content["logline"],
+        "genre": bible.content["genre"][:64],
+        "creation_settings": item.settings,
+    })
+    for episode_data in outline.content["episodes"]:
+        is_script_episode = episode_data["number"] == script.episode_number
+        episode = await project_service.create_episode(session, project, {
+            "number": episode_data["number"],
+            "title": script.title if is_script_episode else episode_data["title"],
+            "synopsis": script.synopsis if is_script_episode else episode_data["synopsis"],
+        })
+        if is_script_episode:
+            await script_version_service.save_script(
+                session,
+                episode,
+                script.script,
+                expected=0,
+                actor_id=owner.id,
+                note="由已确认的 AI 创作会话生成",
+                source="ai",
+            )
+    script_artifact.status = ARTIFACT_STATUS_CONFIRMED
+    item.project_id = project.id
+    item.status = SESSION_STATUS_COMPLETED
+    await session.flush()
+    return project
+
+
+async def get_first_episode(session: AsyncSession, item: CreationSession):
+    if item.project_id is None:
+        raise ConflictError("请先确认第一集正文并创建项目")
+    project = await project_service.get_project(session, item.project_id, item.owner_id)
+    episodes = await project_service.list_episodes(session, project.id)
+    episode = next((entry for entry in episodes if entry.number == 1), None)
+    if episode is None or not (episode.script or "").strip():
+        raise ConflictError("第一集正文不存在")
+    return project, episode
+
+
+async def create_scene_shot_draft_job(
+    session: AsyncSession, item: CreationSession
+) -> Job:
+    if item.status not in {SESSION_STATUS_COMPLETED, SESSION_STATUS_BREAKDOWN_REVIEWING}:
+        raise ConflictError("请先完成第一集正文")
+    _project, episode = await get_first_episode(session, item)
+    if await project_service.list_scenes(session, episode.id):
+        raise ConflictError("第一集已经包含正式场景，不能用 AI 草稿覆盖")
+    prompt = f"""你是短剧分镜师。把第一集剧本拆成可拍摄的场景和分镜，只输出 JSON，不要 Markdown。
+JSON 顶层字段为 episode_number 和 scenes，episode_number 必须为 1。
+每个 scene 字段为 number, name, location, time_of_day, description, shots。
+每个 shot 字段为 number, duration, shot_size, camera_angle, camera_movement, action, dialogue, audio_note, characters。
+scene 和 shot 的 number 都必须各自从 1 连续排列；总分镜不超过 200。不要生成图片或视频 Prompt。
+第一集剧本：{episode.script}"""
+    job = await create_creation_job(
+        session, item, ARTIFACT_TYPE_SCENE_SHOT_DRAFT, prompt, "场景分镜正在拆分",
+        agent_key="script", execution_surface="scene_shot_draft",
+    )
+    item.status = SESSION_STATUS_BREAKDOWN_GENERATING
+    return job
+
+
+async def publish_scene_shot_draft(
+    session: AsyncSession, item: CreationSession, artifact_id: int
+) -> dict[str, int]:
+    project, episode = await get_first_episode(session, item)
+    artifact = await session.get(CreationArtifact, artifact_id)
+    if artifact is None or artifact.session_id != item.id or artifact.artifact_type != ARTIFACT_TYPE_SCENE_SHOT_DRAFT:
+        raise NotFoundError("场景分镜草稿不存在")
+    existing_scenes = await project_service.list_scenes(session, episode.id)
+    if artifact.status == ARTIFACT_STATUS_CONFIRMED and item.status == SESSION_STATUS_BREAKDOWN_COMPLETED:
+        shot_count = 0
+        for scene in existing_scenes:
+            shot_count += len(await project_service.list_shots(session, scene.id))
+        return {
+            "project_id": project.id,
+            "episode_id": episode.id,
+            "scene_count": len(existing_scenes),
+            "shot_count": shot_count,
+        }
+    if item.status != SESSION_STATUS_BREAKDOWN_REVIEWING or artifact.status != ARTIFACT_STATUS_DRAFT:
+        raise ConflictError("当前场景分镜草稿不能确认")
+    if existing_scenes:
+        raise ConflictError("第一集已经包含正式场景，不能覆盖现有内容")
+    content = SceneShotDraftContent.model_validate(artifact.content)
+    if content.episode_number != 1:
+        raise ConflictError("场景分镜草稿不属于第一集")
+    shot_count = 0
+    for scene_data in content.scenes:
+        scene = await project_service.create_scene(session, episode, {
+            "order": scene_data.number - 1,
+            "name": scene_data.name,
+            "location": scene_data.location,
+            "time_of_day": scene_data.time_of_day or None,
+            "description": scene_data.description or None,
+        })
+        for shot_data in scene_data.shots:
+            await project_service.create_shot(session, scene, {
+                "order": shot_data.number - 1,
+                "duration": shot_data.duration,
+                "shot_size": shot_data.shot_size,
+                "camera_angle": shot_data.camera_angle or None,
+                "camera_movement": shot_data.camera_movement or None,
+                "action": shot_data.action,
+                "dialogue": shot_data.dialogue or None,
+                "audio_note": shot_data.audio_note or None,
+                "refs": {"characters": shot_data.characters},
+            })
+            shot_count += 1
+    artifact.status = ARTIFACT_STATUS_CONFIRMED
+    item.status = SESSION_STATUS_BREAKDOWN_COMPLETED
+    await session.flush()
+    return {
+        "project_id": project.id,
+        "episode_id": episode.id,
+        "scene_count": len(content.scenes),
+        "shot_count": shot_count,
+    }

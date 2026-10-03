@@ -1,0 +1,26 @@
+.creator-login { font-family:var(--font-family, inherit); }
+.login-story h1 { letter-spacing:0; }
+.login-story > .hero-eyebrow, .login-story h1, .login-story > p, .login-steps { animation:login-intro .8s ease both; }
+.login-story h1 { animation-delay:.12s; }
+.login-story > p { animation-delay:.24s; }
+.login-steps { animation-delay:.5s; gap:10px; flex-wrap:wrap; }
+.login-steps i { width:16px; }
+.login-script { animation:login-script-float 7s ease-in-out infinite; }
+.login-shot { animation:login-shot-float 6s ease-in-out infinite; }
+.login-spark { animation:login-glimmer 4s ease-in-out infinite; }
+.login-steps span { animation:login-step-light 12s ease-in-out infinite; }
+.login-steps span:nth-of-type(2) { animation-delay:3s; }
+.login-steps span:nth-of-type(3) { animation-delay:6s; }
+.login-steps span:nth-of-type(4) { animation-delay:9s; }
+.login-form > .lavender-badge { font-size:12px; }
+.login-form > p, .login-form label { font-size:14px; }
+.creator-app .login-form input, .creator-app .login-submit { font-size:16px; }
+.creator-app .login-password button { font-size:14px; top:13px; }
+.creator-app .login-password input { padding-right:68px; }
+.login-help { font-size:12px; }
+@keyframes login-intro { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+@keyframes login-script-float { 0%,100% { transform:rotate(-7deg) translateY(0); } 50% { transform:rotate(-5deg) translateY(-8px); } }
+@keyframes login-shot-float { 0%,100% { transform:rotate(7deg) translateY(0); } 50% { transform:rotate(9deg) translateY(-10px); } }
+@keyframes login-glimmer { 0%,100% { opacity:.55; transform:scale(.9); } 50% { opacity:1; transform:scale(1.08) rotate(10deg); } }
+@keyframes login-step-light { 0%,23% { color:#7b58d3; } 28%,100% { color:#8b8195; } }
+@media(prefers-reduced-motion:reduce) { .creator-login *, .creator-login *::after { animation:none!important; transition:none!important; } }

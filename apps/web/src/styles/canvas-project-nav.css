@@ -1,0 +1,52 @@
+.canvas-topbar > nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: auto;
+}
+
+.canvas-topbar > nav a {
+  padding: 7px 10px;
+  border-radius: 5px;
+  color: #6c6863;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.canvas-topbar > nav a.active {
+  background: #29272d;
+  color: #fff;
+}
+
+@media (max-width: 900px) {
+  .canvas-topbar > nav {
+    max-width: 42vw;
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .canvas-page {
+    grid-template-rows: 96px minmax(0, 1fr);
+  }
+
+  .canvas-topbar {
+    flex-wrap: wrap;
+    align-content: center;
+    gap: 0 8px;
+    padding: 0 10px;
+  }
+
+  .canvas-topbar > nav {
+    order: 3;
+    width: 100%;
+    max-width: none;
+    margin: 2px 0 0;
+    overflow-x: auto;
+  }
+
+  .canvas-topbar > nav a {
+    flex: 0 0 auto;
+    padding: 6px 9px;
+  }
+}
