@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="600" viewBox="0 0 1280 600" role="img" aria-labelledby="title desc">
+  <title id="title">无限画布与 AI 图像视频节点工作流</title><desc id="desc">提示词、角色与场景节点连接图像候选，再作为视频参考输入，并关联声音与镜头素材。是工作流示意，不是软件截图。</desc>
+  <defs><pattern id="grid" width="22" height="22" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#e3e5e9"/></pattern><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M1 1L9 5L1 9" fill="none" stroke="#8893a7" stroke-width="1.5"/></marker></defs>
+  <rect width="1280" height="600" fill="#f8f9fb"/><rect y="116" width="1280" height="408" fill="url(#grid)"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif" letter-spacing="0">
+    <text x="40" y="53" font-size="30" font-weight="700" fill="#292d34">让每一次生成，都有上下文。</text><text x="40" y="87" font-size="17" fill="#727986">连接提示词与参考素材，在无限画布中持续推进创作。</text><text x="1240" y="53" text-anchor="end" font-size="19" fill="#657caa">INFINITE CANVAS</text>
+    <g fill="none" stroke="#8893a7" stroke-width="1.7" marker-end="url(#arrow)"><path d="M270 186C330 186 316 263 370 263"/><path d="M270 331C320 331 320 296 370 296"/><path d="M270 456C326 456 307 330 370 330"/><path d="M650 296H750"/><path d="M1020 296C1050 296 1027 400 1060 400"/><path d="M1150 257V347"/></g>
+    <g fill="#fff" stroke="#dce1ea"><rect x="40" y="136" width="230" height="105" rx="8"/><rect x="40" y="279" width="230" height="105" rx="8"/><rect x="40" y="403" width="230" height="105" rx="8"/><rect x="370" y="210" width="280" height="174" rx="8"/><rect x="750" y="210" width="270" height="174" rx="8"/><rect x="1060" y="157" width="180" height="100" rx="8"/><rect x="1060" y="353" width="180" height="110" rx="8"/></g>
+    <g font-size="14" fill="#657caa"><text x="62" y="167">PROMPT</text><text x="62" y="311">CHARACTER</text><text x="62" y="435">SCENE</text><text x="393" y="243">IMAGE</text><text x="773" y="243">VIDEO</text><text x="1080" y="189">AUDIO</text><text x="1080" y="386">SHOT ASSET</text></g>
+    <g font-size="21" font-weight="700" fill="#292d34"><text x="62" y="202">镜头提示词</text><text x="62" y="346">角色参考</text><text x="62" y="470">场景参考</text><text x="393" y="282">图像候选</text><text x="773" y="282">视频生成</text><text x="1080" y="223">配音与声音</text><text x="1080" y="422">镜头素材</text></g>
+    <g font-size="16" fill="#727986"><text x="393" y="314">参考素材 + 创作描述</text><text x="393" y="347">选择合适的画面继续创作</text><text x="773" y="314">参考图 / 首帧 / 尾帧</text><text x="773" y="347">依模型实际能力配置输入</text></g>
+    <rect x="672" y="260" width="59" height="22" fill="#f8f9fb"/><text x="701" y="276" text-anchor="middle" font-size="12" fill="#657caa">引用</text>
+    <path d="M40 547H1240" stroke="#dce1ea"/><text x="40" y="579" font-size="14" fill="#727986">Dralo Studio · 自备模型渠道 · 节点与素材复用</text><text x="1240" y="579" text-anchor="end" font-size="14" fill="#9097a3">工作流结构示意 / 不是产品截图</text>
+  </g>
+</svg>

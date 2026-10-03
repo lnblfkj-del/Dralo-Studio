@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" role="img" aria-labelledby="title desc">
+  <title id="title">短剧分镜与多轨成片工作流</title><desc id="desc">三个镜头的景别示意，与画面、声音、字幕的多轨时间线结构。这不是软件界面或真实生成素材。</desc>
+  <rect width="1280" height="560" fill="#f9faf9"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif" letter-spacing="0">
+    <text x="48" y="56" font-size="30" font-weight="700" fill="#2b302e">画面、声音与节奏，在这里相遇。</text><text x="48" y="89" font-size="17" fill="#727b76">围绕故事组织镜头，再把片段放回作品的时间里。</text><text x="1232" y="56" text-anchor="end" font-size="19" fill="#3c7e66">STORYBOARD / EDIT</text>
+    <g fill="#edf1ee" stroke="#dce4de"><rect x="48" y="132" width="370" height="124" rx="8"/><rect x="455" y="132" width="370" height="124" rx="8"/><rect x="862" y="132" width="370" height="124" rx="8"/></g>
+    <g fill="none" stroke="#8aa294" stroke-width="2"><path d="M67 223L143 171L225 223L317 176L401 223"/><path d="M501 235V170H566V235M581 235V156H647V235M662 235V187H729V235"/><circle cx="996" cy="182" r="26"/><path d="M949 242C950 208 1042 208 1043 242"/></g>
+    <g font-size="16" font-weight="600" fill="#3c7e66"><text x="68" y="158">01 / 远景 · 建立场景</text><text x="475" y="158">02 / 中景 · 推进行动</text><text x="882" y="158">03 / 特写 · 捕捉情绪</text></g>
+    <g font-size="13" fill="#7e8882"><text x="178" y="299">00:00</text><text x="494" y="299">00:05</text><text x="809" y="299">00:10</text><text x="1192" y="299">00:15</text></g>
+    <path d="M178 310H1232" stroke="#dce4de"/>
+    <g font-size="17" fill="#596760"><text x="48" y="350">画面</text><text x="48" y="407">声音</text><text x="48" y="464">字幕</text></g>
+    <g fill="#e6edf7"><rect x="178" y="327" width="313" height="39" rx="4"/><rect x="502" y="327" width="311" height="39" rx="4"/><rect x="824" y="327" width="408" height="39" rx="4"/></g>
+    <g fill="#e3eee7"><rect x="178" y="384" width="635" height="39" rx="4"/><rect x="824" y="384" width="408" height="39" rx="4"/></g>
+    <g fill="#f1e8e9"><rect x="178" y="441" width="235" height="39" rx="4"/><rect x="440" y="441" width="337" height="39" rx="4"/><rect x="820" y="441" width="370" height="39" rx="4"/></g>
+    <g font-size="15" fill="#597191"><text x="194" y="352">镜头 01</text><text x="518" y="352">镜头 02</text><text x="840" y="352">镜头 03</text></g>
+    <g font-size="15" fill="#3c7e66"><text x="194" y="409">对白与配音</text><text x="840" y="409">音乐与氛围</text></g>
+    <g font-size="15" fill="#96727c"><text x="194" y="466">字幕内容</text><text x="456" y="466">字幕内容</text><text x="836" y="466">字幕内容</text></g>
+    <path d="M48 510H1232" stroke="#dce4de"/><text x="48" y="542" font-size="14" fill="#727b76">Dralo Studio · 分集分镜 · 资产复用 · 多轨整理</text><text x="1232" y="542" text-anchor="end" font-size="14" fill="#8b958f">功能结构示意 / 不代表实机截图</text>
+  </g>
+</svg>

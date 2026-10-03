@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="510" viewBox="0 0 1280 510" role="img" aria-labelledby="title desc">
+  <title id="title">Dralo Studio：从剧本到镜头的 AI 短剧创作流程</title>
+  <desc id="desc">五个相连的创作阶段：故事与剧本、角色与场景、分集与分镜、无限画布、多轨成片。功能结构示意，不是产品截图。</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M1 1L9 5L1 9" fill="none" stroke="#74817d" stroke-width="1.5"/></marker></defs>
+  <rect width="1280" height="510" fill="#f8faf9"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif" letter-spacing="0">
+    <text x="48" y="58" font-size="30" font-weight="700" fill="#272c2b">从一个故事，走向一部作品。</text>
+    <text x="48" y="91" font-size="17" fill="#6e7773">故事是主线，模型是工具，选择始终在创作者手中。</text>
+    <text x="1232" y="58" text-anchor="end" font-size="20" font-weight="600" fill="#277562">Dralo Studio</text>
+    <g fill="#fff" stroke="#dce3df"><rect x="48" y="140" width="224" height="260" rx="8"/><rect x="288" y="140" width="224" height="260" rx="8"/><rect x="528" y="140" width="224" height="260" rx="8"/><rect x="768" y="140" width="224" height="260" rx="8"/><rect x="1008" y="140" width="224" height="260" rx="8"/></g>
+    <g stroke="#74817d" stroke-width="1.5" fill="none" marker-end="url(#arrow)"><path d="M273 270H284"/><path d="M513 270H524"/><path d="M753 270H764"/><path d="M993 270H1004"/></g>
+    <g font-size="14" font-weight="600" fill="#277562"><text x="70" y="174">01 / STORY</text><text x="310" y="174">02 / WORLD</text><text x="550" y="174">03 / SHOTS</text><text x="790" y="174">04 / CANVAS</text><text x="1030" y="174">05 / EDIT</text></g>
+    <g font-size="22" font-weight="700" fill="#272c2b"><text x="70" y="214">故事与剧本</text><text x="310" y="214">角色与场景</text><text x="550" y="214">分集与分镜</text><text x="790" y="214">无限画布</text><text x="1030" y="214">多轨成片</text></g>
+    <g font-size="17" fill="#626c67"><text x="70" y="252">灵感 / 剧本导入</text><text x="70" y="281">故事设定 / 分集大纲</text><text x="310" y="252">人物 / 场景 / 道具</text><text x="310" y="281">视觉风格 / 项目资产</text><text x="550" y="252">片段 / 镜头组织</text><text x="550" y="281">机位预演 / 素材选择</text><text x="790" y="252">节点 / 引用 / 连线</text><text x="790" y="281">图像 / 视频 / 声音</text><text x="1030" y="252">画面 / 声音 / 字幕</text><text x="1030" y="281">时间线 / 节奏整理</text></g>
+    <g fill="#f0f4f2"><rect x="70" y="314" width="180" height="58" rx="4"/><rect x="310" y="314" width="180" height="58" rx="4"/><rect x="550" y="314" width="180" height="58" rx="4"/><rect x="790" y="314" width="180" height="58" rx="4"/><rect x="1030" y="314" width="180" height="58" rx="4"/></g>
+    <g font-size="15" fill="#277562"><text x="86" y="350">把故事方向落下来</text><text x="326" y="350">让故事世界清晰起来</text><text x="566" y="350">把文字推进为画面</text><text x="806" y="350">把创作关系连接起来</text><text x="1046" y="350">让片段拥有作品节奏</text></g>
+    <path d="M48 437H1232" stroke="#dce3df"/>
+    <text x="48" y="475" font-size="15" fill="#6e7773">本地运行 · 自备模型渠道 · 项目素材自主管理</text>
+    <text x="1232" y="475" text-anchor="end" font-size="14" fill="#88908d">功能结构示意 / 不代表实机截图或生成效果</text>
+  </g>
+</svg>
