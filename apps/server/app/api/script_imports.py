@@ -12,7 +12,7 @@ from app.schemas.script_import import (
     ScriptImportSessionUpdate,
 )
 from app.services import script_import_service
-from app.services.import_source_view import session_view, split_point
+from app.services.import_source_view import session_view, split_point, duration_hint
 from app.core.errors import ValidationError
 
 router = APIRouter(prefix="/import-sessions")
@@ -26,7 +26,12 @@ async def preview_boundary(
     item = await script_import_service.get_import_session(session, import_session_id, user.id)
     if not start < end <= len(item.source_text):
         raise ValidationError("原文区间无效")
-    return {"char_count": len(item.source_text[start:end].strip()), **split_point(item.source_text, start, end)}
+    split = split_point(item.source_text, start, end)
+    preface = item.source_text[:item.episode_boundaries[0]["start"]] if item.episode_boundaries else ""
+    return {"char_count": len(item.source_text[start:end].strip()), **split,
+            "duration_hint": duration_hint(item.source_text[start:end], preface),
+            "first_hint": duration_hint(item.source_text[start:split["point"]], preface),
+            "second_hint": duration_hint(item.source_text[split["point"]:end], preface)}
 
 
 @router.get("/{import_session_id}/source")

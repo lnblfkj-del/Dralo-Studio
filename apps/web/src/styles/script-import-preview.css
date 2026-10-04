@@ -10,3 +10,19 @@
 @media(max-width:1100px){.import-demo__preview-controls>span{display:none}.import-demo__settings{grid-template-columns:1fr 190px}.import-demo__settings>div:last-child{grid-column:1/-1}.import-demo th,.import-demo td{padding:14px 16px}.import-demo th:nth-child(4){width:210px}}
 @media(max-width:650px){.import-demo__heading{flex-wrap:wrap}.import-demo__preview-controls{margin-left:50px;padding-top:0}.import-demo__heading-copy{flex:1}.import-demo__heading h1{font-size:26px}}
 @media(max-width:650px){.import-demo__main,.import-demo__nav{width:calc(100% - 24px)}.import-demo__nav>span{display:none}.import-demo__nav>.ui-field{margin-left:auto;width:150px}.import-demo__settings{grid-template-columns:1fr;padding:18px}.import-demo__settings>div:last-child{grid-template-columns:1fr}.import-demo__settings>div:last-child>.ui-button{grid-row:auto;grid-column:1;justify-self:start;margin-top:8px}.import-demo__file{padding:18px}.import-demo__file>small{display:none}.import-demo__alert{flex-wrap:wrap}.import-demo__episodes>header{padding:18px}.import-demo__episodes header>span{display:none}.import-demo__actions{padding:12px;flex-wrap:wrap}.import-demo__actions>div{flex-basis:100%}.import-demo__pagination{padding:12px;font-size:11px}}
+.import-demo .import-demo__settings>div:last-child{grid-column:1/-1;grid-template-columns:170px minmax(160px,240px) minmax(160px,240px);align-items:center;gap:12px}
+.import-demo .import-demo__settings>div:last-child>strong{font-weight:600;font-size:14px}
+.import-demo__settings>.ui-field{min-width:0}
+.import-demo__card:has(.import-demo__structure){overflow:visible}
+.import-demo__structure .select-menu-list{width:240px;max-width:calc(100vw - 48px)}
+.import-demo__structure .brief-option{border:1px solid var(--app-color-border);border-radius:var(--app-radius-control);background:var(--app-color-bg-surface)}
+.import-demo__settings>div:nth-child(3){display:grid;gap:10px}
+.import-demo__settings>div:nth-child(3)>p{margin:0;color:var(--app-color-text-muted);font-size:13px}
+.import-demo__settings>div:nth-child(3)>.ui-button{justify-self:start}
+.import-demo .import-demo__episodes th:nth-child(3){width:160px}
+.import-demo .import-demo__episodes th:first-child{width:90px;white-space:nowrap}
+.import-demo .import-demo__episodes th:first-child,.import-demo .import-demo__episodes td:first-child{padding-inline:20px}
+.import-demo .import-demo__episodes td:nth-child(3){padding-inline:14px}
+.import-demo td:nth-child(3)>input{min-width:112px}
+@media(max-width:1100px){.import-demo__settings>div:nth-child(3){grid-column:1/-1}}
+@media(max-width:650px){.import-demo .import-demo__settings>div:last-child{grid-template-columns:minmax(0,1fr)}.import-demo__structure .select-menu-list{width:100%}}

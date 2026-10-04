@@ -38,6 +38,7 @@ from app.schemas.script_import import ScriptImportSessionCreate, ScriptImportSes
 from app.services import creation_service, project_service
 from app.services.reference_service import analyze_script_structure
 from app.services.source_index_service import build_source_index, parse_source_async
+from app.schemas.script_import import ImportIssue
 
 PARSER_VERSION = "import-v2"
 _SCENE_LINE = re.compile(
@@ -147,6 +148,19 @@ def _issue(
     }
 
 
+def creative_notes_issue(source_text, boundaries):
+    if not boundaries:
+        return None
+    last = boundaries[-1]
+    match = re.search(r"(?m)^(?:角色语言规则|全片对白原则|创作说明|编剧说明|制作说明)\s*$", source_text[int(last["start"]):int(last["end"])])
+    if not match:
+        return None
+    start = int(last["start"]) + match.start()
+    if start <= int(last["start"]):
+        return None
+    return ImportIssue(**_issue("creative_notes", "warning", "末集后检测到创作说明，建议单独保留，不作为本集剧情。彩蛋仍保留在剧情中。", source_range={"start": start, "end": int(last["end"])}))
+
+
 def analyze_import_source(source_text: str) -> dict[str, Any]:
     """Classify conservatively and keep every boundary tied to the original text."""
     structure = analyze_script_structure(source_text)
@@ -210,7 +224,7 @@ def analyze_import_source(source_text: str) -> dict[str, Any]:
             _issue(
                 "unclassified_text",
                 "warning",
-                "第 1 集之前存在未归类文本, 原文已保留并等待核对。",
+                "第 1 集前有人物、背景或其他前置信息，请核对并选择保留方式。",
                 source_range={"start": 0, "end": first_start},
             )
         )
@@ -226,6 +240,9 @@ def analyze_import_source(source_text: str) -> dict[str, Any]:
                     source_range={"start": boundary["start"], "end": boundary["end"]},
                 )
             )
+    extra = creative_notes_issue(source_text, boundaries)
+    if extra:
+        issues.append(extra.model_dump())
     return {
         "material_type": material_type,
         "confidence": confidence,
@@ -300,6 +317,8 @@ def _resolved_issues(item: ScriptImportSession) -> list[dict[str, Any]]:
     corrected_kinds = {correction.get("kind") for correction in item.corrections}
     if "unclassified_text" in corrected_kinds:
         issues = [issue for issue in issues if issue.get("code") != "unclassified_text"]
+    if any(c.get("kind") == "boundary" and c.get("value") == "creative_notes" for c in item.corrections):
+        issues = [issue for issue in issues if issue.get("code") != "creative_notes"]
     return issues
 
 
@@ -515,6 +534,10 @@ async def confirm_import_session(
     if not spec.get("structure"):
         raise ConflictError("请先在导入核对页确认剧集结构")
     _validate_boundaries(item.source_text, list(item.episode_boundaries))
+    for boundary in item.episode_boundaries:
+        duration = boundary.get("duration_seconds")
+        if duration is None or isinstance(duration, bool) or not isinstance(duration, int) or not 1 <= duration <= 3600:
+            raise ConflictError(f"第 {boundary['number']} 集时长待确认，请填写 1–3600 秒的整数")
     blocking = [issue for issue in _resolved_issues(item) if issue.get("severity") == "blocking"]
     if blocking:
         raise ConflictError("仍有阻止导入的问题需要修正")

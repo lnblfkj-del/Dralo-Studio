@@ -48,6 +48,7 @@ export async function getImportSource(id: number, start: number, limit: number, 
 }
 
 export async function previewImportBoundary(id: number, start: number, end: number) {
-  const { data } = await http.get<{ point: number; char_count: number; first_count: number; second_count: number }>(`/creation/import-sessions/${id}/boundary-preview`, { params: { start, end } });
+  type Hint = { label: string; detail: string; suggested: number | null };
+  const { data } = await http.get<{ point: number; char_count: number; first_count: number; second_count: number; duration_hint: Hint; first_hint: Hint; second_hint: Hint }>(`/creation/import-sessions/${id}/boundary-preview`, { params: { start, end } });
   return data;
 }

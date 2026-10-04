@@ -84,6 +84,9 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
   useEffect(() => { setSavedStory(null); }, [session.id]);
   const outlineArtifact = outlineVersions.find((item) => item.status !== "superseded");
   const story = storyArtifact?.content as StoryBibleContent | undefined;
+  const structureMissing = !session.settings.narrative_spec?.structure;
+  const structureUnconfirmed = !structureMissing && session.settings.narrative_spec?.status !== "confirmed" && session.settings.narrative_spec?.source !== "manual";
+  const narrativeNeedsReview = structureMissing || structureUnconfirmed;
   const storyStructureIssue = useMemo(() => {
     const spec = session.settings.narrative_spec;
     if (!story || !spec || !["independent", "hybrid"].includes(spec.structure ?? "")) return null;
@@ -278,6 +281,8 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
   const advanceToOutline = useMutation({
     mutationFn: async () => {
       if (!storyArtifact) throw new Error("故事设定尚未生成");
+      if (narrativeNeedsReview) throw new Error("请先编辑项目规格并确认剧集结构，再生成大纲");
+      if (storyStructureIssue) throw new Error(storyStructureIssue);
       let confirmedStory = storyArtifact;
       if (storyArtifact.status === "draft") {
         confirmedStory = await creationApi.confirmStoryBible(session.id, storyArtifact.id, storyArtifact.revision);
@@ -425,7 +430,8 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
     <ProjectCreationWorkspace projectId={projectId} active={activeTab === "outline" ? "outline" : "story"} availability={stageAvailability} onSelect={selectStage} sourceLabel={sourceLabel} sourceDetail={session.title} sourceContent={originalIdea} episodeDirectory={episodeDirectory}>
       <main className="creative-main">
         {mutationError && <p role="alert">{toErrorMessage(mutationError)}</p>}
-        {activeTab !== "outline" && (editingSpecs
+        {narrativeNeedsReview && !outlineArtifact && <section className="creative-stage-action" role="status"><span>故事设定和剧集结构需要分别确认。请先选择剧集结构。</span><Button onClick={() => { setActiveTab("story"); setEditingSpecs(true); }}>确认剧集结构</Button></section>}
+        {(activeTab !== "outline" || editingSpecs) && (editingSpecs
           ? <StorySpecsEditor session={session} busy={saveSpecs.isPending} onCancel={() => setEditingSpecs(false)} onSave={(specs) => saveSpecs.mutate(specs)} />
           : <section className="creation-spec-bar" aria-label="创作规格">
               <div className="creation-spec-bar__summary"><strong>项目规格</strong><span>{episodeCount} 集</span><span>{episodeDuration >= 1 ? `每集 ${episodeDuration} 秒` : "时长未设"}</span><span>{marketLabel}</span><span className="creation-spec-bar__genre">{story?.genre || "题材待确认"}</span></div>
@@ -549,10 +555,11 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
                 {storyStructureIssue ? <button disabled={retryStory.isPending || storyEditing} onClick={() => retryStory.mutate()}>
                   {retryStory.isPending ? <TextGenerationIcon size={20} /> : <RotateCcw size={15} />}
                   重新生成 {episodeCount} 个逐集事件
-                </button> : <button disabled={advanceToOutline.isPending || storyEditing} onClick={() => advanceToOutline.mutate()}>
+                </button> : <button disabled={advanceToOutline.isPending || storyEditing || narrativeNeedsReview} onClick={() => advanceToOutline.mutate()}>
                   {advanceToOutline.isPending ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}
                   确认设定，生成大纲
                 </button>}
+                {advanceToOutline.error && <p role="alert">{toErrorMessage(advanceToOutline.error)}</p>}
               </div>
             )}
           </>
@@ -562,16 +569,17 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
           <section className="creative-empty">
             <Sparkles size={36} />
             <h2>{storyStructureIssue ? "逐集事件尚未完整" : "准备生成分集大纲"}</h2>
-            <p>{storyStructureIssue || "故事设定已就绪，可以直接生成分集大纲；也可以先回去调整设定。"}</p>
+            <p>{narrativeNeedsReview ? "剧集结构尚未确认，请先编辑项目规格。" : storyStructureIssue || "故事设定已就绪，可以直接生成分集大纲；也可以先回去调整设定。"}</p>
             <div className="creative-stage-action">
               {storyStructureIssue ? <button className="primary" disabled={retryStory.isPending} onClick={() => retryStory.mutate()}>
                 {retryStory.isPending ? <TextGenerationIcon size={20} /> : <RotateCcw size={15} />}
                 重新生成 {episodeCount} 个逐集事件
-              </button> : <button className="primary" disabled={advanceToOutline.isPending} onClick={() => advanceToOutline.mutate()}>
+              </button> : <button className="primary" disabled={advanceToOutline.isPending || narrativeNeedsReview} onClick={() => advanceToOutline.mutate()}>
                 {advanceToOutline.isPending ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}
                 生成分集大纲
               </button>}
               <button type="button" className="creative-form-secondary" onClick={() => setActiveTab("story")}>返回故事设定</button>
+              {advanceToOutline.error && <p role="alert">{toErrorMessage(advanceToOutline.error)}</p>}
             </div>
           </section>
         )}

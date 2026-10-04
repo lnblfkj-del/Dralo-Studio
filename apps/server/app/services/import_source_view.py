@@ -4,14 +4,15 @@ import re
 
 from app.schemas.script_import import ScriptImportSessionOut
 
-_VALUE = r"\s*[:：]\s*(\d+(?:\.\d+)?)\s*(?:[-–—~至]\s*(\d+(?:\.\d+)?))?\s*(秒|分钟|seconds?|secs?|s\b|minutes?|mins?)"
+_VALUE = r"\s*[:：]?\s*(?:约|大约|大概|approximately|about)?\s*(\d+(?:\.\d+)?)\s*(?:[-–—~至]\s*(\d+(?:\.\d+)?))?\s*(秒|分钟|seconds?|secs?|s\b|minutes?|mins?)"
 _OWN = re.compile(r"(?:^|\n)\s*(?:总时长|时长|每集时长|单集时长|建议单集时长|total\s+(?:duration|runtime|running time)|duration|runtime|running time)" + _VALUE, re.I)
-_COMMON = re.compile(r"(?:^|\n)\s*(?:每集时长|单集时长|建议单集时长|duration per episode|episode duration)" + _VALUE, re.I)
+_COMMON = re.compile(r"(?:^|\n)\s*(?:每集时长|单集时长|建议单集时长|单集|每集|duration per episode|episode duration)" + _VALUE, re.I)
+_INLINE_COMMON = re.compile(r"(?:每集时长|单集时长|建议单集时长|单集|每集|duration per episode|episode duration)\s*[:：]" + _VALUE, re.I)
 
 
 def duration_hint(text, preface):
     own = _OWN.search(text)
-    match = own or _COMMON.search(preface)
+    match = own or _COMMON.search(preface) or _INLINE_COMMON.search(preface)
     if not match:
         return {"label": "待填写", "detail": "未找到明确时长标注", "suggested": None}
     factor = 60 if re.search(r"分钟|minute|min", match[3], re.I) else 1
@@ -19,11 +20,19 @@ def duration_hint(text, preface):
     if low < 1 or high < low or high > 3600:
         return {"label": "待填写", "detail": "原文时长超出支持范围", "suggested": None}
     span = f"{low:g}—{high:g}" if match[2] else f"{low:g}"
-    return {"label": "原文范围" if match[2] else "原文标注", "detail": f"{'本集' if own else '全剧通用'} {span} 秒", "suggested": int((low + high) / 2 + 0.5)}
+    approximate = bool(re.search(r"约|大概|approximately|about", match[0], re.I))
+    return {"label": "原文范围" if match[2] else "原文建议" if approximate else "原文标注", "detail": f"{'本集' if own else '全剧通用'} {'约 ' if approximate else ''}{span} 秒", "suggested": int((low + high) / 2 + 0.5)}
 
 
 def session_view(item, compact=False):
     result = ScriptImportSessionOut.model_validate(item)
+    from app.services.script_import_service import creative_notes_issue
+    extra = creative_notes_issue(item.source_text, item.episode_boundaries)
+    if extra and not any(issue.code == "creative_notes" for issue in result.issues):
+        result.issues.append(extra)
+    for issue in result.issues:
+        if issue.code == "unclassified_text":
+            issue.message = "第 1 集前有人物、背景或其他前置信息，请核对并选择保留方式。"
     result.source_char_count = len(item.source_text)
     if compact:
         result.source_text = ""

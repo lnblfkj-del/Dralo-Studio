@@ -50,6 +50,8 @@ export function ScriptImportReviewPage() {
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchSeconds, setBatchSeconds] = useState("30");
   const [batchScope, setBatchScope] = useState("missing");
+  const [durationHints, setDurationHints] = useState<Record<string, ReturnType<typeof importDuration>>>({});
+  const [focusEpisode, setFocusEpisode] = useState<number>();
   const initializedId = useRef(0);
   const confirmedNavigation = useRef(false);
 
@@ -61,6 +63,11 @@ export function ScriptImportReviewPage() {
     setMaterial(query.data.material_type);
     const source = query.data.source_text;
     const preface = characterSlice(source, 0, query.data.episode_boundaries[0]?.start ?? 0);
+    const hints = Object.fromEntries(query.data.episode_boundaries.map(item => [
+      `${item.start}:${item.end}`, query.data.duration_hints?.[String(item.start)] ?? importDuration(characterSlice(source, item.start, item.end), preface),
+    ]));
+    setDurationHints(hints);
+    setBatchSeconds(String(Object.values(hints).find(hint => hint.suggested != null)?.suggested ?? nextSettings.episode_duration ?? 90));
     setBoundaries(query.data.episode_boundaries.map(item => {
       if (item.duration_seconds != null) return item;
       const timing = query.data.duration_hints?.[String(item.start)] ?? importDuration(characterSlice(source, item.start, item.end), preface);
@@ -92,10 +99,18 @@ export function ScriptImportReviewPage() {
     setMaterial(next);
     addCorrection({ kind: "material_type", value: next, note: "用户在导入核对页明确选择素材类型" });
   };
-  const merge = (index: number) => {
+  const merge = async (index: number) => {
     const item = boundaries[index];
-    setBoundaries(mergeWithPrevious(boundaries, index));
-    if (item) addCorrection(correction("merge", `第 ${item.number} 集并入上一集`, item));
+    const previous = boundaries[index - 1];
+    if (!item || !previous || busy) return;
+    setBusy("boundary"); setError("");
+    try {
+      const result = await previewImportBoundary(importId, previous.start, item.end);
+      setBoundaries(mergeWithPrevious(boundaries, index));
+      setDurationHints(hints => ({ ...hints, [`${previous.start}:${item.end}`]: result.duration_hint }));
+      addCorrection(correction("merge", `第 ${item.number} 集并入上一集，时长需重新确认`, item));
+    } catch (cause) { setError(toErrorMessage(cause)); }
+    finally { setBusy(""); }
   };
   const split = async (index: number) => {
     const item = boundaries[index];
@@ -107,6 +122,7 @@ export function ScriptImportReviewPage() {
         { ...item, end: result.point, char_count: result.first_count, duration_seconds: null },
         { ...item, start: result.point, char_count: result.second_count, title: `第 ${item.number + 1} 集（拆分）`, duration_seconds: null },
         ...boundaries.slice(index + 1)]));
+      setDurationHints(hints => ({ ...hints, [`${item.start}:${result.point}`]: result.first_hint, [`${result.point}:${item.end}`]: result.second_hint }));
       addCorrection(correction("split", `第 ${item.number} 集按原文中点附近换行拆分`, item));
     } catch (cause) { setError(toErrorMessage(cause)); }
     finally { setBusy(""); }
@@ -118,8 +134,22 @@ export function ScriptImportReviewPage() {
       const first = boundaries[0];
       const result = await previewImportBoundary(importId, range.start, first.end);
       setBoundaries([{ ...first, start: range.start, char_count: result.char_count }, ...boundaries.slice(1)]);
+      setDurationHints(hints => ({ ...hints, [`${range.start}:${first.end}`]: result.duration_hint }));
     }
     addCorrection({ kind: "unclassified_text", source_range: range, value: mode, note: mode === "merge" ? "并入第 1 集" : "作为前置信息保留" });
+    } catch (cause) { setError(toErrorMessage(cause)); }
+    finally { setBusy(""); }
+  };
+
+  const preserveNotes = async (range: ImportSourceRange) => {
+    const last = boundaries.at(-1);
+    if (!last || range.start <= last.start || range.start >= last.end || busy) return;
+    setBusy("boundary"); setError("");
+    try {
+      const result = await previewImportBoundary(importId, last.start, range.start);
+      setBoundaries(items => items.map(item => item === last ? { ...item, end: range.start, char_count: result.char_count } : item));
+      setDurationHints(hints => ({ ...hints, [`${last.start}:${range.start}`]: result.duration_hint }));
+      addCorrection({ kind: "boundary", value: "creative_notes", source_range: range, note: "创作说明单独保留在原文记录中，不作为末集剧情" });
     } catch (cause) { setError(toErrorMessage(cause)); }
     finally { setBusy(""); }
   };
@@ -129,15 +159,19 @@ export function ScriptImportReviewPage() {
     if (!title.trim()) throw new Error("请填写项目名称");
     setBusy("save"); setError("");
     try {
+      const uniformDuration = boundaries[0]?.duration_seconds;
+      const episodeDuration = uniformDuration != null && boundaries.every(item => item.duration_seconds === uniformDuration)
+        ? uniformDuration : settings.episode_duration ?? 90;
       const nextNarrativeSpec = settings.narrative_spec
-        ? { ...settings.narrative_spec, episode_count: boundaries.length, episode_duration: settings.episode_duration ?? 90 }
+        ? { ...settings.narrative_spec, episode_count: boundaries.length, episode_duration: episodeDuration }
         : undefined;
       const saved = await updateScriptImportSession(importId, {
         expected_revision: session.revision,
         title: title.trim(), material_type: material, episode_boundaries: boundaries,
-        corrections, settings: { ...settings, episode_count: boundaries.length, narrative_spec: nextNarrativeSpec },
+        corrections, settings: { ...settings, episode_count: boundaries.length, episode_duration: episodeDuration, narrative_spec: nextNarrativeSpec },
       });
       const nextSettings = importSettings(saved);
+      setDurationHints(Object.fromEntries(saved.episode_boundaries.map(item => [`${item.start}:${item.end}`, saved.duration_hints?.[String(item.start)] ?? importDuration(characterSlice(saved.source_text, item.start, item.end))])));
       setSession(saved); setTitle(saved.title); setMaterial(saved.material_type); setBoundaries(saved.episode_boundaries); setCorrections(saved.corrections); setSettings(nextSettings);
       setBase(snapshot(saved.title, saved.material_type, saved.episode_boundaries, saved.corrections, nextSettings));
       client.setQueryData(["script-import", importId], saved);
@@ -166,7 +200,10 @@ export function ScriptImportReviewPage() {
   if (query.isLoading || !session || !settings) return <main className="import-state"><span className="import-spinner" /><h1>正在恢复导入草稿…</h1><p>原文与上次修正都不会丢失。</p></main>;
   if (session.status === "confirmed" && session.project_id) return <main className="import-state"><h1>这份素材已经导入</h1><p>项目已安全创建，无需重复确认。</p><Link to={`/projects/${session.project_id}/outline`}>打开项目</Link></main>;
 
-  const visibleIssues = session.issues.filter((issue) => !(issue.code === "material_type_uncertain" && material !== "unknown") && !(issue.code === "unclassified_text" && corrections.some((item) => item.kind === "unclassified_text")));
+  const visibleIssues = session.issues.filter((issue) => !(issue.code === "material_type_uncertain" && material !== "unknown") && !(issue.code === "unclassified_text" && corrections.some((item) => item.kind === "unclassified_text")) && !(issue.code === "creative_notes" && corrections.some(item => item.kind === "boundary" && item.value === "creative_notes")));
+  const missingDurations = boundaries.filter(item => item.duration_seconds == null).length;
+  const batchCount = batchScope === "all" ? boundaries.length : missingDurations;
+  const batchValid = /^\d+$/.test(batchSeconds) && Number(batchSeconds) >= 1 && Number(batchSeconds) <= 3600;
   const invalidEpisode = boundaries.find((item) => !item.title.trim() || (item.duration_seconds == null || !Number.isInteger(item.duration_seconds) || item.duration_seconds < 1 || item.duration_seconds > 3600));
   const structureMissing = !settings.narrative_spec?.structure;
   const blocking = material === "unknown" || structureMissing || boundaries.length === 0 || Boolean(invalidEpisode) || visibleIssues.some((issue) => issue.severity === "blocking");
@@ -176,10 +213,21 @@ export function ScriptImportReviewPage() {
     <div className="import-demo__settings"><TextField label="项目名称" value={title} maxLength={255} disabled={Boolean(busy)} onChange={e => setTitle(e.target.value)} /><SelectField label="素材类型" help={session.reasons.join(" ")} disabled={Boolean(busy)} value={material} options={[{ value: "unknown", label: "待确认，请选择", disabled: true }, { value: "full_script", label: "完整剧本" }, { value: "story_outline", label: "故事大纲" }]} onChange={value => { if (value !== "unknown") chooseMaterial(value); }} /><div><strong>每集时长</strong><p>优先采用原文标注，范围建议由你确认。</p><Button disabled={Boolean(busy)} onClick={() => setBatchOpen(true)}>批量设置时长</Button></div><div className="import-demo__structure"><strong>剧集结构</strong><NarrativeStructureField value={settings.narrative_spec} disabled={Boolean(busy)} onChange={narrative_spec => setSettings(current => current ? { ...current, narrative_spec } : current)} /></div></div></section>
     {error && <div className="import-demo__alert" role="alert">{error}<Button variant="text" onClick={() => setError("")}>关闭</Button></div>}
     {visibleIssues.map((issue, index) => <div className="import-demo__alert" key={index}><span>{issue.severity === "blocking" ? "必须处理：" : ""}{issue.message}</span><div>{issue.source_range && <Button variant="text" onClick={() => locate(issue.source_range!)}>查看原文</Button>}{issue.code === "unclassified_text" && issue.source_range && <><Button disabled={Boolean(busy)} onClick={() => resolveUnclassified("merge", issue.source_range!)}>并入第 1 集</Button><Button disabled={Boolean(busy)} variant="text" onClick={() => resolveUnclassified("preserve", issue.source_range!)}>保留为前置信息</Button></>}</div></div>)}
-    <ImportEpisodeTable boundaries={boundaries} source={session.source_text} durationHints={session.duration_hints} disabled={Boolean(busy)} onChange={setBoundaries} onLocate={locate} onMerge={merge} onSplit={split} />
+    <ImportEpisodeTable boundaries={boundaries} source={session.source_text} durationHints={durationHints} focusEpisode={focusEpisode} disabled={Boolean(busy)} onChange={setBoundaries} onLocate={locate} onMerge={merge} onSplit={split} />
+    {visibleIssues.filter(issue => issue.code === "creative_notes" && issue.source_range).map((issue, index) => <div className="import-demo__alert" key={`notes-${index}`}><span>原文保留不变，确认后将创作说明从末集剧情中分离。</span><Button disabled={Boolean(busy)} onClick={() => void preserveNotes(issue.source_range!)}>单独保留创作说明</Button></div>)}
+    {missingDurations > 0 && <div className="import-demo__alert" role="status"><span>还有 {missingDurations} 集时长待确认</span><Button disabled={Boolean(busy)} onClick={() => setBatchOpen(true)}>统一设置时长</Button></div>}
+    {invalidEpisode && <Button disabled={Boolean(busy)} onClick={() => { setFocusEpisode(undefined); requestAnimationFrame(() => setFocusEpisode(invalidEpisode.number)); }}>定位第 {invalidEpisode.number} 集</Button>}
+    {error && <p role="alert">{error}</p>}
     <footer className="import-demo__actions"><div><strong>{!title.trim() ? "请填写项目名称" : structureMissing ? "请先确认剧集结构" : invalidEpisode ? `第 ${invalidEpisode.number} 集标题或时长待确认` : blocking ? "还有必须处理的问题" : `已准备好导入 ${boundaries.length} 集`}</strong><span>{dirty ? "有未保存修改" : "已保存"} · 原文与修正记录完整保留</span></div><Button disabled={!dirty || Boolean(busy)} loading={busy === "save"} onClick={() => { void persist().catch(() => undefined); }}>保存草稿</Button><Button variant="primary" disabled={blocking || Boolean(busy) || !title.trim()} loading={busy === "confirm"} onClick={() => setConfirmOpen(true)}>确认导入并创建项目</Button></footer>
     <Drawer open={!!selection} title="原文对照" size={560} onClose={() => setSelection(null)}>{selection && <ImportSourcePreview key={`${importId}:${selection.start}:${selection.end}`} id={importId} range={selection} />}</Drawer>
-    <Dialog open={batchOpen} title="批量设置时长" onClose={() => setBatchOpen(false)} footer={<><Button onClick={() => setBatchOpen(false)}>取消</Button><Button variant="primary" disabled={!/^\\d+$/.test(batchSeconds) || Number(batchSeconds) < 1 || Number(batchSeconds) > 3600} onClick={() => { setBoundaries(items => items.map(item => batchScope === "all" || item.duration_seconds == null ? { ...item, duration_seconds: Number(batchSeconds) } : item)); setBatchOpen(false); }}>应用时长</Button></>}><div className="import-demo__form"><TextField label="每集时长（秒）" type="number" value={batchSeconds} onChange={e => setBatchSeconds(e.target.value)} /><SelectField label="应用范围" value={batchScope} options={[{ value: "missing", label: "仅未填写时长的分集" }, { value: "all", label: "全部分集（覆盖已有时长）" }]} onChange={setBatchScope} /></div></Dialog>
+    <Dialog open={batchOpen} title="批量设置时长" onClose={() => setBatchOpen(false)} footer={<><Button onClick={() => setBatchOpen(false)}>取消</Button><Button variant="primary" disabled={!batchValid || !batchCount} onClick={() => {
+      const seconds = Number(batchSeconds);
+      const next = boundaries.map(item => batchScope === "all" || item.duration_seconds == null ? { ...item, duration_seconds: seconds } : item);
+      setBoundaries(next);
+      if (next.every(item => item.duration_seconds === seconds)) setSettings(current => current ? { ...current, episode_duration: seconds } : current);
+      addCorrection({ kind: "episode_duration", value: seconds, note: `批量确认 ${batchCount} 集时长` });
+      setBatchOpen(false);
+    }}>应用时长</Button></>}><div className="import-demo__form"><TextField label="每集时长（秒）" type="number" value={batchSeconds} onChange={e => setBatchSeconds(e.target.value)} /><SelectField label="应用范围" value={batchScope} options={[{ value: "missing", label: "仅未填写时长的分集" }, { value: "all", label: "全部分集（覆盖已有时长）" }]} onChange={setBatchScope} /><p role="status">{batchValid ? `将为 ${batchCount} 集设置 ${batchSeconds} 秒` : "请输入 1–3600 秒的整数"}</p></div></Dialog>
     {confirmOpen && <ConfirmDialog open title="确认创建项目？" message={`将按“${material === "full_script" ? "完整剧本" : "故事大纲"}”导入 ${boundaries.length} 集。上传原文会完整保留，创建后可继续调整。`} confirmLabel="确认创建" busy={Boolean(busy)} onClose={() => setConfirmOpen(false)} onConfirm={() => { void confirm(); }} />}
     {blocker.state === "blocked" && <ConfirmDialog open title="要离开导入核对页吗？" message={busy ? "请求仍在处理中，请先等待操作完成。" : "本页有未保存修改，离开后会恢复到上一次保存的版本。"} confirmLabel="放弃未保存修改" danger busy={Boolean(busy)} onClose={() => blocker.reset?.()} onConfirm={() => blocker.proceed?.()} />}
   </div></main>;
