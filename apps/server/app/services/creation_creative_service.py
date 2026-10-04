@@ -259,6 +259,9 @@ async def update_creative_specs(
     narrative_spec: dict[str, Any] | None = None,
     expected_narrative_revision: int | None = None,
 ) -> CreationSession:
+    await session.flush()
+    await session.refresh(item, with_for_update=True)
+    await session.refresh(project, with_for_update=True)
     patch = {
         "episode_count": episode_count,
         "episode_duration": episode_duration,

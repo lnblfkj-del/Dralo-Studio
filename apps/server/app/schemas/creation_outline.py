@@ -12,6 +12,7 @@ class EpisodeOutlineGenerateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_story_artifact_id: int = Field(ge=1)
     expected_story_revision: int = Field(ge=0)
+    confirm_story: bool = False
 
 
 class EpisodeOutlineItem(BaseModel):

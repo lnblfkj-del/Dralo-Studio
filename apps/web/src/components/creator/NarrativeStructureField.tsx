@@ -5,7 +5,7 @@ type StructureValue = NarrativeStructure | "auto";
 type ReuseValue = CharacterReuseStrategy | "auto";
 
 const STRUCTURE_OPTIONS: ReadonlyArray<SelectMenuOption<StructureValue>> = [
-  { value: "auto", label: "自动判断", hint: "先保留为未确认结构" },
+  { value: "auto", label: "自动判断", hint: "根据故事判断，存在歧义时再选择" },
   { value: "continuous", label: "连续故事", hint: "主线贯穿全剧" },
   { value: "independent", label: "单集独立", hint: "每集完成一个事件" },
   { value: "unit", label: "单元故事", hint: "按单元分段推进" },

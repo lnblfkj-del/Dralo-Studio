@@ -192,6 +192,7 @@ async def generate_episode_outline(
         item,
         expected_story_artifact_id=(payload.expected_story_artifact_id if payload else None),
         expected_story_revision=(payload.expected_story_revision if payload else None),
+        confirm_story=payload.confirm_story if payload else False,
     )
     await session.commit()
     return JobOut.model_validate(job)

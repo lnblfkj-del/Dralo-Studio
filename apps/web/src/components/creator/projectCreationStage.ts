@@ -46,6 +46,7 @@ export function creationSourceMode(sourceType: unknown, materialType: unknown): 
 export function deriveCreationStageAvailability({
   sourceMode,
   hasStory,
+  storyConfirmed = hasStory,
   hasOutline,
   outlineConfirmed,
   hasScripts = false,
@@ -55,6 +56,7 @@ export function deriveCreationStageAvailability({
 }: {
   sourceMode: CreationSourceMode;
   hasStory: boolean;
+  storyConfirmed?: boolean;
   hasOutline: boolean;
   outlineConfirmed: boolean;
   hasScripts?: boolean;
@@ -85,7 +87,7 @@ export function deriveCreationStageAvailability({
     }, activeJob);
   }
   return withJobActivity({
-    story: { ready: true, completed: hasStory, detail: hasStory ? "故事设定已建立" : "当前起点" },
+    story: { ready: true, completed: storyConfirmed, detail: hasStory ? storyConfirmed ? "故事设定已确认" : "故事草稿待审核" : "当前起点" },
     outline: { ready: hasStory || hasOutline, completed: outlineConfirmed, reason: hasStory || hasOutline ? undefined : "请先确认故事设定" },
     script: { ready: outlineConfirmed || hasScripts, completed: scriptsConfirmed, reason: outlineConfirmed || hasScripts ? undefined : "请先确认分集大纲", detail: hasScripts && !outlineConfirmed ? "从存量正文继续" : undefined },
     prep: preparation,

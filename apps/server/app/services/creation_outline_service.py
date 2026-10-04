@@ -52,7 +52,6 @@ from app.services.creation_script_generation_service import (  # noqa: F401
     create_episode_script_optimization_job,
 )
 from app.services.narrative_prompt_service import outline_strategy_prompt
-from app.services.narrative_spec_service import confirm_explicit_narrative_spec
 from app.services.outline_structure_review_service import review_for_settings
 from app.services.story_bible_structure_review import validate_story_bible_structure
 from app.services.creation_agent_service import (
@@ -79,10 +78,53 @@ async def create_episode_outline_job(
     *,
     expected_story_artifact_id: int | None = None,
     expected_story_revision: int | None = None,
+    confirm_story: bool = False,
 ) -> Job:
     if (expected_story_artifact_id is None) != (expected_story_revision is None):
         raise ConflictError("生成大纲需要同时提供故事设定和修订号")
     from app.services.long_form_workflow import resume_existing
+    # Serialize approvals and submissions for the same project on PostgreSQL.
+    await session.flush()
+    await session.refresh(item, with_for_update=True)
+    approval_request = None
+    if confirm_story:
+        latest = await session.scalar(select(CreationArtifact).where(
+            CreationArtifact.session_id == item.id,
+            CreationArtifact.artifact_type == ARTIFACT_TYPE_STORY_BIBLE,
+            CreationArtifact.status != ARTIFACT_STATUS_SUPERSEDED,
+        ).order_by(CreationArtifact.version.desc()).limit(1))
+        active = await session.scalar(select(Job).where(
+            Job.target_type == ARTIFACT_TYPE_EPISODE_OUTLINE, Job.target_id == item.id,
+            Job.owner_id == item.owner_id, Job.status.in_(["queued", "running", "processing", "retrying", "downloading"]),
+        ).order_by(Job.id.desc()).limit(1))
+        if active is not None and latest is not None:
+            parameters = active.payload.get("parameters") or {}
+            source = parameters.get("story_source") or {}
+            receipt = parameters.get("story_approval_request") or {}
+            if (latest.status == ARTIFACT_STATUS_CONFIRMED
+                    and latest.id == source.get("artifact_id") == expected_story_artifact_id
+                    and latest.revision == source.get("revision")
+                    and receipt == {"artifact_id": expected_story_artifact_id, "revision": expected_story_revision}):
+                return active
+        if latest is None or latest.id != expected_story_artifact_id or latest.revision != expected_story_revision:
+            raise ConflictError("故事设定已有变化，请刷新后审核最新内容")
+        if latest.status == ARTIFACT_STATUS_DRAFT:
+            approval_request = {"artifact_id": latest.id, "revision": latest.revision}
+            from app.services.story_narrative_resolution import resolve_story_spec
+            item.settings = resolve_story_spec(item.settings, latest.content, item.brief)
+            from app.services.creation_story_service import confirm_story_bible
+            latest = await confirm_story_bible(session, item, latest.id, latest.revision)
+            expected_story_revision = latest.revision
+    if expected_story_artifact_id is not None:
+        active = await session.scalar(select(Job).where(
+            Job.target_type == ARTIFACT_TYPE_EPISODE_OUTLINE, Job.target_id == item.id,
+            Job.owner_id == item.owner_id, Job.status.in_(["queued", "running", "processing", "retrying", "downloading"]),
+        ).order_by(Job.id.desc()).limit(1))
+        if active is not None:
+            source = (active.payload.get("parameters") or {}).get("story_source") or {}
+            if source.get("artifact_id") == expected_story_artifact_id and source.get("revision") == expected_story_revision:
+                return active
+            raise ConflictError("分集大纲正在生成，请等待当前任务完成")
     if expected_story_artifact_id is not None:
         expected_story = await get_artifact(session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED)
         if expected_story.id != expected_story_artifact_id or expected_story.revision != expected_story_revision:
@@ -99,7 +141,8 @@ async def create_episode_outline_job(
         session, item, ARTIFACT_TYPE_STORY_BIBLE, status=ARTIFACT_STATUS_CONFIRMED
     )
     validate_story_bible_structure(bible.content, item.settings)
-    confirmed_settings = confirm_explicit_narrative_spec(item.settings)
+    from app.services.story_narrative_resolution import resolve_story_spec
+    confirmed_settings = resolve_story_spec(item.settings, bible.content, item.brief)
     if confirmed_settings != item.settings:
         item.settings = confirmed_settings
         if item.project_id is not None:
@@ -134,6 +177,7 @@ number 必须从 1 到 {episode_count} 连续排列，episodes 必须恰好 {epi
             "story_source": story_source,
             "story_snapshot": bible.content,
             "narrative_spec": narrative_spec,
+            **({"story_approval_request": approval_request} if approval_request else {}),
         },
         agent_key="outline", execution_surface="episode_outline",
     )

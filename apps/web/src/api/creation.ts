@@ -279,10 +279,11 @@ export async function saveStoryBibleVersion(sessionId: number, artifactId: numbe
   return (await http.post<CreationArtifact>(`/creation/sessions/${sessionId}/artifacts/${artifactId}/story-bible/version`, { content, expected_revision: expectedRevision })).data;
 }
 
-export async function generateEpisodeOutline(sessionId: number, storyArtifactId: number, storyRevision: number): Promise<Job> {
+export async function generateEpisodeOutline(sessionId: number, storyArtifactId: number, storyRevision: number, confirmStory = false): Promise<Job> {
   return (await http.post<Job>(`/creation/sessions/${sessionId}/episode-outline`, {
     expected_story_artifact_id: storyArtifactId,
     expected_story_revision: storyRevision,
+    confirm_story: confirmStory,
   })).data;
 }
 

@@ -87,6 +87,17 @@ async def baseline(db, item):
     return {"artifacts": result, "spec": spec(item), "brief_hash": fingerprint(item.brief)}
 
 
+def baseline_matches(saved, current):
+    """Old checkpoints retain their format; only spec bookkeeping is irrelevant."""
+    def semantic(value):
+        value = deepcopy(value)
+        narrative = value.get("spec", {}).get("narrative_spec")
+        if isinstance(narrative, dict):
+            narrative.pop("revision", None)
+        return value
+    return semantic(saved) == semantic(current)
+
+
 async def configure(db, item, job, kind):
     """Turn an existing initial job into step zero without another model call."""
     parameters = deepcopy(job.payload.get("parameters") or {})
@@ -209,6 +220,8 @@ async def step_prompt(db, item, state):
         instruction = "生成全剧故事框架与角色表；event_timeline 此步返回空数组，后续按范围生成事件。先规划核心、常驻及阶段角色，写清目标、冲突、成长与出场范围。保留既有character_id；改名同步概览并保留aliases。不可编造参考原文没有的关键事实；原创任务可按创作要求规划。"
         instruction += "phase_plan按顺序无缝覆盖第1集到最终集，至多30个阶段，写清各阶段目标、转折和结束状态；这是内部规划，不改变既定连续/独立/单元/混合结构。"
         instruction += "\n" + character_ecosystem_prompt(state["count"])
+        from app.services.narrative_prompt_service import story_bible_strategy_prompt
+        instruction += "\n" + story_bible_strategy_prompt(item.settings, frame_only=True)
         if step.get("cast_revision"):
             context["previous_frame"] = latest_frame(state)
             context["cast_issues"] = step["cast_issues"]
@@ -230,6 +243,7 @@ async def step_prompt(db, item, state):
             )["event_timeline"]
         schema = EventBatch
         instruction = "只规划本步骤start到end集的事件，每集恰好一项，episode_hint严格对应集号。每项包含title、summary、character_ids（引用已给角色ID）。连续故事承接前段；独立故事逐集闭环；单元/混合遵守spec。规划是未来事件，不是已发生事实。"
+        instruction += "若spec尚未指定结构，遵守story.structure_recommendation中的高可信建议和单元范围；低可信建议不能当作已确认合同，不得擅自默认连续故事。"
     elif kind == "outline":
         story = state["parameters"]["story_snapshot"]
         context["story"] = story_context(story, step["start"], step["end"])
@@ -276,7 +290,7 @@ async def advance(db, item, job, result):
     index = params["long_form_step"]
     if str(job.id) in state["receipts"]:
         return True
-    if state["cursor"] != index or state["baseline"] != await baseline(db, item):
+    if state["cursor"] != index or not baseline_matches(state["baseline"], await baseline(db, item)):
         raise ConflictError("来源版本或分批进度已变化，已保存结果不会覆盖新内容")
     await validate_job(db, job)
     step = state["steps"][index]
@@ -419,9 +433,7 @@ async def validate_job(db, job):
     work = await db.get(CreationArtifact, params["long_form_work_id"])
     if not item or item.owner_id != job.owner_id or not work or work.session_id != item.id:
         raise ConflictError("分批任务来源不存在")
-    if work.content["cursor"] != params["long_form_step"] or work.content[
-        "baseline"
-    ] != await baseline(db, item):
+    if work.content["cursor"] != params["long_form_step"] or not baseline_matches(work.content["baseline"], await baseline(db, item)):
         raise ConflictError("分批任务来源或进度已变化，请基于最新资料重新生成；旧结果已保留")
     if work.content["kind"] == "story":
         source = await resolve_source_text(db, item)
@@ -447,7 +459,7 @@ async def resume_existing(db, item, kind):
         state = row.content
         if state["kind"] != kind or state.get("status") == "complete":
             continue
-        if state["baseline"] != await baseline(db, item):
+        if not baseline_matches(state["baseline"], await baseline(db, item)):
             return None
         if kind == "story":
             choice = {

@@ -102,12 +102,15 @@ def with_narrative_spec(
     incoming = (
         spec.model_dump() if isinstance(spec, NarrativeSpec) else {**current, **dict(spec or {})}
     )
-    incoming["revision"] = current["revision"] + 1
+    incoming["revision"] = current["revision"]
     incoming["episode_count"] = validate_episode_count(incoming.get("episode_count"), current["episode_count"])
     incoming["episode_duration"] = _bounded_int(
         incoming.get("episode_duration"), current["episode_duration"], 1, 3600
     )
-    merged["narrative_spec"] = NarrativeSpec.model_validate(incoming).model_dump()
+    incoming = NarrativeSpec.model_validate(incoming).model_dump()
+    if narrative_spec_changed(current, incoming):
+        incoming["revision"] += 1
+    merged["narrative_spec"] = incoming
     return merged
 
 

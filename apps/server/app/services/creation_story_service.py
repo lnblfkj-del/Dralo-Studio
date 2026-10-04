@@ -52,12 +52,14 @@ async def create_story_bible_job(
     from app.models import JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING, SESSION_STATUS_GENERATING
     from app.services import job_service
     from app.services.creation_agent_service import _resolve_agent_execution, _attach_agent_execution
+    await session.flush()
+    await session.refresh(item, with_for_update=True)
     
     active = await session.scalar(select(Job.id).where(
         Job.owner_id == item.owner_id,
         Job.target_type == ARTIFACT_TYPE_STORY_BIBLE,
         Job.target_id == item.id,
-        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING, "downloading"]),
     ))
     if active is not None:
         raise ConflictError("故事设定正在生成，请等待当前任务完成")

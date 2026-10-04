@@ -112,7 +112,7 @@ async def create_creation_job(
         Job.owner_id == item.owner_id,
         Job.target_type.in_(CREATION_ARTIFACT_TYPES),
         Job.target_id == item.id,
-        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING]),
+        Job.status.in_([JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, JOB_STATUS_PROCESSING, JOB_STATUS_RETRYING, "downloading"]),
     ))
     if active is not None:
         raise ConflictError(active_message)

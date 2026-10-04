@@ -145,6 +145,7 @@ class StoryBibleContent(BaseModel):
     characters: list[StoryBibleCharacter] = Field(min_length=1, max_length=MAX_STORY_CHARACTERS)
     event_timeline: list[StoryEvent] = Field(default_factory=list, max_length=MAX_EPISODES)
     character_ecosystem: dict[str, Any] | None = None
+    structure_recommendation: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def valid_identities(self):
@@ -164,6 +165,8 @@ class StoryBibleContent(BaseModel):
         data = handler(self)
         if "character_ecosystem" not in self.model_fields_set:
             data.pop("character_ecosystem", None)
+        if "structure_recommendation" not in self.model_fields_set:
+            data.pop("structure_recommendation", None)
         return data
 
     @field_validator("tone", "audience", mode="before")

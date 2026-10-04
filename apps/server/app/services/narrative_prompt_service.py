@@ -94,16 +94,20 @@ def structure_prompt(spec: dict[str, Any], *, purpose: str) -> str:
     return f"{common}\n{rules}"
 
 
-def story_bible_strategy_prompt(settings: dict[str, Any] | None) -> str:
+def story_bible_strategy_prompt(settings: dict[str, Any] | None, *, frame_only: bool = False) -> str:
     spec = narrative_spec_from_settings(settings)
     explicit_manual_choice = spec.get("source") == "manual" and spec.get("structure")
     if (spec.get("status") != "confirmed" and not explicit_manual_choice) or not spec.get("structure"):
-        return (
-            "剧集结构尚未确认。故事设定可以先作为可编辑草稿生成，但不得替用户猜测连续/独立/"
-            "单元结构；event_timeline只输出结构无关的世界事实和候选主线，不把候选当成最终分集安排。"
+        recommendation = (
+            "用户选择自动判断剧集结构。根据创作要求判断连续故事、单集独立、单元故事或独立集加长线，"
+            "在故事设定中输出 structure_recommendation：structure为continuous/independent/unit/hybrid，"
+            "confidence为high或low，reason说明依据；仅证据明确时标high。单元结构附units，"
+            "每项包含unit_id、title、episode_start、episode_end、continuity，完整覆盖计划集数。"
+            "信息不足时confidence为low，不擅自默认连续故事，保留可供用户审核的事件。"
         )
+        return recommendation + ("本步只输出框架，event_timeline为空；后续按建议结构逐集规划事件。" if frame_only else "event_timeline按建议结构规划；独立/混合须每集一项并完整覆盖集号。")
     prefix = "用户已明确选择该结构，故事设定草稿必须立即遵守；最终确认状态不影响本次生成约束。\n" if explicit_manual_choice and spec.get("status") != "confirmed" else ""
-    return prefix + structure_prompt(spec, purpose="story_bible")
+    return prefix + structure_prompt(spec, purpose="story_frame" if frame_only else "story_bible")
 
 
 def outline_strategy_prompt(settings: dict[str, Any] | None) -> tuple[dict[str, Any], str]:
