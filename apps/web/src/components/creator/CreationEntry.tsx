@@ -27,31 +27,38 @@ const entries = [
   { id: "canvas", title: "自由画布", icon: "grid" },
 ] as const;
 
-export type EntryDraft = { expanded: boolean; pasteText: string; text: string; title: string; fileName: string; analysis: ScriptImportAnalysis | null; composer?: { settings: CreationSettings; title: string; analysis: ScriptImportAnalysis | null } };
+export type EntryDraft = { expanded: boolean; pasteText: string; text: string; title: string; fileName: string; analysis: ScriptImportAnalysis | null; marketIdeaSource?: string; composer?: { settings: CreationSettings; title: string; analysis: ScriptImportAnalysis | null } };
+
+function readMarketHandoff(mode: EntryMode): MarketIdeaHandoff | null {
+  if (mode !== "write") return null;
+  try {
+    const saved = window.sessionStorage.getItem(privateStorageKey("market-idea-handoff"));
+    if (!saved) return null;
+    const parsed = JSON.parse(saved) as MarketIdeaHandoff;
+    return Number.isSafeInteger(parsed.runId) && parsed.runId > 0 && Number.isSafeInteger(parsed.ideaIndex) && parsed.ideaIndex >= 0 && parsed.idea?.title && parsed.idea?.logline ? parsed : null;
+  } catch { return null; }
+}
 type EntryProps = { mode: EntryMode; onMode: (mode: EntryMode) => void; draft?: EntryDraft; onDraft?: (draft: EntryDraft) => void };
 export function CreationEntry(props: EntryProps) {
   const userId = useAuthStore(state => state.user?.id);
-  const key = privateStorageKey(`creation-entry:${userId ?? "anonymous"}:${props.mode}`);
-  return <EntryDraftBoundary key={key} storageKey={key} initial={props.draft} onDraft={props.onDraft}>{(draft, onDraft, clear) => <CreationEntryContent {...props} draft={draft} onDraft={onDraft} clearDraft={clear} />}</EntryDraftBoundary>;
+  const [handoff, setHandoff] = useState(() => readMarketHandoff(props.mode));
+  const source = handoff ? `${handoff.runId}:${handoff.ideaIndex}` : undefined;
+  const baseKey = `creation-entry:${userId ?? "anonymous"}:${props.mode}`;
+  const key = privateStorageKey(`${baseKey}${source ? `:market:${source}` : ""}`);
+  const matchingDraft = props.draft?.marketIdeaSource === source ? props.draft : undefined;
+  const brief = handoff ? [handoff.idea.logline, handoff.idea.hook ? `核心钩子：${handoff.idea.hook}` : ""].filter(Boolean).join("\n\n") : "";
+  // A new selection retains production preferences, not another story's text.
+  const seed = (value: EntryDraft | undefined): EntryDraft | undefined => handoff && value && value.marketIdeaSource !== source ? { ...value, marketIdeaSource: source, text: brief, title: handoff.idea.title, fileName: "", analysis: null,
+    composer: value.composer ? { ...value.composer, title: handoff.idea.title, analysis: null, settings: { ...value.composer.settings, brief, reference_name: "", reference_text: "" } } : undefined } : value;
+  return <EntryDraftBoundary key={key} storageKey={key} fallbackStorageKey={source ? privateStorageKey(baseKey) : undefined} initial={matchingDraft} onDraft={props.onDraft}>{(draft, onDraft, clear) => <CreationEntryContent {...props} initialHandoff={handoff} cancelHandoff={() => setHandoff(null)} draft={seed(draft ?? (handoff ? props.draft : matchingDraft))} onDraft={value => onDraft({ ...value, marketIdeaSource: source })} clearDraft={clear} />}</EntryDraftBoundary>;
 }
-function CreationEntryContent({ mode, onMode, draft, onDraft, clearDraft }: EntryProps & { clearDraft: () => Promise<void> }) {
+function CreationEntryContent({ mode, onMode, draft, onDraft, clearDraft, initialHandoff, cancelHandoff }: EntryProps & { clearDraft: () => Promise<void>; initialHandoff: MarketIdeaHandoff | null; cancelHandoff: () => void }) {
   const composerDraft = useRef(draft?.composer);
   const input = useRef<HTMLInputElement>(null);
   const [expanded] = useState(draft?.expanded ?? false);
   const [pasteOpen, setPasteOpen] = useState(false);
   const [pasteText, setPasteText] = useState(draft?.pasteText ?? "");
-  const [marketHandoff, setMarketHandoff] = useState<MarketIdeaHandoff | null>(() => {
-    if (mode !== "write") return null;
-    const saved = window.sessionStorage.getItem(privateStorageKey("market-idea-handoff"));
-    if (!saved) return null;
-    try {
-      const parsed = JSON.parse(saved) as MarketIdeaHandoff;
-      if (!Number.isSafeInteger(parsed.runId) || parsed.runId < 1 || !Number.isSafeInteger(parsed.ideaIndex) || parsed.ideaIndex < 0 || !parsed.idea?.title || !parsed.idea?.logline) return null;
-      return parsed;
-    } catch {
-      return null;
-    }
-  });
+  const marketHandoff = initialHandoff;
   const [text, setText] = useState(() => draft?.text ?? (marketHandoff
     ? [marketHandoff.idea.logline, marketHandoff.idea.hook ? `核心钩子：${marketHandoff.idea.hook}` : ""].filter(Boolean).join("\n\n")
     : ""));
@@ -66,9 +73,7 @@ function CreationEntryContent({ mode, onMode, draft, onDraft, clearDraft }: Entr
   const client = useQueryClient();
   const clearMarketHandoff = () => {
     window.sessionStorage.removeItem(privateStorageKey("market-idea-handoff"));
-    setMarketHandoff(null);
-    setText("");
-    setTitle("");
+    cancelHandoff();
   };
   const acceptFile = async (file?: File): Promise<boolean> => {
     if (!file || busy) return false;

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { draftStore } from "@/utils/draftStore";
 import type { EntryDraft } from "./CreationEntry";
 
-export function EntryDraftBoundary({ storageKey, initial, onDraft, children }: {
-  storageKey: string; initial?: EntryDraft; onDraft?: (draft: EntryDraft) => void;
+export function EntryDraftBoundary({ storageKey, fallbackStorageKey, initial, onDraft, children }: {
+  storageKey: string; fallbackStorageKey?: string; initial?: EntryDraft; onDraft?: (draft: EntryDraft) => void;
   children: (draft: EntryDraft | undefined, changed: (draft: EntryDraft) => void, clear: () => Promise<void>) => ReactNode;
 }) {
   const [loaded, setLoaded] = useState<{ draft?: EntryDraft } | null>(null);
@@ -20,11 +20,14 @@ export function EntryDraftBoundary({ storageKey, initial, onDraft, children }: {
   }, [storageKey]);
   useEffect(() => {
     let active = true;
-    void draftStore.get<EntryDraft>(storageKey).then(draft => { if (active) setLoaded({ draft: initial ?? draft ?? undefined }); })
+    void draftStore.get<EntryDraft>(storageKey).then(async draft => {
+      const fallback = !initial && !draft && fallbackStorageKey ? await draftStore.get<EntryDraft>(fallbackStorageKey) : undefined;
+      if (active) setLoaded({ draft: initial ?? draft ?? fallback ?? undefined });
+    })
       .catch(() => { if (active) { setLoaded({ draft: initial }); setWarning("无法读取本地草稿，当前输入仍可正常使用。 "); } });
     window.addEventListener("pagehide", flush);
     return () => { active = false; window.removeEventListener("pagehide", flush); flush(); };
-  }, [storageKey, flush]);
+  }, [storageKey, fallbackStorageKey, flush]);
   const changed = useCallback((draft: EntryDraft) => {
     notify.current?.(draft);
     if (committed.current) return;
