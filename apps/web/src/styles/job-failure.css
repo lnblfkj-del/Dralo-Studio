@@ -13,8 +13,10 @@
 .job-failure ul { margin:12px 0; padding-left:20px; }
 .overview-review-dialog .job-failure { padding:24px; }
 .asset-failed-scopes { padding:0 16px; }
-.job-failure__cast-review { border-top:1px solid var(--app-color-border); margin-top:16px; padding-top:12px; }
-.job-failure__cast-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(160px,1fr); gap:12px; align-items:center; margin:12px 0; }
+.job-failure-notice { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; width:100%; max-width:480px; margin:0 auto; padding:8px 0; color:var(--app-color-text); font-family:var(--app-font-family); font-size:14px; line-height:1.7; }
+.job-failure-notice .ui-button--text { color:var(--app-color-accent); }
+.job-failure__cast-row { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; margin:0 0 20px; color:var(--app-color-text); font-size:14px; }
+.job-failure__cast-row small, .outline-cast-dialog__hint { color:var(--app-color-text-muted); font-size:12px; }
 .job-failure__cast-row select { width:100%; min-height:40px; font:inherit; color:var(--app-color-text); background:var(--app-color-surface,white); border:1px solid var(--app-color-border); border-radius:6px; padding:8px; }
 .asset-failed-scopes > article + article { border-top:1px solid var(--app-color-border); }
 @media (max-width:600px) {

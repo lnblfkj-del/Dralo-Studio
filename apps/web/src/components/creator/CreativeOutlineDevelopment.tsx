@@ -450,10 +450,10 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
 
         {!visibleStageBusy && session.workflow_progress?.status !== "succeeded"
           && (session.workflow_progress?.kind === "outline" || session.workflow_progress?.kind === "optimize" ? "outline" : "story") === visibleStage
-          && <CreationWorkflowProgress progress={session.workflow_progress} />}
+          && <CreationWorkflowProgress progress={session.workflow_progress} hideError={visibleStage === "outline" && !!session.workflow_progress?.job_id} />}
         {session.workflow_progress?.status === "failed" && session.workflow_progress.job_id
           && (session.workflow_progress.kind === "outline" || session.workflow_progress.kind === "optimize" ? "outline" : "story") === visibleStage
-          && <JobFailureById jobId={session.workflow_progress.job_id} disabled={busy} onRecovered={job => { onJob(job); refresh(); }} />}
+          && <JobFailureById jobId={session.workflow_progress.job_id} compact={visibleStage === "outline"} disabled={busy} onRecovered={job => { onJob(job); refresh(); }} />}
 
         {!visibleStageBusy && !story && choosing && (
           <StoryPlanningBoard
@@ -566,7 +566,9 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
           </>
         )}
 
-        {!visibleStageBusy && story && activeTab === "outline" && !outlineArtifact && !editingSpecs && (
+        {!visibleStageBusy && story && activeTab === "outline" && !outlineArtifact && !editingSpecs
+          && !(session.workflow_progress?.status === "failed" && session.workflow_progress.job_id
+            && ["outline", "optimize"].includes(session.workflow_progress.kind)) && (
           <section className="creative-empty">
             <Sparkles size={36} />
             <h2>{storyStructureIssue ? "逐集事件尚未完整" : "准备生成分集大纲"}</h2>

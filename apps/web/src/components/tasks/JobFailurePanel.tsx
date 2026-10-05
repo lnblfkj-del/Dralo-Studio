@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, RotateCcw } from "lucide-react";
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toErrorMessage } from "@/api/client";
 import { confirmRecallJob, getJob, listJobChildren, reprocessJobResponse, retryJob } from "@/api/jobs";
-import { Button } from "@/components/ui";
+import { Button, Dialog } from "@/components/ui";
 import type { Job } from "@/types/api";
 import "@/styles/job-failure.css";
 import { OutlineCastRecovery } from "./OutlineCastRecovery";
@@ -29,14 +29,19 @@ export function JobFailureDetails({ job, children }: { job: Job; children?: Reac
   </section>;
 }
 
-export function JobFailurePanel({ job, disabled = false, onRecovered, onEdit }: {
-  job: Job; disabled?: boolean; onRecovered?: (job: Job) => void; onEdit?: () => void;
+export function JobFailurePanel({ job, disabled = false, onRecovered, onEdit, compact = false }: {
+  job: Job; disabled?: boolean; onRecovered?: (job: Job) => void; onEdit?: () => void; compact?: boolean;
 }) {
   const client = useQueryClient();
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const action = job.failure_detail?.action ?? (job.text_response_recovery?.regeneration_required ? "recall" : job.error_code === "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED" ? "reprocess" : job.retry_allowed !== false ? "retry" : "none");
+  const castIssue = action === "reprocess" && ["episode_outline", "outline_agent"].includes(job.target_type ?? "")
+    && (job.failure_detail?.category === "cast_identity" || job.failure_detail?.error_code === "OUTLINE_CAST_IDENTITY_UNRESOLVED"
+      || (job.failure_detail?.reason || job.error_message || "").includes("分集角色不属于当前故事设定："));
   const recover = useMutation({
     mutationFn: () => action === "reprocess" ? reprocessJobResponse(job.id) : action === "recall" ? confirmRecallJob(job.id) : retryJob(job.id),
     onSuccess: async result => {
+      if (result.status !== "failed") setDetailsOpen(false);
       onRecovered?.(result);
       await client.invalidateQueries({ predicate: query => {
         const key = String(query.queryKey[0] ?? "");
@@ -44,17 +49,23 @@ export function JobFailurePanel({ job, disabled = false, onRecovered, onEdit }: 
       } });
     },
   });
-  return <JobFailureDetails job={job}>
+  if (castIssue) return <OutlineCastRecovery job={job} disabled={disabled} onRecovered={onRecovered} />;
+  const details = <JobFailureDetails job={job}>
     <div className="job-failure__actions">
       {action !== "none" && <Button icon={<RotateCcw size={15} />} variant="primary" loading={recover.isPending} disabled={disabled} onClick={() => recover.mutate()}>{action === "reprocess" ? "重新处理结果" : action === "recall" ? "重新生成失败范围" : "重新生成方案"}</Button>}
       {onEdit && <Button disabled={disabled || recover.isPending} onClick={onEdit}>修改调整要求</Button>}
     </div>
     {recover.error && <p role="alert">{toErrorMessage(recover.error)}</p>}
-    {action === "reprocess" && (job.target_type === "episode_outline" || (job.target_type === "outline_agent" && job.failure_detail?.category === "cast_identity")) && <OutlineCastRecovery job={job} disabled={disabled || recover.isPending} onRecovered={onRecovered} />}
+    {recover.data?.status === "failed" && <p role="alert">{recover.data.error_message || "处理未完成，请查看任务详情。"}</p>}
   </JobFailureDetails>;
+  if (compact) return <>
+    <div className="job-failure-notice" role="status"><span>本批次未完成，已完成的内容已保留</span><Button variant="text" onClick={() => setDetailsOpen(true)}>查看</Button></div>
+    <Dialog open={detailsOpen} title="本批次未完成" size="small" busy={recover.isPending} onClose={() => setDetailsOpen(false)}>{details}</Dialog>
+  </>;
+  return details;
 }
 
-export function JobFailureById({ jobId, disabled, onRecovered }: { jobId: number; disabled?: boolean; onRecovered?: (job: Job) => void }) {
+export function JobFailureById({ jobId, disabled, onRecovered, compact = false }: { jobId: number; disabled?: boolean; onRecovered?: (job: Job) => void; compact?: boolean }) {
   const client = useQueryClient();
   const observedStatus = useRef<string | undefined>(undefined);
   const query = useQuery({ queryKey: ["failure-job", jobId], queryFn: () => getJob(jobId), refetchInterval: query => query.state.data && ["queued", "running", "retrying", "processing"].includes(query.state.data.status) ? 2000 : false });
@@ -69,7 +80,7 @@ export function JobFailureById({ jobId, disabled, onRecovered }: { jobId: number
   if (query.isError) return <p role="alert">任务详情读取失败：{toErrorMessage(query.error)} <Button onClick={() => void query.refetch()}>重新读取</Button></p>;
   if (!query.data) return <p role="status">正在读取失败原因…</p>;
   if (!["failed", "cancelled"].includes(query.data.status)) return <p role="status">{query.data.status === "succeeded" ? "处理完成，请查看最新结果。" : "任务正在恢复，完成后将更新结果。"}</p>;
-  return <JobFailurePanel key={jobId} job={query.data} disabled={disabled} onRecovered={onRecovered} />;
+  return <JobFailurePanel key={jobId} job={query.data} disabled={disabled} onRecovered={onRecovered} compact={compact} />;
 }
 
 export function BatchFailurePanel({ job, onRecovered }: { job: Job; onRecovered?: () => void }) {
