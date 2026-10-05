@@ -79,6 +79,8 @@ async def apply_project_style(session, job, model):
         ),
     }
     prompt += reference_style_boundaries.get(str(job.payload.get("asset_generation_contract") or ""), "")
+    if job.payload.get("visual_identity_snapshot"):
+        prompt += "\n角色身份与着装优先级：前文已确定的年龄、外貌、人物地域身份、具体上装/下装/鞋履优先于风格要求；不能把长裤改成旗袍，不能用欧美电影风格替换已确定的中国或亚裔身份。"
     if job.job_type in {"text", "video"} and style.negative_prompt:
         prompt += f"\n避免：{style.negative_prompt}"
     negative = "\n".join(filter(None, [job.payload.get("negative_prompt"), style.negative_prompt])) if job.job_type == "image" else job.payload.get("negative_prompt")

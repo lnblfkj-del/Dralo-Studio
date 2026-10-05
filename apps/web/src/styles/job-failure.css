@@ -13,8 +13,12 @@
 .job-failure ul { margin:12px 0; padding-left:20px; }
 .overview-review-dialog .job-failure { padding:24px; }
 .asset-failed-scopes { padding:0 16px; }
+.job-failure__cast-review { border-top:1px solid var(--app-color-border); margin-top:16px; padding-top:12px; }
+.job-failure__cast-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(160px,1fr); gap:12px; align-items:center; margin:12px 0; }
+.job-failure__cast-row select { width:100%; min-height:40px; font:inherit; color:var(--app-color-text); background:var(--app-color-surface,white); border:1px solid var(--app-color-border); border-radius:6px; padding:8px; }
 .asset-failed-scopes > article + article { border-top:1px solid var(--app-color-border); }
 @media (max-width:600px) {
+  .job-failure__cast-row { grid-template-columns:minmax(0,1fr); gap:6px; }
   .overview-review-dialog .job-failure { padding:16px; }
   .job-failure dl > div { grid-template-columns:72px minmax(0,1fr); gap:8px; }
 }

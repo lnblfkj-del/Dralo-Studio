@@ -12,15 +12,27 @@ from app.core.errors import ConflictError
 def _name_index(story: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     aliases: dict[str, str] = {}
     rows: dict[str, dict[str, Any]] = {}
-    for character in story.get("characters") or []:
+    characters = story.get("characters") or []
+    # Real names take precedence over another character's alias.
+    for character in characters:
         name = str(character.get("name") or "").strip()
         if not name:
             continue
         rows[name] = character
-        for candidate in [name, *(character.get("aliases") or [])]:
+        aliases[name.casefold()] = name
+    canonical_keys = set(aliases)
+    candidates: dict[str, set[str]] = {}
+    for character in characters:
+        name = str(character.get("name") or "").strip()
+        if not name:
+            continue
+        for candidate in [character.get("character_id"), *(character.get("aliases") or [])]:
             normalized = str(candidate or "").strip().casefold()
-            if normalized and normalized not in aliases:
-                aliases[normalized] = name
+            if normalized and normalized not in canonical_keys:
+                candidates.setdefault(normalized, set()).add(name)
+    for key, names in candidates.items():
+        if len(names) == 1:
+            aliases[key] = next(iter(names))
     return aliases, rows
 
 
@@ -42,7 +54,9 @@ def canonicalize_episode_characters(story: dict[str, Any], names: list[Any]) -> 
             canonical.append(name)
             seen.add(key)
     if unknown:
-        raise ConflictError(f"分集角色不属于当前故事设定：{'、'.join(unknown)}")
+        error = ConflictError(f"分集角色不属于当前故事设定：{'、'.join(unknown)}")
+        error.code = "OUTLINE_CAST_IDENTITY_UNRESOLVED"
+        raise error
     return canonical
 
 

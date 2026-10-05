@@ -35,7 +35,7 @@ def story_context(story, start, end, *, character_ids=None, names=None):
         if (
             person.get("character_id") in ids
             or person.get("name") in names
-            or (character_ids is None and (in_range or person.get("importance") == "core"))
+            or (character_ids is None and (in_range or person.get("importance") in {"core", "recurring"}))
         ):
             characters.append(person)
     if not characters and not ids and not names:
@@ -43,6 +43,10 @@ def story_context(story, start, end, *, character_ids=None, names=None):
     return {
         **{key: deepcopy(story.get(key)) for key in OVERVIEW},
         "characters": deepcopy(characters),
+        "character_roster": [
+            {key: deepcopy(person.get(key)) for key in ("character_id", "name", "aliases", "role")}
+            for person in story.get("characters", [])
+        ],
         "event_timeline": deepcopy(events),
         "phase_plan": [
             deepcopy(phase)

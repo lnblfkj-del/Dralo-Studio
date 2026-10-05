@@ -24,7 +24,7 @@ import { NarrativeStructureField } from "@/components/creator/NarrativeStructure
 import { BriefCustomNumber } from "@/components/creator/BriefCustomNumber";
 import { toErrorMessage } from "@/api/client";
 import { getJob } from "@/api/jobs";
-import { JobFailurePanel } from "@/components/tasks/JobFailurePanel";
+import { JobFailureById, JobFailurePanel } from "@/components/tasks/JobFailurePanel";
 import { getProjectScriptReadiness, rejectAgentAction } from "@/api/projects";
 import type { AgentActionPreview, CreationArtifact, CreationSession, Job, NarrativeSpec, ScriptAssetBreakdownState, StoryBibleContent } from "@/types/api";
 
@@ -451,6 +451,9 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
         {!visibleStageBusy && session.workflow_progress?.status !== "succeeded"
           && (session.workflow_progress?.kind === "outline" || session.workflow_progress?.kind === "optimize" ? "outline" : "story") === visibleStage
           && <CreationWorkflowProgress progress={session.workflow_progress} />}
+        {session.workflow_progress?.status === "failed" && session.workflow_progress.job_id
+          && (session.workflow_progress.kind === "outline" || session.workflow_progress.kind === "optimize" ? "outline" : "story") === visibleStage
+          && <JobFailureById jobId={session.workflow_progress.job_id} disabled={busy} onRecovered={job => { onJob(job); refresh(); }} />}
 
         {!visibleStageBusy && !story && choosing && (
           <StoryPlanningBoard

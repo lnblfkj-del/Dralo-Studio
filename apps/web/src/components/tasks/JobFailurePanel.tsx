@@ -6,6 +6,7 @@ import { confirmRecallJob, getJob, listJobChildren, reprocessJobResponse, retryJ
 import { Button } from "@/components/ui";
 import type { Job } from "@/types/api";
 import "@/styles/job-failure.css";
+import { OutlineCastRecovery } from "./OutlineCastRecovery";
 
 export function JobFailureDetails({ job, children }: { job: Job; children?: ReactNode }) {
   const failure = job.failure_detail;
@@ -49,6 +50,7 @@ export function JobFailurePanel({ job, disabled = false, onRecovered, onEdit }: 
       {onEdit && <Button disabled={disabled || recover.isPending} onClick={onEdit}>修改调整要求</Button>}
     </div>
     {recover.error && <p role="alert">{toErrorMessage(recover.error)}</p>}
+    {action === "reprocess" && (job.target_type === "episode_outline" || (job.target_type === "outline_agent" && job.failure_detail?.category === "cast_identity")) && <OutlineCastRecovery job={job} disabled={disabled || recover.isPending} onRecovered={onRecovered} />}
   </JobFailureDetails>;
 }
 

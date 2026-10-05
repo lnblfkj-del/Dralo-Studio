@@ -186,12 +186,17 @@ async def reprocess_preserved_response(
     session: AsyncSession,
     job: Job,
     actor_id: int,
+    *,
+    character_name_corrections: dict[str, str] | None = None,
+    expected_response_sha256: str | None = None,
 ) -> Job:
     """Re-run local business processing only; this function has no provider path."""
     if job.status != JOB_STATUS_FAILED:
         raise ConflictError("仅本地处理失败的任务可以重新处理已保存响应")
     if job.error_code != "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED":
         raise ConflictError("该任务没有可重新处理的已保存模型响应")
+    if character_name_corrections is not None and not ((job.payload or {}).get("parameters") or {}).get("long_form_work_id"):
+        raise ConflictError("角色对应仅用于分批大纲结果恢复")
     recovery = dict((job.payload or {}).get("response_recovery") or {})
     if (
         job.target_type == "episode_director_pipeline"
@@ -229,6 +234,13 @@ async def reprocess_preserved_response(
         stored.status = "expired"
         raise ConflictError("已保存模型响应已超过保留期限，不能执行本地重处理")
 
+    corrections = None
+    if character_name_corrections is not None:
+        from app.services.outline_cast_recovery import validate_corrections
+        corrections = await validate_corrections(
+            session, job, stored, character_name_corrections, expected_response_sha256
+        )
+
     claimed = await session.execute(update(Job).where(
         Job.id == job.id, Job.status == JOB_STATUS_FAILED,
     ).values(status="processing"))
@@ -242,6 +254,8 @@ async def reprocess_preserved_response(
         "usage": dict(stored.usage or {}),
         "streaming": stored.streaming,
     }
+    if corrections:
+        result["_outline_cast_corrections"] = corrections
     try:
         async with session.begin_nested():
             if job.target_type == "episode_script_generation":
@@ -302,6 +316,9 @@ async def reprocess_preserved_response(
                     "response_id": stored.id,
                     "reprocessed_locally": True,
                     "model_called": False,
+                    "character_name_corrections": corrections,
+                    "actor_id": actor_id,
+                    "response_sha256": stored.response_sha256,
                 },
             }
             if not await mark_succeeded(
@@ -319,6 +336,9 @@ async def reprocess_preserved_response(
                     "status": "processed",
                     "processed_at": stored.processed_at.isoformat(),
                     "model_called": False,
+                    "character_name_corrections": corrections,
+                    "actor_id": actor_id,
+                    "response_sha256": stored.response_sha256,
                 },
             }
     except Exception as error:

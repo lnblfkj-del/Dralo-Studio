@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, GenerationFailedError
 from app.models import Job, Project, ProjectAssetLink
 from app.services import asset_service, business_executor_service, job_service
+from app.services.asset_visual_identity import project_context, retain_visual_facts, visual_profile
 
 TARGET_ASSET_PROMPT_PROPOSAL = "asset_prompt_proposal"
 
@@ -61,11 +62,13 @@ async def create_proposal_job(
             "name": asset["name"],
             "description": asset["description"],
             "attributes": asset["attributes"] or {},
+            "profile": visual_profile(asset["attributes"], links_by_asset[asset["id"]].production_data, asset["description"]),
             "current_prompt": prompt_overrides.get(asset["id"], asset["prompt_anchor"]),
             "production_revision": links_by_asset[asset["id"]].production_revision,
         }
         for asset in (by_id[asset_id] for asset_id in ordered_ids)
     ]
+    visual_context = await project_context(session, project)
     fingerprint_value = {
         "project_id": project.id,
         "asset_ids": ordered_ids,
@@ -77,6 +80,7 @@ async def create_proposal_job(
         ],
         "parameters": parameters,
         "snapshots": snapshots,
+        "visual_context": visual_context,
     }
     fingerprint = hashlib.sha256(
         json.dumps(
@@ -109,9 +113,11 @@ async def create_proposal_job(
         "输出格式为 {\"assets\":[{\"id\":1,\"prompt\":\"...\"}]}。"
         "必须逐项保留输入资产 ID；使用中文、具体且可视化；不写剧情，不提交图片，"
         "不得返回清单外的资产。\n"
+        "角色提示词必须包含已给profile中的外貌、年龄和完整服装（尤其下装、长裤与鞋履）；不得用风格覆盖人物身份、具体衣裤类型与年代。资料没有的信息不得伪称已确认。\n"
         f"执行 Skill：{json.dumps([{'key': item['key'], 'version': item['selected_version'], 'instruction': item.get('snapshot', {}).get('instruction', '')} for item in executor['skills']], ensure_ascii=False)}\n"
         "本次只提供下列资产文字快照，未提供全剧或图片像素。仅据此生成资产提示词，"
         "不得宣称已看图或完成全剧连续性检查；输出仍限定为 assets 中的 id 和 prompt。\n"
+        f"项目背景：{json.dumps(visual_context, ensure_ascii=False)}\n"
         f"资产快照：{json.dumps(snapshots, ensure_ascii=False)}"
     )
     job = await job_service.create_text_job(
@@ -133,6 +139,7 @@ async def create_proposal_job(
         "input_fingerprint": fingerprint,
         "asset_ids": ordered_ids,
         "asset_snapshots": snapshots,
+        "visual_context": visual_context,
         "business_executor": executor,
         "tool_key": "asset.prompt.generate",
         "auto_apply": True,
@@ -185,6 +192,10 @@ async def finalize_auto_apply(
         proposal = proposals.get(int(asset_id))
         if snapshot is None or proposal is None:
             skipped.append({"asset_id": int(asset_id), "reason": "模型未返回有效提示词"})
+            continue
+        proposal = retain_visual_facts(proposal, snapshot, (job.payload or {}).get("visual_context"))
+        if len(proposal) > 4000:
+            skipped.append({"asset_id": int(asset_id), "reason": "保留角色资料后超过提示词长度限制，未截断或覆盖"})
             continue
         if proposal == str(snapshot.get("current_prompt") or "").strip():
             unchanged.append(int(asset_id))

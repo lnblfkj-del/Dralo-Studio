@@ -250,6 +250,7 @@ async def step_prompt(db, item, state):
         context["previous_batch"] = done.get(str(state["cursor"] - 1))
         schema = OutlineBatch
         instruction = "只生成start到end集大纲，每集恰好一项。synopsis写清主要事件、冲突转折、角色行动及结果；characters列实际登场的规范姓名；dramatic_goal具体；cliffhanger可空。不得压缩成几句泛述。连续/单元故事按spec承接；独立故事不得强行承接。"
+        instruction += "story.character_roster是完整角色名册，characters是本批详细资料，详细资料未列出不代表角色不存在。characters数组只能引用名册中的规范name，不使用职务、临时称呼或新造姓名；别名仅帮助识别，不要求名册所有角色在每集出场。固定与轮换策略都必须遵守同一身份名册。"
         if state["kind"] == "optimize":
             context["original_episodes"] = [
                 row
@@ -324,6 +325,10 @@ async def advance(db, item, job, result):
     if kind == "outline":
         from app.services.outline_character_coverage import canonicalize_outline
 
+        corrections = result.get("_outline_cast_corrections") or {}
+        if corrections:
+            for episode in parsed["episodes"]:
+                episode["characters"] = [corrections.get(name, name) for name in episode["characters"]]
         parsed = canonicalize_outline(state["parameters"]["story_snapshot"], parsed)
     if kind == "events":
         frame = latest_frame(state)

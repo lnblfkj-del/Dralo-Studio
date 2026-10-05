@@ -68,6 +68,11 @@ def failure_detail(job: Any) -> dict[str, Any] | None:
         elif code == "CONFLICT":
             category, title, action = "conflict", "当前内容或任务状态已变化", "none"
             hint = "请刷新并核对当前内容，再决定是否生成新方案。"
+        if (job.target_type in {"episode_outline", "outline_agent"}
+                and (payload.get("parameters") or {}).get("long_form_work_id")
+                and (code == "OUTLINE_CAST_IDENTITY_UNRESOLVED" or "分集角色不属于当前故事设定：" in str(reason))):
+            category, title, action = "cast_identity", "已保存结果，需要核对角色称呼", "reprocess"
+            hint = "请核对未识别称呼对应的已有角色，再重新处理本批结果；不重新调用模型，已完成批次保留。"
         if (job.target_type == "episode_script_generation" and code == "MODEL_OUTPUT_POLLUTED"
                 and not recovery.get("last_reprocess_error_code")):
             action = "reprocess"

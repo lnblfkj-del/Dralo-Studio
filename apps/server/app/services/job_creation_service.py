@@ -152,6 +152,10 @@ async def create_image_job(
         )
         if project is None:
             raise NotFoundError("项目不存在")
+    from app.services.asset_visual_identity import image_identity
+    prompt, identity_snapshot = await image_identity(
+        session, await session.get(Project, project_id) if project_id else None, asset, prompt
+    )
     job = Job(
         owner_id=owner_id,
         project_id=project_id,
@@ -168,6 +172,7 @@ async def create_image_job(
             "reference_media_ids": reference_media_ids,
             "view_type": view_type,
             "view_label": view_label,
+            "visual_identity_snapshot": identity_snapshot,
             "parameters": {**model.default_params, **parameters},
         },
         provider=provider.name,

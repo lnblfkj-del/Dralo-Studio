@@ -138,8 +138,21 @@ export async function retryJob(jobId: number): Promise<Job> {
   return (await http.post<Job>(`/jobs/${jobId}/retry`)).data;
 }
 
-export async function reprocessJobResponse(jobId: number): Promise<Job> {
-  return (await http.post<Job>(`/jobs/${jobId}/reprocess-response`)).data;
+export interface OutlineCastReview {
+  response_sha256: string;
+  issues: { name: string; episodes: number[] }[];
+  characters: { name: string; role: string | null; aliases: string[] }[];
+}
+
+export async function getOutlineCastReview(jobId: number): Promise<OutlineCastReview> {
+  return (await http.get<OutlineCastReview>(`/jobs/${jobId}/outline-cast-review`)).data;
+}
+
+export async function reprocessJobResponse(jobId: number, correction?: {
+  character_name_corrections: Record<string, string>;
+  expected_response_sha256: string;
+}): Promise<Job> {
+  return (await http.post<Job>(`/jobs/${jobId}/reprocess-response`, correction)).data;
 }
 
 export async function confirmRecallJob(jobId: number): Promise<Job> {

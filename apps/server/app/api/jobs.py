@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Body, Query, Request, status
 from pydantic import BaseModel, Field, field_validator
 from sse_starlette.sse import EventSourceResponse
 
@@ -229,9 +229,40 @@ async def retry_job(job_id: int, session: SessionDep, user: CurrentUser) -> JobO
     return JobOut.model_validate(job)
 
 
+class ResponseCorrectionInput(BaseModel):
+    character_name_corrections: dict[str, str] = Field(min_length=1, max_length=100)
+    expected_response_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("character_name_corrections")
+    @classmethod
+    def bounded_names(cls, value):
+        if any(not key.strip() or not name.strip() or len(key) > 200 or len(name) > 200 for key, name in value.items()):
+            raise ValueError("角色称呼不能为空或超过200字")
+        return value
+
+
+@router.get("/{job_id}/outline-cast-review")
+async def outline_cast_review(job_id: int, session: SessionDep, user: CurrentUser):
+    from app.core.errors import ConflictError, PermissionDeniedError
+    from app.models import utcnow
+    from app.services.job_text_response_service import _latest_response
+    from app.services.outline_cast_recovery import review_response
+    from app.services.permission_service import allowed
+
+    if not allowed(user, "tasks.retry"):
+        raise PermissionDeniedError("无本地重新处理任务结果的权限")
+    job = await job_service.get_job(session, job_id, user.id)
+    stored = await _latest_response(session, job)
+    if (job.status != JOB_STATUS_FAILED or job.error_code != "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED"
+            or stored is None or stored.expires_at.replace(tzinfo=None) <= utcnow().replace(tzinfo=None)):
+        raise ConflictError("该任务没有可核对的已保存失败响应")
+    return await review_response(session, job, stored)
+
+
 @router.post("/{job_id}/reprocess-response", response_model=JobOut)
 async def reprocess_job_response(
-    job_id: int, session: SessionDep, user: CurrentUser
+    job_id: int, session: SessionDep, user: CurrentUser,
+    payload: ResponseCorrectionInput | None = Body(default=None),
 ) -> JobOut:
     from app.core.errors import PermissionDeniedError
     from app.services import job_text_response_service
@@ -241,7 +272,8 @@ async def reprocess_job_response(
         raise PermissionDeniedError("无本地重新处理任务结果的权限")
     job = await job_service.get_job(session, job_id, user.id)
     await job_text_response_service.reprocess_preserved_response(
-        session, job, user.id
+        session, job, user.id,
+        **(payload.model_dump() if payload is not None else {}),
     )
     await session.commit()
     return JobOut.model_validate(job)
