@@ -1,5 +1,6 @@
 /** R1 additive contracts. IDs are identities; names are display labels only. */
 export interface AssetProfile {
+  costume_mode?: "garment_only" | "worn" | null;
   aliases: string[];
   character_role: "lead" | "supporting" | "extra" | "unclassified";
   character_asset_id: number | null;
@@ -119,6 +120,7 @@ export interface CatalogItem {
     duration_seconds: number | null;
   } | null;
   latest_job: { id: number; status: string; progress: number } | null;
+  prompt_optimization?: { status: "pending" | "queued" | "generating" | "optimized" | "failed"; job_id: number | null; reason: string | null };
 }
 
 export interface AssetMediaSummary {

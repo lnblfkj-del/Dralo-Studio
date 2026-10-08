@@ -349,8 +349,8 @@ async def confirm_script_asset_breakdown(
                             character_asset_ids[str(value).strip().casefold()] = matched.id
                 if not matched.description and candidate.get("description"):
                     matched.description = candidate["description"]
-                if not matched.prompt_anchor and candidate.get("prompt_anchor"):
-                    matched.prompt_anchor = candidate["prompt_anchor"]
+                if not matched.prompt_anchor:
+                    matched.prompt_anchor = candidate.get("prompt_anchor") or candidate.get("description") or ""
             continue
         base_slug = (
             re.sub(r"[^\w\u4e00-\u9fff-]+", "-", str(candidate.get("name") or "")).strip("-")
@@ -401,7 +401,7 @@ async def confirm_script_asset_breakdown(
                 "name": candidate["name"],
                 "slug": slug,
                 "description": candidate.get("description") or "",
-                "prompt_anchor": candidate.get("prompt_anchor") or "",
+                "prompt_anchor": candidate.get("prompt_anchor") or candidate.get("description") or "",
                 "attributes": attributes,
             },
         )

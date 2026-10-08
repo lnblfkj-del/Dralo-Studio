@@ -29,10 +29,18 @@ def scope_id():
     return context.workspace_id if context else None
 
 
-async def install_skills(session, *, upgrade=False):
+async def install_skills(session, *, upgrade=False, keys: set[str] | None = None):
+    entries = catalog()["skills"]
+    if keys is not None:
+        unknown = keys - {entry["definition"]["key"] for entry in entries}
+        if unknown:
+            raise ValueError(f"Unknown catalog skills: {', '.join(sorted(unknown))}")
+        entries = [entry for entry in entries if entry["definition"]["key"] in keys]
+        if not entries:
+            return []
     result = []
     changed = {}
-    for entry in catalog()["skills"]:
+    for entry in entries:
         definition = entry["definition"]
         skill = await session.scalar(select(AgentSkill).where(AgentSkill.key == definition["key"], AgentSkill.workspace_id == scope_id()).with_for_update())
         if skill is None:
@@ -48,7 +56,8 @@ async def install_skills(session, *, upgrade=False):
                     raise ConflictError(f"{skill.key} 已修改，拒绝覆盖；本次升级回滚")
                 old_version = skill.version
                 skill.version = max(skill.version + 1, entry["initial_version"])
-                for key, value in definition.items():
+                # A behavioral upgrade must not reset a user's display name.
+                for key, value in desired.items():
                     setattr(skill, key, value)
                 session.add(AgentSkillVersion(skill_id=skill.id, version=skill.version, snapshot=skill_snapshot(skill)))
                 changed[skill.id] = (old_version, skill.version)

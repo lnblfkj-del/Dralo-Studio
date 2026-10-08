@@ -29,6 +29,7 @@ BATCH_PARENT_TARGETS = {
     "script_asset_breakdown_group",
     "episode_script_batch",
     "asset_image_batch",
+    "asset_prompt_batch",
     "episode_director_pipeline",
 }
 LOCAL_JOB_TYPES = {"media_process", "source_parse", JOB_TYPE_EXPORT}

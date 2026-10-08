@@ -77,9 +77,10 @@ async def apply_project_style(session, job, model):
             "\n\n服装参考资产风格边界：项目风格不得改变已绑定角色的脸型、五官、年龄感、肤色、体型和发型，不得引入动作表演、剧情场景或多宫格；"
             "必须保留同一角色的完整穿着效果、头饰到鞋底全部入镜、均匀影棚光和上下各8%安全边距。"
         ),
+        "costume-garment.v1": "\n服装本体优先：只展示衣物，不出现人物、模特或人台；风格图中的人物不能成为画面主体。",
     }
     prompt += reference_style_boundaries.get(str(job.payload.get("asset_generation_contract") or ""), "")
-    if job.payload.get("visual_identity_snapshot"):
+    if job.payload.get("visual_identity_snapshot") and (job.payload.get("parameters") or {}).get("costume_mode") != "garment_only":
         prompt += "\n角色身份与着装优先级：前文已确定的年龄、外貌、人物地域身份、具体上装/下装/鞋履优先于风格要求；不能把长裤改成旗袍，不能用欧美电影风格替换已确定的中国或亚裔身份。"
     if job.job_type in {"text", "video"} and style.negative_prompt:
         prompt += f"\n避免：{style.negative_prompt}"

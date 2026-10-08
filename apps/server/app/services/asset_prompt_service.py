@@ -12,8 +12,9 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, GenerationFailedError
-from app.models import Job, Project, ProjectAssetLink
+from app.models import Asset, Job, Project, ProjectAssetLink
 from app.services import asset_service, business_executor_service, job_service
+from app.services.asset_prompt_state import ACTIVE, asset_snapshot, input_hash, prompt_state
 from app.services.asset_visual_identity import project_context, retain_visual_facts, visual_profile
 
 TARGET_ASSET_PROMPT_PROPOSAL = "asset_prompt_proposal"
@@ -28,6 +29,18 @@ async def create_proposal_job(
     request_id: str,
     parameters: dict[str, Any],
 ) -> Job:
+    request_fingerprint = hashlib.sha256(json.dumps(
+        {"ids": list(dict.fromkeys(asset_ids)), "model": provider_model_id, "parameters": parameters},
+        sort_keys=True, ensure_ascii=False,
+    ).encode()).hexdigest()
+    for previous in (await session.scalars(select(Job).where(
+        Job.project_id == project.id, Job.owner_id == project.owner_id,
+        Job.target_type == TARGET_ASSET_PROMPT_PROPOSAL,
+    ))).all():
+        if (previous.payload or {}).get("request_id") == request_id:
+            if previous.payload.get("request_fingerprint") != request_fingerprint:
+                raise ConflictError("请求编号已用于其他资产提示词内容")
+            return previous
     executor = await business_executor_service.resolve_execution(
         session,
         "asset_prompt_generator",
@@ -50,6 +63,11 @@ async def create_proposal_job(
         )).all()
     )
     links_by_asset = {row.asset_id: row for row in overlay_rows}
+    for link in overlay_rows:
+        marker = (link.production_data or {}).get("prompt_optimization") or {}
+        active_job = await session.get(Job, marker["job_id"]) if marker.get("job_id") else None
+        if active_job and active_job.status in ACTIVE:
+            raise ConflictError("所选资产已有进行中的提示词优化任务")
     prompt_overrides = {
         row.asset_id: row.production_data["prompt_anchor"]
         for row in overlay_rows
@@ -63,6 +81,7 @@ async def create_proposal_job(
             "description": asset["description"],
             "attributes": asset["attributes"] or {},
             "profile": visual_profile(asset["attributes"], links_by_asset[asset["id"]].production_data, asset["description"]),
+            "source_profile": (links_by_asset[asset["id"]].production_data or {}).get("profile") or {},
             "current_prompt": prompt_overrides.get(asset["id"], asset["prompt_anchor"]),
             "production_revision": links_by_asset[asset["id"]].production_revision,
         }
@@ -114,6 +133,7 @@ async def create_proposal_job(
         "必须逐项保留输入资产 ID；使用中文、具体且可视化；不写剧情，不提交图片，"
         "不得返回清单外的资产。\n"
         "角色提示词必须包含已给profile中的外貌、年龄和完整服装（尤其下装、长裤与鞋履）；不得用风格覆盖人物身份、具体衣裤类型与年代。资料没有的信息不得伪称已确认。\n"
+        "服装本体模式只描述衣物、材质、剪裁和配饰，不输出人物脸孔或人体；角色穿着模式才保留关联角色身份。\n"
         f"执行 Skill：{json.dumps([{'key': item['key'], 'version': item['selected_version'], 'instruction': item.get('snapshot', {}).get('instruction', '')} for item in executor['skills']], ensure_ascii=False)}\n"
         "本次只提供下列资产文字快照，未提供全剧或图片像素。仅据此生成资产提示词，"
         "不得宣称已看图或完成全剧连续性检查；输出仍限定为 assets 中的 id 和 prompt。\n"
@@ -136,6 +156,7 @@ async def create_proposal_job(
     job.payload = {
         **job.payload,
         "request_id": request_id,
+        "request_fingerprint": request_fingerprint,
         "input_fingerprint": fingerprint,
         "asset_ids": ordered_ids,
         "asset_snapshots": snapshots,
@@ -145,6 +166,18 @@ async def create_proposal_job(
         "auto_apply": True,
     }
     await session.flush()
+    for snapshot in snapshots:
+        link = links_by_asset[snapshot["id"]]
+        revision = link.production_revision
+        claimed = await session.execute(update(ProjectAssetLink).where(
+            ProjectAssetLink.id == link.id,
+            ProjectAssetLink.production_revision == revision,
+        ).values(production_data={**(link.production_data or {}), "prompt_optimization": {
+            "job_id": job.id, "input_hash": input_hash(snapshot),
+        }}, production_revision=revision + 1).execution_options(synchronize_session=False))
+        if claimed.rowcount != 1:
+            raise ConflictError("资产已并发修改，请刷新后重试")
+        await session.refresh(link)
     return job
 
 
@@ -177,7 +210,7 @@ async def finalize_auto_apply(
     job: Job,
     result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Apply optimized prompts only when the captured production revision is unchanged."""
+    """Apply only to the claimed, unchanged source; unrelated image writes are allowed."""
     proposals = _parse_prompt_assets(str(result.get("text") or ""))
     snapshots = {
         int(row["id"]): row
@@ -197,20 +230,24 @@ async def finalize_auto_apply(
         if len(proposal) > 4000:
             skipped.append({"asset_id": int(asset_id), "reason": "保留角色资料后超过提示词长度限制，未截断或覆盖"})
             continue
-        if proposal == str(snapshot.get("current_prompt") or "").strip():
-            unchanged.append(int(asset_id))
-            continue
         link = await session.scalar(
             select(ProjectAssetLink).where(
                 ProjectAssetLink.project_id == job.project_id,
                 ProjectAssetLink.asset_id == int(asset_id),
             )
         )
-        expected_revision = int(snapshot.get("production_revision") or 0)
-        if link is None or link.production_archived or link.production_revision != expected_revision:
+        asset = await session.get(Asset, int(asset_id))
+        if link is not None:
+            await session.refresh(link)
+        marker = (link.production_data or {}).get("prompt_optimization") or {} if link else {}
+        if (link is None or asset is None or link.production_archived
+                or marker.get("job_id") != job.id
+                or input_hash(asset_snapshot(asset, link)) != input_hash(snapshot)):
             skipped.append({"asset_id": int(asset_id), "reason": "资产已在其他页面修改或归档，未覆盖"})
             continue
-        data = {**(link.production_data or {}), "prompt_anchor": proposal}
+        expected_revision = link.production_revision
+        data = {**(link.production_data or {}), "prompt_anchor": proposal,
+                "prompt_optimization": {**marker, "applied_hash": input_hash({**snapshot, "current_prompt": proposal})}}
         written = await session.execute(
             update(ProjectAssetLink)
             .where(
@@ -225,7 +262,7 @@ async def finalize_auto_apply(
             .execution_options(synchronize_session=False)
         )
         if written.rowcount == 1:
-            applied.append(int(asset_id))
+            (unchanged if proposal == str(snapshot.get("current_prompt") or "").strip() else applied).append(int(asset_id))
         else:
             skipped.append({"asset_id": int(asset_id), "reason": "资产并发修改，未覆盖"})
     return {
@@ -238,3 +275,72 @@ async def finalize_auto_apply(
             "skipped": skipped,
         },
     }
+
+
+async def create_batch(session, project, *, asset_ids, provider_model_id, request_id, parameters, generation_mode="missing"):
+    """Small durable child scopes keep long selections off the browser event loop."""
+    from app.models import JOB_STATUS_PROCESSING, JOB_TYPE_TEXT
+    ids = list(dict.fromkeys(asset_ids))
+    fingerprint = hashlib.sha256(json.dumps(
+        [ids, provider_model_id, parameters, generation_mode], sort_keys=True,
+    ).encode()).hexdigest()
+    previous = (await session.scalars(select(Job).where(
+        Job.project_id == project.id, Job.owner_id == project.owner_id,
+        Job.parent_job_id.is_(None),
+        Job.target_type.in_([TARGET_ASSET_PROMPT_PROPOSAL, "asset_prompt_batch"]),
+    ))).all()
+    for job in previous:
+        if (job.payload or {}).get("batch_request_id") == request_id:
+            if job.payload.get("batch_fingerprint") != fingerprint:
+                raise ConflictError("请求编号已用于不同的提示词批次")
+            return job
+    rows = (await session.execute(select(Asset, ProjectAssetLink).join(
+        ProjectAssetLink, ProjectAssetLink.asset_id == Asset.id,
+    ).where(ProjectAssetLink.project_id == project.id, Asset.id.in_(ids)))).all()
+    by_id = {asset.id: (asset, link) for asset, link in rows}
+    if not ids or len(by_id) != len(ids):
+        raise ConflictError("资产清单包含不属于当前项目的资产")
+    eligible, skipped = [], []
+    for asset_id in ids:
+        asset, link = by_id[asset_id]
+        marker = (link.production_data or {}).get("prompt_optimization") or {}
+        job = await session.get(Job, marker["job_id"]) if marker.get("job_id") else None
+        state = prompt_state(asset, link, job)
+        reason = ("资产已归档" if link.production_archived else
+                  "提示词正在优化" if state["status"] in {"queued", "generating"} else
+                  "提示词已优化" if state["status"] == "optimized" and generation_mode != "regenerate" else None)
+        if reason:
+            skipped.append({"asset_id": asset_id, "reason": reason})
+        else:
+            eligible.append(asset_id)
+    if not eligible:
+        raise ConflictError("所选资产均已优化、归档或正在优化")
+    children = []
+    for offset in range(0, len(eligible), 8):
+        children.append(await create_proposal_job(session, project,
+            asset_ids=eligible[offset:offset + 8], provider_model_id=provider_model_id,
+            request_id=f"{request_id[:100]}:{offset}", parameters=parameters))
+    if len(children) == 1:
+        parent = children[0]
+        parent.result = {"requested": len(ids), "selection_skipped": skipped}
+    else:
+        parent = Job(owner_id=project.owner_id, project_id=project.id,
+                     job_type=JOB_TYPE_TEXT, status=JOB_STATUS_PROCESSING, progress=0,
+                     target_type="asset_prompt_batch", target_id=project.id, payload={},
+                     result={"requested": len(ids), "selection_skipped": skipped, "total": len(children)})
+        session.add(parent)
+        await session.flush()
+        for child in children:
+            child.parent_job_id = parent.id
+    parent.payload = {**parent.payload, "batch_request_id": request_id,
+                      "batch_fingerprint": fingerprint, "asset_ids": eligible}
+    await session.flush()
+    return parent
+
+
+async def latest(session, project):
+    return await session.scalar(select(Job).where(
+        Job.project_id == project.id, Job.owner_id == project.owner_id,
+        Job.parent_job_id.is_(None), Job.deleted_at.is_(None),
+        Job.target_type.in_([TARGET_ASSET_PROMPT_PROPOSAL, "asset_prompt_batch"]),
+    ).order_by(Job.id.desc()).limit(1))

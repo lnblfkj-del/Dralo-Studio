@@ -72,6 +72,21 @@ def _safe_provider_diagnostic(details: dict[str, Any] | None) -> dict[str, Any]:
 def safe_output_diagnostic(details: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(details, dict):
         return {}
+    details = dict(details)
+    if "field_errors" not in details and isinstance(details.get("errors"), list):
+        labels = {"shots": "镜头", "segments": "片段", "action": "动作", "prompt": "提示词",
+                  "shot_id": "镜头编号", "shot_ids": "镜头列表", "duration": "时长",
+                  "generation_duration": "生成时长", "parameters": "参数"}
+        reasons = {"missing": "缺少必填字段", "string_type": "应为文本", "list_type": "应为列表",
+                   "dict_type": "应为对象", "extra_forbidden": "包含未允许的字段"}
+        details["field_errors"] = [{
+            "field": ".".join(str(value) for value in item.get("loc", [])),
+            "label": " / ".join(f"第 {value + 1} 项" if isinstance(value, int) else labels.get(value, str(value))
+                                  for value in item.get("loc", [])) or "根对象",
+            "reason": reasons.get(item.get("type"), "未满足字段校验规则"),
+            "expected": str(item.get("type") or ""),
+        } for item in details["errors"][:12] if isinstance(item, dict)]
+        details.setdefault("invalid_fields", [item["field"] for item in details["field_errors"]])
     diagnostic: dict[str, Any] = {}
     for key in _OUTPUT_DIAGNOSTIC_KEYS:
         value = details.get(key)
@@ -239,11 +254,12 @@ async def mark_failed(
         else:
             code = "PROVIDER_OUTCOME_UNKNOWN"
             message = f"{original_message}；上游是否完成尚不确定，手动重试将发起新请求"
-    elif (job.job_type == "tts"
+    elif (job.job_type in {"tts", "image"}
             and (job.payload or {}).get("media_submission", {}).get("started")
             and code in {"PROVIDER_ERROR", "TIMEOUT_ERROR", "GENERATION_FAILED"}):
-        code = "PROVIDER_OUTCOME_UNKNOWN"
-        message = "配音请求已提交但结果未确认，请核对渠道记录；系统不会自动重发"
+        if not _safe_provider_diagnostic(provider_diagnostic).get("http_status"):
+            code = "PROVIDER_OUTCOME_UNKNOWN"
+            message = "媒体请求已提交但结果未确认，请核对渠道记录；系统不会自动重发"
     job.error_code = code
     job.error_message = message
     history = list((job.payload or {}).get("attempt_history") or [])
@@ -282,11 +298,16 @@ async def mark_failed(
             },
         }
     model_cooldown = None
-    if code == "RATE_LIMIT_ERROR":
+    if code in {"RATE_LIMIT_ERROR", "PROVIDER_CAPACITY_UNAVAILABLE"}:
         from app.services.job_concurrency_service import record_model_rate_limit
         model_cooldown = await record_model_rate_limit(
             session, job, retry_after_seconds=retry_after_seconds
         )
+    if code == "PROVIDER_CAPACITY_UNAVAILABLE" and job.parent_job_id:
+        parent = await session.get(Job, job.parent_job_id)
+        if parent is not None and parent.target_type == "asset_image_batch":
+            parent.batch_paused_at = utcnow()
+            parent.payload = {**(parent.payload or {}), "pause_reason": "渠道暂无可用图片资源或额度，请核对后继续批次"}
     uncertain_video = job.payload.get("video_submission", {}).get("started") and not job.payload.get("video_submission", {}).get("id")
     if uncertain_video:
         job.error_message = message + "；未确认外部任务 ID，请先在当前模型渠道核对任务/账单，系统不会自动重发"
@@ -299,6 +320,7 @@ async def mark_failed(
         "PROVIDER_MODEL_NOT_FOUND",
         "PROVIDER_METHOD_NOT_ALLOWED",
         "QUOTA_ERROR",
+        "PROVIDER_CAPACITY_UNAVAILABLE",
         "CONFLICT",
         "MODEL_NOT_FOUND",
         "VIDEO_REMOTE_TIMEOUT",
@@ -306,7 +328,8 @@ async def mark_failed(
         "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED",
     }
     manual_text_failure = job.job_type == "text" and submission.get("status") == "submitted"
-    if non_retryable or manual_text_failure or job.attempts >= job.max_attempts or uncertain_video:
+    submitted_image = job.job_type == "image" and (job.payload or {}).get("media_submission", {}).get("started")
+    if non_retryable or manual_text_failure or submitted_image or job.attempts >= job.max_attempts or uncertain_video:
         job.status = JOB_STATUS_FAILED
         job.finished_at = utcnow()
     else:
@@ -491,6 +514,13 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
             for item in children
         ],
     }
+    if parent.target_type == "asset_prompt_batch":
+        applications = [(item.result or {}).get("prompt_application") or {} for item in children]
+        parent.result = {**parent.result, "prompt_application": {
+            "mode": "automatic", "requested": len((parent.payload or {}).get("asset_ids", [])),
+            **{key: [row for application in applications for row in application.get(key, [])]
+               for key in ("applied", "unchanged", "skipped")},
+        }}
     preparation_error = next((
         (item.result or {}).get("next_episode_preparation_error") for item in reversed(children)
         if item.status == JOB_STATUS_SUCCEEDED and (item.result or {}).get("next_episode_preparation_error")

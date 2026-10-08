@@ -126,7 +126,10 @@ def normalize_asset_view(asset_type: str, view_type: str | None = None, view_lab
     return resolved_type, (view_label or "").strip() or ASSET_VIEW_LABELS[resolved_type]
 
 
-def asset_image_prompt(asset_type: str, prompt: str, view_type: str = "base") -> str:
+def asset_image_prompt(asset_type: str, prompt: str, view_type: str = "base", *, costume_mode=None, costume_direction="正面") -> str:
+    if asset_type == "costume" and costume_mode == "garment_only":
+        from app.services.costume_generation_service import garment_prompt
+        return garment_prompt(prompt, costume_direction)
     requirement = DERIVED_IMAGE_REQUIREMENTS.get((asset_type, view_type), BASE_IMAGE_REQUIREMENTS.get(asset_type))
     clean = prompt.strip()
     compiled = f"{clean}\n\n资产视图制作要求：{requirement}" if requirement else clean

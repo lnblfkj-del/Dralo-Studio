@@ -21,6 +21,7 @@ class AssetProfile(StrictContract):
     conflict: str | None = Field(default=None, max_length=4000)
     arc: str | None = Field(default=None, max_length=4000)
     costume: str | None = Field(default=None, max_length=4000)
+    costume_mode: Literal["garment_only", "worn"] | None = None
     voice: str | None = Field(default=None, max_length=2000)
     audio_usage: Literal["voice", "music", "ambience", "sfx", "unclassified"] = "unclassified"
     language: str | None = Field(default=None, max_length=40)

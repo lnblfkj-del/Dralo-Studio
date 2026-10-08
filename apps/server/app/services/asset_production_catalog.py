@@ -3,6 +3,7 @@
 from app.services.asset_production_shared import *
 from app.services.asset_production_core import link_for
 from app.services.asset_audio_profile import audio_usage_expression, effective_profile
+from app.services.asset_prompt_state import prompt_state
 
 
 def _source_episode_numbers(
@@ -181,6 +182,11 @@ async def catalog(
         job.target_id: {"id": job.id, "status": job.status, "progress": job.progress}
         for job in jobs
     }
+    prompt_ids = {(link.production_data or {}).get("prompt_optimization", {}).get("job_id")
+                  for _, link in rows} - {None}
+    prompt_jobs = {job.id: job for job in (await session.scalars(
+        select(Job).where(Job.id.in_(prompt_ids), Job.project_id == project.id)
+    )).all()} if prompt_ids else {}
     usage_counts = (
         dict(
             (
@@ -200,6 +206,9 @@ async def catalog(
         for item in (link.production_data or {}).get("adoptions", [])
         if item.get("version_id")
     }
+    main_version_ids = {item.get("version_id") for _, link in rows
+                        for item in (link.production_data or {}).get("adoptions", [])
+                        if item.get("key") in {"default", "appearance:default", "environment:default", "first_frame"}}
     legacy_assets = [asset.id for asset, link in rows if "adoptions" not in (link.production_data or {})]
     preview_rows = (
         (
@@ -224,6 +233,7 @@ async def catalog(
     )
     previews: dict[int, dict[str, Any]] = {}
     ready_ids: set[int] = set()
+    preview_rows = sorted(preview_rows, key=lambda row: row[0].id not in main_version_ids)
     for version, media in preview_rows:
         if version.id in adopted_version_ids or (version.asset_id in legacy_assets and version.is_final):
             ready_ids.add(version.asset_id)
@@ -265,6 +275,8 @@ async def catalog(
                 "usage_count": usage_counts.get(asset.id, 0),
                 "preview_media": previews.get(asset.id),
                 "latest_job": job_map.get(asset.id),
+                "prompt_optimization": prompt_state(asset, link, prompt_jobs.get(
+                    (link.production_data or {}).get("prompt_optimization", {}).get("job_id"))),
             }
             for asset, link in rows
         ],

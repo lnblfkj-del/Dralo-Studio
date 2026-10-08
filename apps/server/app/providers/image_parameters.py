@@ -1,11 +1,12 @@
 """Translate UI image ratios to the OpenAI image size contract."""
 
 from app.core.errors import ConflictError
+from app.services.image_model_contract import METADATA_KEYS
 
 
 def openai_image_parameters(model, parameters):
     values = {key: value for key, value in parameters.items()
-              if key not in {"resolutions", "aspect_ratios", "durations"}}
+              if key not in METADATA_KEYS}
     if not model.startswith("gpt-image-"):
         return values
     ratio = values.pop("aspect_ratio", None)

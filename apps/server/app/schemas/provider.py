@@ -27,6 +27,10 @@ def validate_model_values(value, *, pricing=False):
         for key in ("durations", "aspect_ratios", "resolutions"):
             if key in value and not isinstance(value[key], list):
                 raise ValueError(f"{key} 必须是数组")
+        if "max_reference_images" in value and (type(value["max_reference_images"]) is not int or not 0 <= value["max_reference_images"] <= 32):
+            raise ValueError("参考图数量必须为 0 到 32 的整数")
+        if "supports_negative_prompt" in value and type(value["supports_negative_prompt"]) is not bool:
+            raise ValueError("负向提示词参数支持状态必须是布尔值")
         if any(type(item) not in (int, float) or not isfinite(item) or item <= 0 for item in value.get("durations", [])):
             raise ValueError("支持时长必须是正数数组，单位秒")
     return value

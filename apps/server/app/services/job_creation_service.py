@@ -143,9 +143,22 @@ async def create_image_job(
         from app.providers.image_parameters import openai_image_parameters
         openai_image_parameters(model.model_id, parameters)
     from app.services.asset_identity_input import costume_identity
+    from app.services.costume_generation_service import resolve_mode
+    costume_mode = await resolve_mode(session, project_id, asset, parameters) if asset else None
+    if costume_mode:
+        parameters["costume_mode"] = costume_mode
     prompt, reference_media_ids = await costume_identity(
-        session, project_id, asset_id, model, prompt, reference_media_ids
+        session, project_id, asset_id, model, prompt, reference_media_ids, mode=costume_mode or "worn"
     )
+    from app.services.image_model_contract import validate_image_inputs
+    from app.services.style_generation_service import project_style_media
+    references_to_validate = list(reference_media_ids)
+    # Worker appends the style reference; reserve its real slot during submission.
+    if project_id is not None and "reference_images" in model.capabilities:
+        style_media = await project_style_media(session, project_id, owner_id, "image")
+        if style_media:
+            references_to_validate.append(style_media)
+    validate_image_inputs(model, parameters, references_to_validate)
     if project_id is not None:
         project = await session.scalar(
             select(Project.id).where(Project.id == project_id, owner_scope(Project.owner_id, owner_id))
@@ -154,7 +167,8 @@ async def create_image_job(
             raise NotFoundError("项目不存在")
     from app.services.asset_visual_identity import image_identity
     prompt, identity_snapshot = await image_identity(
-        session, await session.get(Project, project_id) if project_id else None, asset, prompt
+        session, await session.get(Project, project_id) if project_id else None, asset, prompt,
+        costume_mode=costume_mode, costume_direction=parameters.get("costume_direction", "正面")
     )
     job = Job(
         owner_id=owner_id,

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check, ChevronLeft, ChevronRight, Filter, FolderSearch, LayoutGrid, List,
-  LoaderCircle, MapPin, Menu, Plus, RotateCcw, Search, Sparkles,
+  LoaderCircle, MapPin, Menu, MoreHorizontal, Plus, RotateCcw, Search, Sparkles,
   WandSparkles, X,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -9,7 +9,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import * as assetApi from "@/api/assets";
 import { toErrorMessage } from "@/api/client";
-import { cancelJob, getJob, retryJob, subscribeToJob } from "@/api/jobs";
+import { cancelJob, getJob, retryJob, resumeBatch } from "@/api/jobs";
 import { getAssetCatalog } from "@/api/productionContract";
 import { getProject, getProjectScriptReadiness, listEpisodes } from "@/api/projects";
 import { getAISettings, listProviders } from "@/api/providers";
@@ -66,6 +66,11 @@ export function AssetLibraryPage() {
     refetchInterval: (state) => state.state.data && ACTIVE.has(state.state.data.status) ? 2500 : false,
   });
   const catalogBatchRefresh = useRef("");
+  const latestPromptBatch = useQuery({
+    queryKey: ["asset-prompt-batch", projectId],
+    queryFn: () => assetApi.getLatestAssetPromptBatch(projectId), enabled: validId,
+    refetchInterval: (state) => state.state.data && ACTIVE.has(state.state.data.status) ? 2500 : false,
+  });
 
   const [type, setType] = useState<AssetType>(restored.type ?? "character");
   const [subtype, setSubtype] = useState(restored.subtype ?? "");
@@ -99,7 +104,9 @@ export function AssetLibraryPage() {
     placeholderData: (previous) => previous,
     refetchInterval: (state) => (
       state.state.data?.items.some((item) => item.latest_job && ACTIVE.has(item.latest_job.status as JobStatus))
+      || state.state.data?.items.some((item) => ["queued", "generating"].includes(item.prompt_optimization?.status ?? ""))
       || Boolean(latestImageBatch.data && ACTIVE.has(latestImageBatch.data.status))
+      || Boolean(latestPromptBatch.data && ACTIVE.has(latestPromptBatch.data.status))
     ) ? 2500 : false,
   });
   const items = catalog.data?.items ?? [];
@@ -143,6 +150,9 @@ export function AssetLibraryPage() {
     catalogBatchRefresh.current = signature;
     void queryClient.invalidateQueries({ queryKey: ["asset-catalog", projectId] });
   }, [latestImageBatch.data, projectId, queryClient]);
+  useEffect(() => {
+    if (latestPromptBatch.data) void queryClient.invalidateQueries({ queryKey: ["asset-catalog", projectId] });
+  }, [latestPromptBatch.data, projectId, queryClient]);
 
   const clearSelection = (message?: string) => {
     if ((selectedIds.length || allFiltered) && message) setNotice(message);
@@ -193,7 +203,7 @@ export function AssetLibraryPage() {
                 return;
               }
               setSelectedIds((current) => current.includes(item.id) ? current.filter((id) => id !== item.id) : [...current, item.id]);
-            }} projectId={projectId} onDetail={() => setDetailId(item.id)} onCanvas={() => openCanvas(item)} onRefresh={() => void reload()} />)}
+            }} projectId={projectId} onDetail={() => setDetailId(item.id)} onCanvas={() => openCanvas(item)} onRefresh={() => void reload()} onOptimize={() => { setAllFiltered(false); setSelectedIds([item.id]); setBatchMode("prompt"); }} />)}
           </div>}
           {!catalog.isPending && !catalog.isError && items.length === 0 && <EmptyState totalAssets={totalAssets} categoryCount={catalog.data?.counts[type] ?? 0} filtered={Boolean(query || episodeId || unassigned || readiness !== "all" || subtype)} onCreate={() => setCreateOpen(true)} onExtract={extractAssets} onClear={() => changeFilter(() => { setSearch(""); setEpisodeId(null); setUnassigned(false); setReadiness("all"); setSubtype(""); })} />}
           <footer className="r5-pagination"><span>第 {page} / {pageCount} 页</span><button aria-label="上一页" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}><ChevronLeft size={16} /></button><button aria-label="下一页" disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)}><ChevronRight size={16} /></button></footer>
@@ -236,17 +246,23 @@ function AssetInspectorPlaceholder({ counts, total, visible, missing }: { counts
   </aside>;
 }
 
-function AssetCard({ projectId, item, allowSelect, selected, onSelect, onDetail, onCanvas, onRefresh }: { projectId: number; item: CatalogItem; allowSelect: boolean; selected: boolean; onSelect: () => void; onDetail: () => void; onCanvas: () => void; onRefresh: () => void }) {
+function AssetCard({ projectId, item, allowSelect, selected, onSelect, onDetail, onCanvas, onRefresh, onOptimize }: { projectId: number; item: CatalogItem; allowSelect: boolean; selected: boolean; onSelect: () => void; onDetail: () => void; onCanvas: () => void; onRefresh: () => void; onOptimize: () => void }) {
   const job = item.latest_job;
   const active = job && ACTIVE.has(job.status as JobStatus);
   const action = useMutation({ mutationFn: () => active ? cancelJob(job!.id) : retryJob(job!.id), onSuccess: onRefresh });
+  const promptStatus = item.prompt_optimization?.status ?? "pending";
+  const promptBusy = promptStatus === "queued" || promptStatus === "generating";
   return <article className={`r5-asset-card ${selected ? "selected" : ""}`}>
     {allowSelect && <button className="r5-card-check" aria-label={`${selected ? "取消选择" : "选择"}${item.name}`} aria-pressed={selected} onClick={onSelect}>{selected && <Check size={10} />}</button>}
     <div className="r5-card-main">
       <div className="r5-card-preview"><AssetMediaPreview mediaFileId={item.preview_media?.media_file_id} kind={item.preview_media?.kind} assetType={item.asset_type} alt={item.name} compact /></div>
       <button className="r5-card-copy" aria-label={`查看${item.name}`} onClick={onDetail}><div><strong>{item.name}</strong><span className={`r5-state ${item.readiness}`}>{item.readiness === "ready" ? "可用" : "待素材"}</span></div><p>{summary(item)}</p><small>{item.version_count} 个版本 · {item.usage_count} 处使用</small></button>
     </div>
-    {job && <div className={`r5-job ${job.status}`}><span>{jobStatus(job.status)} {Math.round(job.progress)}%</span>{(active || job.status === "failed") && <button disabled={action.isPending} onClick={() => action.mutate()}>{active ? "取消" : "重试"}</button>}</div>}
+    <div className={`r5-prompt-status ${promptStatus}`} title={item.prompt_optimization?.reason ?? undefined}>
+      <span>{promptBusy && <LoaderCircle size={12} className="spin" />}{({ pending: "提示词待优化", queued: "等待优化", generating: "提示词生成中", optimized: "提示词已优化", failed: "提示词优化失败" })[promptStatus]}</span>
+      {promptBusy ? <Link to={`/tasks?project_id=${projectId}`}>查看</Link> : promptStatus === "optimized" ? <details><summary title="提示词操作" aria-label="提示词操作"><MoreHorizontal size={16} /></summary><button onClick={onOptimize}>重新优化</button></details> : <button disabled={!allowSelect} onClick={onOptimize}>{promptStatus === "failed" ? "重试" : "优化提示词"}</button>}
+    </div>
+    {job && job.status !== "succeeded" && <div className={`r5-job ${job.status}`}><span>{jobStatus(job.status)}{active ? ` ${Math.round(job.progress)}%` : ""}</span>{active ? <button disabled={action.isPending} onClick={() => action.mutate()}>取消</button> : job.status === "failed" ? <Link to={`/tasks?project_id=${projectId}`}>查看原因</Link> : null}</div>}
     {action.error && <div className="r5-card-job-error" role="alert"><span>{toErrorMessage(action.error)}</span><Link to={`/tasks?project_id=${projectId}`}>任务中心核对</Link></div>}
     <button className="r5-card-canvas" title="打开画布" aria-label={`在画布中打开${item.name}`} onClick={onCanvas}><MapPin size={15} /></button>
   </article>;
@@ -278,7 +294,7 @@ function CreateAssetDialog({ projectId, initialType, onClose, onCreated }: { pro
 
 function BatchDialog({ mode, projectId, projectAspectRatio, selected, allFiltered, total, catalogParams, textModels, imageModels, defaultTextModelId, defaultImageModelId, restoreImageBatch, onClose, onDone }: {
   mode: "prompt" | "image"; projectId: number; projectAspectRatio?: string; selected: CatalogItem[]; allFiltered: boolean; total: number;
-  catalogParams: Parameters<typeof getAssetCatalog>[1];
+  catalogParams: NonNullable<Parameters<typeof getAssetCatalog>[1]>;
   textModels: Array<{ id: number; name: string; providerName: string }>;
   imageModels: Array<{ id: number; name: string; providerName: string; default_params: Record<string, unknown> }>;
   defaultTextModelId: number | null; defaultImageModelId: number | null; restoreImageBatch: boolean; onClose: () => void; onDone: (message: string) => void;
@@ -289,6 +305,9 @@ function BatchDialog({ mode, projectId, projectAspectRatio, selected, allFiltere
   const [aspectRatio, setAspectRatio] = useState("project");
   const [generationMode, setGenerationMode] = useState<"missing" | "regenerate">(!allFiltered && selected.some((item) => item.version_count > 0) ? "regenerate" : "missing");
   const [negative, setNegative] = useState("");
+  const [costumeMode, setCostumeMode] = useState("garment_only");
+  const [costumeViews, setCostumeViews] = useState("single");
+  const [promptMode, setPromptMode] = useState<"missing" | "regenerate">(!allFiltered && selected.every((item) => item.prompt_optimization?.status === "optimized") ? "regenerate" : "missing");
   const [trackedBatchId, setTrackedBatchId] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -314,7 +333,7 @@ function BatchDialog({ mode, projectId, projectAspectRatio, selected, allFiltere
         generation_mode: generationMode,
         provider_model_id: Number(modelId),
         negative_prompt: negative.trim() || null,
-        parameters: { aspect_ratio: effectiveRatio },
+        parameters: { aspect_ratio: effectiveRatio, ...(catalogParams.kind === "costume" ? { costume_mode: costumeMode, costume_views: costumeViews } : {}) },
         request_id: crypto.randomUUID(),
         confirmed: true,
       });
@@ -342,13 +361,13 @@ function BatchDialog({ mode, projectId, projectAspectRatio, selected, allFiltere
     refetchInterval: (state) => state.state.data && ACTIVE.has(state.state.data.status) ? 2000 : false,
   });
   const batchAction = useMutation({
-    mutationFn: (action: "cancel" | "retry") => {
+    mutationFn: (action: "cancel" | "retry" | "resume") => {
       if (!trackedBatchId) throw new Error("批量任务不存在");
-      return action === "cancel" ? cancelJob(trackedBatchId) : retryJob(trackedBatchId);
+      return action === "cancel" ? cancelJob(trackedBatchId) : action === "resume" ? resumeBatch(trackedBatchId) : retryJob(trackedBatchId);
     },
     onSuccess: (job) => {
       queryClient.setQueryData(["asset-image-batch-job", job.id], job);
-      queryClient.setQueryData(["asset-image-batch", projectId], job);
+      queryClient.setQueryData([mode === "prompt" ? "asset-prompt-batch" : "asset-image-batch", projectId], job);
       void queryClient.invalidateQueries({ queryKey: ["asset-catalog", projectId] });
     },
   });
@@ -362,37 +381,46 @@ function BatchDialog({ mode, projectId, projectAspectRatio, selected, allFiltere
   const propose = useMutation({
     mutationFn: async () => {
       const rows = await resolveItems();
-      let applied = 0;
-      let unchanged = 0;
-      let skipped = 0;
-      for (let offset = 0; offset < rows.length; offset += 100) {
-        const chunk = rows.slice(offset, offset + 100);
-        const job = await assetApi.createAssetPromptProposal(projectId, { asset_ids: chunk.map((item) => item.id), provider_model_id: Number(modelId), request_id: crypto.randomUUID(), parameters: {}, confirmed: true });
-        const completed = await waitForJob(job);
-        const application = completed.result?.prompt_application as { applied?: number[]; unchanged?: number[]; skipped?: unknown[] } | undefined;
-        if (!application) throw new Error("优化任务已完成，但服务端未返回自动填入结果");
-        applied += application.applied?.length ?? 0;
-        unchanged += application.unchanged?.length ?? 0;
-        skipped += application.skipped?.length ?? 0;
-      }
-      return `已自动填入 ${applied} 项优化提示词${unchanged ? `，${unchanged} 项无变化` : ""}${skipped ? `，${skipped} 项因缺少结果或并发修改未覆盖` : ""}；未发起图片生成。`;
+      return assetApi.createAssetPromptProposal(projectId, { asset_ids: rows.map((item) => item.id), provider_model_id: Number(modelId), request_id: crypto.randomUUID(), generation_mode: promptMode, parameters: {}, confirmed: true });
     },
-    onSuccess: onDone,
+    onSuccess: (job) => {
+      setTrackedBatchId(job.id);
+      queryClient.setQueryData(["asset-prompt-batch", projectId], job);
+      queryClient.setQueryData(["asset-image-batch-job", job.id], job);
+      void queryClient.invalidateQueries({ queryKey: ["asset-catalog", projectId] });
+    },
   });
   const scopeCount = allFiltered ? total : selected.length;
-  const batchJob = trackedBatch.data ?? imageRun.data ?? (restoreImageBatch ? latestBatch.data : null);
+  const batchJob = trackedBatch.data ?? imageRun.data ?? propose.data ?? (restoreImageBatch ? latestBatch.data : null);
   const batchActive = Boolean(batchJob && ACTIVE.has(batchJob.status));
   const busy = imageRun.isPending || propose.isPending || batchAction.isPending;
-  const footer = mode === "image" && batchJob ? <>
+  const footer = batchJob ? <>
     <Button disabled={busy} onClick={() => navigate(`/tasks?project_id=${projectId}`)}>任务中心</Button>
     <Button disabled={busy} onClick={() => batchActive ? onClose() : onDone(batchCompletionNotice(batchJob))}>{batchActive ? "关闭并后台运行" : "完成"}</Button>
     {batchActive && <Button loading={batchAction.isPending} onClick={() => batchAction.mutate("cancel")}>取消整批</Button>}
+    {batchJob.batch_paused_at && <Button variant="primary" loading={batchAction.isPending} onClick={() => batchAction.mutate("resume")}>继续未提交项</Button>}
     {batchJob.status === "failed" && <Button variant="primary" loading={batchAction.isPending} onClick={() => batchAction.mutate("retry")}>仅重试失败/取消项</Button>}
   </> : <><Button disabled={mode === "image" && busy} onClick={onClose}>{propose.isPending ? "关闭并后台优化" : "取消"}</Button><Button variant="primary" loadingKind={mode === "prompt" ? "text" : "default"} loading={busy} disabled={!modelId || !scopeCount || (mode === "image" && !ratioSupported)} onClick={() => mode === "prompt" ? propose.mutate() : imageRun.mutate()}>{mode === "prompt" ? "开始优化并自动填入" : "确认提交"}</Button></>;
   return <Dialog open title={mode === "prompt" ? "批量优化提示词" : generationMode === "regenerate" ? "批量重新生成图片" : "批量生成缺失图片"} description={`范围：${allFiltered ? "全部筛选结果" : "当前页所选"}，共 ${scopeCount} 项。`} size="small" busy={mode === "image" && busy} onClose={onClose} footer={footer}>
-    {mode === "image" && !batchJob && <label className="r5-batch-form"><span>生成范围</span><select aria-label="生成范围" value={generationMode} onChange={(event) => setGenerationMode(event.target.value as "missing" | "regenerate")}><option value="missing">仅生成缺失图片</option><option value="regenerate">全部所选资产生成新版本</option></select><small>生成时自动追加分类硬约束：角色保持四分区一致性；场景保持单一连续空间；道具保持单体完整轮廓；服装保持头饰到鞋底完整穿着效果。所有结果均保留为候选，确认采用前不进入正式生产。</small></label>}
-    {mode === "image" && batchJob ? <AssetImageBatchStatus job={batchJob} error={batchAction.error ?? latestBatch.error} /> : <div className="r5-batch-form"><label><span>{mode === "prompt" ? "文本模型" : "图片模型"}</span><select disabled={propose.isPending} value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((model) => <option key={model.id} value={model.id}>{model.providerName} / {model.name}</option>)}</select></label>{mode === "image" && <><label><span>画幅比例</span><select aria-label="画幅比例" value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}><option value="project">跟随项目（{projectRatio}）</option>{ratioOptions.filter((ratio) => ratio !== projectRatio).map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</select><small>默认继承项目画幅，本次批次可单独调整。</small></label>{!ratioSupported && <p role="alert">当前图片模型不支持 {effectiveRatio}，请选择该模型支持的画幅比例。</p>}<label><span>负向提示词（可选）</span><textarea value={negative} onChange={(event) => setNegative(event.target.value)} /></label></>}<div className="r5-batch-summary"><strong>{propose.isPending ? "正在优化并自动填入" : "提交前检查"}</strong><p>{mode === "image" ? `服务端会逐项核对素材状态并按 ${effectiveRatio} 生成候选图片；全部跳过原因会持久记录。` : "优化结果会自动填入所选资产的提示词；如资产在任务期间被其他页面修改，系统会跳过该项而不强制覆盖。"}</p><span>{mode === "prompt" ? "只更新文字提示词，不生成图片、不改变已采用素材。关闭弹窗后任务仍会在后台完成。" : "费用按所选模型的提交参数在服务端汇总；价格未知会明确显示为未知，不按免费处理。"}</span></div>{(imageRun.error || propose.error || latestBatch.error) && <p role="alert">{toErrorMessage(imageRun.error ?? propose.error ?? latestBatch.error)}</p>}</div>}
+    {mode === "prompt" && !batchJob && <label className="r5-batch-form"><span>优化范围</span><select value={promptMode} onChange={(event) => setPromptMode(event.target.value as "missing" | "regenerate")}><option value="missing">仅优化待优化或失败项</option><option value="regenerate">重新优化全部所选项</option></select></label>}
+    {mode === "image" && !batchJob && <label className="r5-batch-form"><span>生成范围</span><select aria-label="生成范围" value={generationMode} onChange={(event) => setGenerationMode(event.target.value as "missing" | "regenerate")}><option value="missing">仅生成缺失图片</option><option value="regenerate">全部所选资产生成新版本</option></select></label>}
+    {mode === "image" && !batchJob && catalogParams.kind === "costume" && <div className="r5-batch-form"><label><span>服装模式</span><select value={costumeMode} onChange={(event) => setCostumeMode(event.target.value)}><option value="garment_only">服装本体</option><option value="worn">角色穿着</option></select></label><label><span>观察视图</span><select value={costumeViews} onChange={(event) => setCostumeViews(event.target.value)}><option value="single">仅正面</option><option value="three">正面 / 侧面 / 背面</option><option value="four">正面 / 左侧 / 右侧 / 背面</option></select></label></div>}
+    {batchJob ? mode === "image" ? <AssetImageBatchStatus job={batchJob} error={batchAction.error ?? latestBatch.error} /> : <PromptBatchStatus job={batchJob} error={batchAction.error} /> : <div className="r5-batch-form">
+      <label><span>{mode === "prompt" ? "文本模型" : "图片模型"}</span><select disabled={busy} value={modelId} onChange={(event) => setModelId(event.target.value)}>{models.map((model) => <option key={model.id} value={model.id}>{model.providerName} / {model.name}</option>)}</select></label>
+      {mode === "image" && <><label><span>画幅比例</span><select aria-label="画幅比例" value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}><option value="project">跟随项目（{projectRatio}）</option>{ratioOptions.filter((ratio) => ratio !== projectRatio).map((ratio) => <option key={ratio} value={ratio}>{ratio}</option>)}</select></label>{!ratioSupported && <p role="alert">当前图片模型不支持 {effectiveRatio}，请选择该模型支持的画幅比例。</p>}<label><span>负向提示词（可选）</span><textarea value={negative} onChange={(event) => setNegative(event.target.value)} /></label></>}
+      {(imageRun.error || propose.error || latestBatch.error) && <p role="alert">{toErrorMessage(imageRun.error ?? propose.error ?? latestBatch.error)}</p>}
+    </div>}
   </Dialog>;
+}
+
+function PromptBatchStatus({ job, error }: { job: Job; error: unknown }) {
+  const application = job.result?.prompt_application as { applied?: number[]; unchanged?: number[]; skipped?: unknown[] } | undefined;
+  return <div className="r5-batch-status" aria-live="polite">
+    <header><strong>{jobStatus(job.status)}</strong><span>任务 #{job.id}</span></header>
+    <div className="r5-batch-progress"><i style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
+    <p>已优化 {(application?.applied?.length ?? 0) + (application?.unchanged?.length ?? 0)} 项 · 未写入 {application?.skipped?.length ?? 0} 项</p>
+    {Boolean(job.error_message || error) && <p role="alert">{job.error_message || toErrorMessage(error)}</p>}
+  </div>;
 }
 
 function AssetImageBatchStatus({ job, error }: { job: Job; error: unknown }) {
@@ -405,11 +433,12 @@ function AssetImageBatchStatus({ job, error }: { job: Job; error: unknown }) {
   return <div className="r5-batch-status" aria-live="polite">
     <header><div><strong>{jobStatus(job.status)}</strong><span>批次 #{job.id}</span></div><b>{Math.round(job.progress)}%</b></header>
     <div className="r5-batch-progress"><i style={{ width: `${Math.max(0, Math.min(100, job.progress))}%` }} /></div>
+    {job.batch_paused_at && <p role="alert">渠道暂无可用图片资源或额度，批次已暂停。已完成图片保留，核对渠道后可继续未提交项；失败项需单独确认重试。</p>}
     <dl><div><dt>请求资产</dt><dd>{Number(result.requested ?? 0)}</dd></div><div><dt>计划图片</dt><dd>{Number(result.planned_view_count ?? result.total ?? 0)}</dd></div><div><dt>成功</dt><dd>{Number(result.succeeded ?? 0)}</dd></div><div><dt>失败/取消</dt><dd>{Number(result.failed ?? 0) + Number(result.cancelled ?? 0)}</dd></div></dl>
     <section><strong>费用估算</strong><p>{amount} · {pricing?.reason ?? "任务没有可用价格快照；未知不等于免费"}</p></section>
     {skipped.length > 0 && <section><strong>跳过 {skipped.length} 项</strong><ul>{skipped.map((item) => <li key={item.asset_id}><span>{item.asset_name}</span><small>{item.reason}</small></li>)}</ul></section>}
     {failures.length > 0 && <section><strong>需处理 {failures.length} 项</strong><ul>{failures.map((item) => <li key={item.job_id}><span>资产 #{item.asset_id ?? "-"}{item.view_label ? ` · ${item.view_label}` : ""}</span><small>{item.error_message || (item.status === "cancelled" ? "已取消" : "生成失败")}</small></li>)}</ul></section>}
-    {job.status === "succeeded" && <p className="r5-batch-result">全部可执行项已完成，结果均为候选版本，不会替换已有采用版。</p>}
+    {job.status === "succeeded" && <p className="r5-batch-result">生成已完成，通过文件与视图校验的最新图片已自动采用，历史版本保留。</p>}
     {job.status === "failed" && <p className="r5-batch-result failed">批次已进入终态，不会继续转圈。重试只会重新排队失败或取消的子任务。</p>}
     {job.status === "cancelled" && <p className="r5-batch-result">整批已取消；迟到结果不会把已取消任务恢复为成功。</p>}
     {Boolean(error) && <p role="alert">{toErrorMessage(error)}</p>}
@@ -429,16 +458,4 @@ function summary(item: CatalogItem) {
 
 function jobStatus(status: string) {
   return ({ queued: "排队", running: "生成", processing: "处理", downloading: "下载", retrying: "重试", succeeded: "已完成", failed: "失败", cancelled: "已取消" } as Record<string, string>)[status] ?? status;
-}
-
-function waitForJob(job: Job): Promise<Job> {
-  return new Promise((resolve, reject) => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => { controller.abort(); reject(new Error("AI 生成提示词超时，请稍后重试")); }, 10 * 60 * 1000);
-    void subscribeToJob(job.id, controller.signal, (next) => {
-      if (ACTIVE.has(next.status)) return;
-      window.clearTimeout(timer); controller.abort();
-      if (next.status === "succeeded") resolve(next); else reject(new Error(next.error_message || "AI 生成提示词失败"));
-    }).catch((error) => { if ((error as Error)?.name !== "AbortError") { window.clearTimeout(timer); reject(error); } });
-  });
 }

@@ -109,6 +109,7 @@ BATCH_PARENT_TARGETS = {
     "script_asset_breakdown_group",
     "episode_script_batch",
     "asset_image_batch",
+    "asset_prompt_batch",
     "segment_first_frame_batch",
     "episode_director_pipeline",
 }

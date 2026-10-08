@@ -8,6 +8,7 @@ import httpx
 
 from app.core.errors import (
     ProviderAuthError,
+    ProviderCapacityError,
     ProviderEndpointError,
     ProviderError,
     ProviderMethodError,
@@ -142,6 +143,8 @@ def raise_for_provider_http_error(response: httpx.Response) -> None:
     code, message = _error_payload(response)
     haystack = f"{code or ''} {message}".lower()
     status = response.status_code
+    if status == 503 and "no available image quota" in message:
+        raise ProviderCapacityError(details=details)
     if status in {400, 415, 422}:
         explanation = safe_parameter_message(response)
         if explanation:

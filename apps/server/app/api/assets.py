@@ -26,8 +26,15 @@ from app.schemas.asset import (
 )
 from app.schemas.job import JobOut
 from app.schemas.production_contract import AssetProductionOut, AssetProductionPatch
-from app.services import asset_batch_service, asset_production_service, asset_split_service
-from app.services import asset_prompt_service, asset_service, job_service, media_service
+from app.services import (
+    asset_batch_service,
+    asset_production_service,
+    asset_prompt_service,
+    asset_service,
+    asset_split_service,
+    job_service,
+    media_service,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/assets", tags=["assets"])
 library_router = APIRouter(prefix="/assets", tags=["asset-library"])
@@ -250,13 +257,15 @@ async def generate_global_asset_image(
     view_type, view_label = asset_service.normalize_asset_view(
         asset.asset_type, payload.view_type, payload.view_label, source_text=payload.prompt
     )
+    from app.services.costume_generation_service import resolve_mode
+    costume_mode = await resolve_mode(session, None, asset, payload.parameters)
     job = await job_service.create_image_job(
         session,
         user.id,
         project_id=None,
         asset_id=asset.id,
         provider_model_id=payload.provider_model_id,
-        prompt=asset_service.asset_image_prompt(asset.asset_type, payload.prompt, view_type),
+        prompt=asset_service.asset_image_prompt(asset.asset_type, payload.prompt, view_type, costume_mode=costume_mode),
         negative_prompt=payload.negative_prompt,
         reference_media_ids=reference_media_ids,
         parameters=payload.parameters,
@@ -294,16 +303,23 @@ async def create_asset_prompt_proposal(
     project: ProjectDep,
     session: SessionDep,
 ) -> JobOut:
-    job = await asset_prompt_service.create_proposal_job(
+    job = await asset_prompt_service.create_batch(
         session,
         project,
         asset_ids=payload.asset_ids,
         provider_model_id=payload.provider_model_id,
         request_id=payload.request_id,
         parameters=payload.parameters,
+        generation_mode=payload.generation_mode,
     )
     await session.commit()
     return JobOut.model_validate(job)
+
+
+@router.get("/prompt-proposal/latest", response_model=JobOut | None)
+async def latest_asset_prompt_proposal(project: ProjectDep, session: SessionDep):
+    job = await asset_prompt_service.latest(session, project)
+    return JobOut.model_validate(job) if job else None
 
 
 @router.post(
@@ -428,6 +444,7 @@ async def expand_prompt(
 async def generate_asset_image(
     asset_id: int, payload: AssetGenerateRequest, project: ProjectDep, session: SessionDep
 ) -> JobOut:
+    from app.services.costume_generation_service import resolve_mode as resolve_costume_mode
     await asset_production_service.ensure_active_link(session, project.id, asset_id)
     asset = await asset_service.get_asset(session, project.id, asset_id)
     prompt, references = await asset_service.expand_prompt(session, project.id, payload.prompt)
@@ -446,7 +463,7 @@ async def generate_asset_image(
         project_id=project.id,
         asset_id=asset_id,
         provider_model_id=payload.provider_model_id,
-        prompt=asset_service.asset_image_prompt(asset.asset_type, prompt, view_type),
+        prompt=asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=await resolve_costume_mode(session, project.id, asset, payload.parameters)),
         negative_prompt=payload.negative_prompt,
         reference_media_ids=reference_media_ids,
         parameters=payload.parameters,

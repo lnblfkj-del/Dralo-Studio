@@ -338,6 +338,8 @@ class OpenAICompatibleProvider:
         parameters: dict[str, object],
     ) -> dict[str, object]:
         from app.providers.image_parameters import openai_image_parameters
+        from app.services.image_model_contract import compile_negative
+        prompt, negative_prompt = compile_negative(prompt, negative_prompt, parameters)
         payload = {**openai_image_parameters(model, parameters), "model": model, "prompt": prompt, "n": 1}
         if negative_prompt:
             payload["negative_prompt"] = negative_prompt

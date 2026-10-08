@@ -7,9 +7,11 @@ from app.models import Asset, Project, ProjectAssetLink
 from app.services.asset_binding_service import resolve_asset_binding
 
 
-async def costume_identity(session, project_id, asset_id, model, prompt, references):
+async def costume_identity(session, project_id, asset_id, model, prompt, references, *, mode="worn"):
     asset = await session.get(Asset, asset_id)
     if asset is None or asset.asset_type != "costume":
+        return prompt, references
+    if mode == "garment_only":
         return prompt, references
     project = await session.get(Project, project_id)
     link = await session.scalar(select(ProjectAssetLink).where(
@@ -36,7 +38,7 @@ async def costume_identity(session, project_id, asset_id, model, prompt, referen
         anchor = character_data.get("prompt_anchor", character.prompt_anchor)
         identity.append(f"角色 {character.name}（参考图 {len(media_ids)}）：{anchor or character.description or ''}")
     refs = list(dict.fromkeys([*media_ids, *references]))
-    if len(refs) > 3:
-        raise ConflictError("角色参考图片过多，请拆分造型生成范围（需预留风格参考图位置）")
+    from app.services.image_model_contract import validate_image_inputs
+    validate_image_inputs(model, {}, refs)
     return ("角色身份约束：保持参考角色的物种、脸部、体型和标志特征；动物角色不得变成人类。"
             "只按后文修改服装、妆容和状态。\n" + "\n".join(identity) + "\n\n造型要求：\n" + prompt), refs

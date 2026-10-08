@@ -40,6 +40,10 @@ def retain_visual_facts(prompt, snapshot, context=None):
     if snapshot.get("type") not in {"character", "costume"}:
         return prompt
     profile = snapshot.get("profile") or {}
+    if snapshot.get("type") == "costume" and (snapshot.get("costume_mode") or (snapshot.get("source_profile") or {}).get("costume_mode")) == "garment_only":
+        source = {**profile, **(snapshot.get("source_profile") or {})}
+        facts = [str(source[key]).strip() for key in ("costume", "material", "description") if source.get(key)]
+        return prompt + ("\n\n已确定的服装本体资料（保持原有衣裤类型与材质，不引入穿着者）：\n" + "\n".join(facts) if facts else "")
     lines = [f"{LABELS[key]}：{profile[key]}" for key in FIELDS if profile.get(key)]
     context = context or {}
     style = str(context.get("style_name") or "")
@@ -55,7 +59,7 @@ def retain_visual_facts(prompt, snapshot, context=None):
     return prompt + block
 
 
-async def image_identity(db, project, asset, prompt):
+async def image_identity(db, project, asset, prompt, *, costume_mode=None, costume_direction="正面"):
     if not project or not asset or asset.asset_type not in {"character", "costume"}:
         return prompt, None
     link = await db.scalar(select(ProjectAssetLink).where(ProjectAssetLink.project_id == project.id, ProjectAssetLink.asset_id == asset.id))
@@ -63,4 +67,9 @@ async def image_identity(db, project, asset, prompt):
         raise ConflictError("角色资产不属于当前项目或已归档")
     snapshot = {"type": asset.asset_type, "profile": visual_profile(asset.attributes, link.production_data, asset.description),
                 "production_revision": link.production_revision, "project_context": await project_context(db, project)}
+    if asset.asset_type == "costume" and costume_mode == "garment_only":
+        from app.services.costume_generation_service import garment_prompt
+        snapshot["costume_mode"] = costume_mode
+        snapshot["source_profile"] = (link.production_data or {}).get("profile") or {}
+        return garment_prompt(retain_visual_facts(prompt, snapshot), costume_direction), snapshot
     return retain_visual_facts(prompt, snapshot, snapshot["project_context"]), snapshot

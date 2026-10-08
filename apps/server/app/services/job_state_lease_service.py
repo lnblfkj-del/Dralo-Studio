@@ -59,7 +59,7 @@ async def recover_expired_leases(session: AsyncSession, local_media_only: bool =
         job.worker_id = None
         job.lease_expires_at = None
         uncertain_speech = (
-            job.job_type == "tts"
+            job.job_type in {"tts", "image"}
             and (job.payload or {}).get("media_submission", {}).get("started")
         )
         if job.execution_phase in REMOTE_EXECUTION_PHASES:
@@ -69,7 +69,7 @@ async def recover_expired_leases(session: AsyncSession, local_media_only: bool =
         elif uncertain_speech:
             job.status = JOB_STATUS_FAILED
             job.error_code = "PROVIDER_OUTCOME_UNKNOWN"
-            job.error_message = "配音提交后执行进程中断，请先核对渠道记录；系统不会自动重发"
+            job.error_message = "媒体提交后执行进程中断，请先核对渠道记录；系统不会自动重发"
             job.finished_at = now
             failed_children.append(job.id)
         elif job.attempts >= job.max_attempts:

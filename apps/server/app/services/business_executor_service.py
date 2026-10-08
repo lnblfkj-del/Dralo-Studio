@@ -184,13 +184,7 @@ async def ensure_executor_settings(session: AsyncSession) -> list[BusinessExecut
             for key in definition.skill_keys
         ]
         if definition.key in existing:
-            from app.core.workspace_context import isolation_enabled
-            if isolation_enabled():
-                continue
-            setting = existing[definition.key]
-            if setting.skill_versions != selections:
-                setting.skill_versions = selections
-                setting.revision += 1
+            # Catalog upgrades advance reviewed bindings; initialization preserves user pins.
             continue
         setting = BusinessExecutorSetting(
             key=definition.key,

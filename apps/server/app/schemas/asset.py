@@ -52,7 +52,8 @@ class AssetUpdate(BaseModel):
 
 
 class AssetPromptProposalRequest(BaseModel):
-    asset_ids: list[int] = Field(min_length=1, max_length=100)
+    asset_ids: list[int] = Field(min_length=1, max_length=1000)
+    generation_mode: Literal["missing", "regenerate"] = "missing"
     provider_model_id: int | None = Field(default=None, ge=1)
     request_id: str = Field(min_length=8, max_length=128)
     parameters: dict[str, Any] = Field(default_factory=dict)

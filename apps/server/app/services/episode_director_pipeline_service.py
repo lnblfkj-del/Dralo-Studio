@@ -26,13 +26,15 @@ from app.models import (
 from app.schemas.episode_director import DirectorModelOutput
 from app.schemas.episode_director_pipeline import DirectorOutlineOutput
 from app.services import job_service, text_model_policy_service
+from app.services.episode_director_prompt_context import frozen_skill_rules, segment_handoff_context
+from app.services.episode_director_skill_projection import PROJECTION_VERSION
 from app.services.episode_duration_policy import episode_duration_guidance
 from app.services.video_model_contract import validate_segment
 
 TARGET_PIPELINE = "episode_director_pipeline"
 TARGET_OUTLINE = "episode_director_outline"
 TARGET_SEGMENT = "episode_director_segment"
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 4
 
 
 def _json_object(result: dict[str, Any], label: str) -> dict[str, Any]:
@@ -69,7 +71,7 @@ def _json_object(result: dict[str, Any], label: str) -> dict[str, Any]:
     )
 
 
-def _outline_prompt(execution: dict[str, Any]) -> str:
+def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -> str:
     snapshot = execution["input"]
     capability = execution["video_model_capability_snapshot"]
     existing = snapshot.get("shots") or []
@@ -110,8 +112,12 @@ def _outline_prompt(execution: dict[str, Any]) -> str:
         "资产只能使用 assets 中的 asset_id；不能唯一判断时写入 unresolved_names，不能猜测。"
         "asset_ids 是剧情所需资产的完整关联，不是实际发送的视频参考图列表；"
         "同一戏剧行动/反应可共用 beat_id 作为规划提示；系统会按正文来源行集合生成最终稳定锚点；"
+        "先按来源对白长度估算说话时间，再给动作、停顿和反应留时间；"
+        "按完整行动与反应选择边界，不在一句台词中间强行切开，不以空镜凑目标时长。"
+        "Director Skills 仅用于本阶段的规划判断，不能扩大来源范围、改写正文或改变固定输出结构。"
         "不要为了参考图上限删掉角色、服装、场景或道具，图片输入由生成阶段单独校验。\n"
         f"固定结构：{json.dumps(schema, ensure_ascii=False)}\n"
+        f"Director Skills：{json.dumps(frozen_skill_rules(execution, stage='outline' if compact_rules else None), ensure_ascii=False)}\n"
         f"视频模型能力：{json.dumps(capability, ensure_ascii=False)}\n"
         f"规划输入：{json.dumps(source, ensure_ascii=False)}"
     )
@@ -304,11 +310,19 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         "已有镜头非空的 dialogue/audio_note 由系统原样继承，勿向这些字段追加解释或执行说明。"
         "锁定镜头的时长、摄影、动作、台词及声音均由系统保留，不要改写。"
         "填写景别、机位、运镜、主体、表情、动作、说话人、语气和明确的进入/结束状态。"
+        "只读剧情衔接来自冻结正文或旧分镜的节选，不是相邻片段已生成的结果，也不是完整状态。"
+        "仅据明确来源核对人物位置、道具、动作和声音的交接；不得复制相邻片段台词或输出其镜头，"
+        "不得让角色提前知道后文信息。same_scene 为 false 时保留合法转场，不强行沿用上一场环境。"
+        "在规划时长内给对白、动作、停顿和反应留时间；若无法自然演完，"
+        "在 continuity_issues 中给出简短审阅提示，不得删词、加速念词、改时长或编造过渡剧情。"
+        "Director Skills 只在当前片段范围内应用，固定输出结构与来源保护规则优先。"
         "不要编造资产 ID，不要声称已经生成媒体。\n"
         f"固定结构：{json.dumps(schema, ensure_ascii=False)}\n"
+        f"Director Skills：{json.dumps(frozen_skill_rules(execution, stage='segment' if parent.payload.get('pipeline_version', 0) >= 4 else None), ensure_ascii=False)}\n"
         f"当前片段：{json.dumps(segment, ensure_ascii=False)}\n"
         f"镜头约束：{json.dumps(snapshot['shots'], ensure_ascii=False)}\n"
         f"正文来源：{json.dumps(source_lines, ensure_ascii=False)}\n"
+        f"只读剧情衔接：{json.dumps(segment_handoff_context(parent.payload['director_execution'], outline, segment), ensure_ascii=False)}\n"
         f"可用资产：{json.dumps(assets, ensure_ascii=False)}\n"
         f"视频模型能力：{json.dumps(execution['video_model_capability_snapshot'], ensure_ascii=False)}"
     )
@@ -325,6 +339,13 @@ async def create_pipeline(
     request_id: str,
     input_fingerprint: str,
 ) -> Job:
+    audit = deepcopy(audit)
+    audit["skill_rule_projection"] = {
+        "version": PROJECTION_VERSION,
+        "stages": {
+            stage: frozen_skill_rules(audit, stage=stage) for stage in ("outline", "segment")
+        },
+    }
     parent = Job(
         owner_id=episode.owner_id,
         project_id=episode.project_id,
@@ -358,7 +379,7 @@ async def create_pipeline(
         session,
         episode.owner_id,
         provider_model_id=planner.id,
-        prompt=_outline_prompt(audit),
+        prompt=_outline_prompt(audit, compact_rules=True),
         project_id=episode.project_id,
         parameters={},
     )
@@ -556,6 +577,7 @@ async def aggregate_parent(session: AsyncSession, parent: Job) -> Job:
                 "status": item.status,
                 "error_code": item.error_code,
                 "error_message": item.error_message,
+                "output_diagnostic": ((item.payload or {}).get("attempt_history") or [{}])[-1].get("output_diagnostic"),
             }
             for item in children
         ],
@@ -599,15 +621,18 @@ async def aggregate_parent(session: AsyncSession, parent: Job) -> Job:
                     {"text": json.dumps(raw, ensure_ascii=False), "usage": usage},
                 )
         except AppError as exc:
+            from app.services.job_state_result_service import safe_output_diagnostic
             parent.status = JOB_STATUS_FAILED
             previous_recovery = dict((parent.payload or {}).get("response_recovery") or {})
             parent.error_code = "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED"
             parent.error_message = f"导演子任务结果已全部保存，但本地写入失败：{exc.message}"
             parent.payload = {
                 **(parent.payload or {}),
+                "output_diagnostic": safe_output_diagnostic(exc.details),
                 "response_recovery": {
                     **previous_recovery,
                     "kind": "director_child_results",
+                    "output_diagnostic": safe_output_diagnostic(exc.details),
                     "status": "available",
                     "model_called": False,
                     "last_reprocess_error_code": (

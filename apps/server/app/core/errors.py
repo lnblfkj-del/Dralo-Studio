@@ -134,6 +134,11 @@ class QuotaError(ProviderError):
     message = "模型渠道额度不足"
 
 
+class ProviderCapacityError(ProviderError):
+    code = "PROVIDER_CAPACITY_UNAVAILABLE"
+    message = "渠道暂无可用图片资源或额度，请核对渠道状态后继续"
+
+
 class RateLimitError(ProviderError):
     code = "RATE_LIMIT_ERROR"
     message = "请求过于频繁，请稍后重试"

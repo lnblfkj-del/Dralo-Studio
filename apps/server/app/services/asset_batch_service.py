@@ -23,6 +23,7 @@ from app.models import (
 from app.services import asset_service, job_service
 from app.services.job_concurrency_service import TERMINAL_STATUSES
 from app.services.job_pricing_service import _aggregate_video_pricing
+from app.services.costume_generation_service import resolve_mode, views as costume_views
 
 ASSET_IMAGE_BATCH_CONTRACT = "asset-image-batch.v5"
 CHARACTER_REFERENCE_NEGATIVE_PROMPT = (
@@ -197,7 +198,7 @@ async def create(
             if "prompt_anchor" in (link.production_data or {})
             else asset.prompt_anchor
         )
-        if asset.asset_type == "character" and not str(prompt or "").strip():
+        if not str(prompt or "").strip():
             prompt = asset.description
         code = None
         reason = None
@@ -227,7 +228,7 @@ async def create(
         raise ConflictError(f"所选资产均不可生成图片。{reasons}" + ("；其余原因请缩小选择范围查看" if len(skipped) > 10 else ""))
     planned_view_count = sum(
         len(asset_service.character_reference_sheet_views())
-        if asset.asset_type == "character" else 1
+        if asset.asset_type == "character" else len(costume_views(parameters.get("costume_views"))) if asset.asset_type == "costume" else 1
         for asset, _prompt in eligible
     )
 
@@ -269,6 +270,7 @@ async def create(
 
     children: list[Job] = []
     for asset, anchor in eligible:
+        costume_mode = await resolve_mode(session, project.id, asset, parameters)
         prompt, references = await asset_service.expand_prompt(session, project.id, anchor)
         reference_media_ids = [
             version.media_file_id
@@ -287,9 +289,11 @@ async def create(
             )
         )
         generation_contract = asset_service.asset_generation_contract(asset.asset_type)
+        if costume_mode == "garment_only":
+            generation_contract = "costume-garment.v1"
         reference_negative = (
             CHARACTER_REFERENCE_NEGATIVE_PROMPT
-            if character_view else asset_service.asset_reference_negative_prompt(asset.asset_type)
+            if character_view else "人物，人体，模特，人台，文字，水印" if costume_mode == "garment_only" else asset_service.asset_reference_negative_prompt(asset.asset_type)
         )
         child = await job_service.create_image_job(
             session,
@@ -299,7 +303,7 @@ async def create(
             provider_model_id=provider_model_id,
             prompt=(
                 asset_service.character_reference_prompt(prompt, str(character_view["key"]))
-                if character_view else asset_service.asset_image_prompt(asset.asset_type, prompt, view_type)
+                if character_view else asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=costume_mode)
             ),
             negative_prompt="\n".join(filter(None, [negative_prompt, reference_negative])) or None,
             reference_media_ids=reference_media_ids,
@@ -334,6 +338,22 @@ async def create(
                 ],
             }
         children.append(child)
+        if asset.asset_type == "costume":
+            for key, label in costume_views(parameters.get("costume_views"))[1:]:
+                extra = await job_service.create_image_job(
+                    session, project.owner_id, project_id=project.id, asset_id=asset.id,
+                    provider_model_id=provider_model_id,
+                    prompt=asset_service.asset_image_prompt(asset.asset_type, prompt, "angle", costume_mode=costume_mode, costume_direction=label)
+                           + f"\n本次唯一观察方向：{label}，保持同一套服装，不做拼版。",
+                    negative_prompt="\n".join(filter(None, [negative_prompt, reference_negative])) or None,
+                    reference_media_ids=reference_media_ids,
+                    parameters={**parameters, "costume_mode": costume_mode, "costume_direction": label},
+                    view_type="angle", view_label=f"服装{label}",
+                )
+                extra.parent_job_id = parent.id
+                extra.payload = {**extra.payload, "asset_adoption_key": f"costume:{costume_mode}:{key}",
+                                 "asset_generation_contract": generation_contract}
+                children.append(extra)
 
     quotes = []
     for child in children:

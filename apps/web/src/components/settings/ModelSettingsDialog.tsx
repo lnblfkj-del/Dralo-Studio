@@ -40,6 +40,9 @@ function editableDefaultParams(model: ProviderModel) {
   delete params.max_completion_tokens;
   delete params.reasoning_effort;
   delete params[TEXT_POLICY_KEY];
+  delete params.aspect_ratios;
+  delete params.max_reference_images;
+  delete params.supports_negative_prompt;
   return params;
 }
 
@@ -73,6 +76,9 @@ export function ModelSettingsDialog({
   const [capabilities, setCapabilities] = useState<string[]>(model.capabilities);
   const [durations, setDurations] = useState(() => Array.isArray(model.default_params.durations) ? model.default_params.durations.join(", ") : "");
   const [resolutions, setResolutions] = useState(() => Array.isArray(model.default_params.resolutions) ? model.default_params.resolutions.join(", ") : "");
+  const [aspectRatios, setAspectRatios] = useState(() => Array.isArray(model.default_params.aspect_ratios) ? model.default_params.aspect_ratios.join(", ") : "");
+  const [maxReferences, setMaxReferences] = useState(String(model.default_params.max_reference_images ?? ""));
+  const [negativeParameter, setNegativeParameter] = useState(model.default_params.supports_negative_prompt === true);
   const [prompt, setPrompt] = useState("");
   const [maxConcurrency, setMaxConcurrency] = useState(model.max_concurrency ?? 8);
   const textPolicy = model.default_params[TEXT_POLICY_KEY] && typeof model.default_params[TEXT_POLICY_KEY] === "object" && !Array.isArray(model.default_params[TEXT_POLICY_KEY]) ? model.default_params[TEXT_POLICY_KEY] as Record<string, unknown> : {};
@@ -118,6 +124,11 @@ export function ModelSettingsDialog({
         capabilities,
         default_params: {
           ...params,
+          ...(["image", "video"].includes(modelType) ? {
+            aspect_ratios: aspectRatios.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
+            ...(maxReferences.trim() ? { max_reference_images: optionalNumber(maxReferences, "参考图数量", 0, 32) } : {}),
+          } : {}),
+          ...(modelType === "image" ? { supports_negative_prompt: negativeParameter } : {}),
           ...(defaultOutput ? { [outputKey]: defaultOutput } : {}),
           ...(modelType === "text" && Object.keys(execution).length ? { [TEXT_POLICY_KEY]: execution } : {}),
           ...(modelType === "video" && durations !== (Array.isArray(model.default_params.durations) ? model.default_params.durations.join(", ") : "") ? { durations: durations.split(",").map((item) => item.trim()).filter(Boolean).map(Number) } : {}),
@@ -196,6 +207,8 @@ export function ModelSettingsDialog({
         {!!CAPABILITY_OPTIONS[modelType]?.length && <fieldset><legend>{modelType === "video" ? "视频模式" : modelType === "image" ? "图像模式" : "模型能力"}</legend><div className="model-capability-grid">{CAPABILITY_OPTIONS[modelType].map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={() => toggleCapability(value)} /><span>{label}</span></label>)}</div></fieldset>}
         {modelType === "video" && <div className="model-parameter-pair"><label><span>支持时长（秒，逗号分隔）</span><input value={durations} onChange={(event) => setDurations(event.target.value)} placeholder="5, 10, 15" /></label><label><span>支持分辨率（逗号分隔）</span><input value={resolutions} onChange={(event) => setResolutions(event.target.value)} placeholder="720p, 1080p" /></label></div>}
         {modelType === "image" && <label><span>支持分辨率（逗号分隔）</span><input value={resolutions} onChange={(event) => setResolutions(event.target.value)} placeholder="1K, 2K, 4K" /></label>}
+        {["image", "video"].includes(modelType) && <div className="model-parameter-pair"><label><span>支持画幅比例</span><input aria-label="支持画幅比例" value={aspectRatios} onChange={(event) => setAspectRatios(event.target.value)} placeholder="16:9, 9:16, 1:1" /></label><label><span>参考图数量上限</span><input aria-label="参考图数量上限" type="number" min={0} max={32} value={maxReferences} onChange={(event) => setMaxReferences(event.target.value)} placeholder="继承协议默认" /></label></div>}
+        {modelType === "image" && <label><input type="checkbox" checked={negativeParameter} onChange={(event) => setNegativeParameter(event.target.checked)} /><span>渠道支持独立负向提示词参数</span></label>}
         <ModelPricingForm value={pricing} kind={modelType} onChange={setPricing} />
         <details className="model-protocol-details"><summary>默认参数与费用配置</summary><label><span>默认参数（JSON）</span><textarea aria-label="默认参数 JSON" value={paramsJson} onChange={(event) => setParamsJson(event.target.value)} spellCheck={false} /></label><small>价格请在上方费用表单中配置。</small></details>
       </div> : model.model_type !== "text" ? <div className="model-test-body"><div className="settings-notice"><h3>媒体测试使用画布任务</h3><p>请在独立测试项目中选择此模型，确认参数和费用后生成。任务中心会保存任务编号与结果，超时后可查询原任务，不重复提交。</p><p>模型发现成功不代表图片、视频或配音已通过真实验收。</p><a href="/projects">前往工作台创建测试项目 →</a></div></div> : <div className="model-test-body">

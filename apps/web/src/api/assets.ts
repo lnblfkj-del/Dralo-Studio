@@ -12,10 +12,15 @@ export async function createAssetPromptProposal(
     provider_model_id?: number | null;
     request_id: string;
     parameters?: Record<string, unknown>;
+    generation_mode?: "missing" | "regenerate";
     confirmed: true;
   },
 ): Promise<Job> {
   return (await http.post<Job>(`/projects/${projectId}/assets/prompt-proposal`, payload)).data;
+}
+
+export async function getLatestAssetPromptBatch(projectId: number): Promise<Job | null> {
+  return (await http.get<Job | null>(`/projects/${projectId}/assets/prompt-proposal/latest`)).data;
 }
 
 export async function getLatestAssetImageBatch(projectId: number): Promise<Job | null> {

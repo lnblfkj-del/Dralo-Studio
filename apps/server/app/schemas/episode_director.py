@@ -21,6 +21,18 @@ class DirectorShotProposal(BaseModel):
     dialogue_tone: str = Field(default="", max_length=255)
     audio_note: str = Field(default="", max_length=2000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_empty_optional_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key in ("shot_size", "camera_angle", "camera_movement", "subject", "expression",
+                    "dialogue", "dialogue_speaker", "dialogue_tone", "audio_note"):
+            if key in value and value[key] is None:
+                value[key] = ""
+        return value
+
 
 class DirectorSegmentProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -33,6 +45,19 @@ class DirectorSegmentProposal(BaseModel):
     entry_state: str = Field(default="", max_length=4000)
     exit_state: str = Field(default="", max_length=4000)
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_empty_optional_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        value = dict(value)
+        for key in ("negative_prompt", "entry_state", "exit_state"):
+            if key in value and value[key] is None:
+                value[key] = ""
+        if "parameters" in value and value["parameters"] is None:
+            value["parameters"] = {}
+        return value
 
 
 class DirectorModelOutput(BaseModel):

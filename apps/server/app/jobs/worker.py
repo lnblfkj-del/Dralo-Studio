@@ -229,8 +229,6 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             style_text_images = await asset_service.load_reference_images(session, job, [style_media_id])
         if style_media_id and job.job_type == "image" and "reference_images" in model.capabilities:
             refs = list(dict.fromkeys([*job.payload.get("reference_media_ids", []), style_media_id]))
-            if len(refs) > 4:
-                raise GenerationFailedError("加入风格图后超过 4 张参考图，请减少其他引用")
             job.payload = {**job.payload, "reference_media_ids": refs}
         if style_media_id and job.job_type == "video" and "reference_images" in model.capabilities:
             contract_refs = (job.payload.get("video_input_contract") or {}).get("reference_media_ids", [])
@@ -238,8 +236,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 raise GenerationFailedError("项目风格图未包含在冻结的视频输入协议中，请重新预检后提交")
         first_frame = last_frame = None
         if job.job_type == JOB_TYPE_IMAGE and "reference_images" in model.capabilities:
+            from app.services.image_model_contract import reference_limit, validate_image_inputs
+            validate_image_inputs(model, parameters, job.payload.get("reference_media_ids", []))
             reference_images = await asset_service.load_reference_images(
-                session, job, job.payload.get("reference_media_ids", [])
+                session, job, job.payload.get("reference_media_ids", []), max_images=reference_limit(model)
             )
         if job.job_type == JOB_TYPE_VIDEO:
             from app.services.video_input_compiler import assert_frozen_video_input

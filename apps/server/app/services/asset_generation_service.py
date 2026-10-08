@@ -10,9 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import ConflictError
-from app.core.storage_safety import write_storage_bytes
 from app.core.media_quota import require_media_budget
-from app.models import AssetVersion, Job, MediaFile, ProjectMediaLink
+from app.core.storage_safety import write_storage_bytes
+from app.models import Asset, AssetVersion, Job, MediaFile, ProjectMediaLink
 from app.services.asset_reference_service import image_format
 
 
@@ -65,6 +65,17 @@ async def finalize_image_job(
     data = result.get("image_bytes")
     if not isinstance(data, bytes):
         raise ConflictError("图片任务没有返回有效文件")
+    await session.execute(update(Asset).where(Asset.id == asset.id).values(updated_at=func.current_timestamp()))
+    existing_version = await session.scalar(select(AssetVersion).where(
+        AssetVersion.asset_id == asset.id, AssetVersion.source_job_id == job.id,
+    ))
+    if existing_version is not None:
+        return {
+            **(job.result or {}), "asset_id": asset.id,
+            "asset_version_id": existing_version.id, "media_file_id": existing_version.media_file_id,
+            "media_url": f"/api/media/{existing_version.media_file_id}",
+            "version": existing_version.version, "already_persisted": True,
+        }
     extension, mime_type = image_format(data)
     relative_path = (
         (Path("projects") / str(job.project_id) if job.project_id is not None else Path("users") / str(job.owner_id))
@@ -74,8 +85,10 @@ async def finalize_image_job(
     )
     absolute_path = settings.storage_path / relative_path
     from io import BytesIO
+
     from PIL import Image
     with Image.open(BytesIO(data)) as generated_image:
+        generated_image.load()
         width, height = generated_image.size
     await require_media_budget(session, len(data))
     write_storage_bytes(settings, absolute_path, data)
@@ -140,6 +153,8 @@ async def finalize_image_job(
     )
     session.add(version)
     await session.flush()
+    from app.services.asset_image_adoption import adopt_generated
+    adoption_status = await adopt_generated(session, job, asset, version, media)
     frame_binding_status = None
     if isinstance((job.payload or {}).get("segment_frame"), dict):
         from app.services.segment_first_frame_service import bind_completed_frame
@@ -167,4 +182,5 @@ async def finalize_image_job(
             if character_sheet else None
         ),
         "segment_frame_binding_status": frame_binding_status,
+        "adoption_status": adoption_status,
     }

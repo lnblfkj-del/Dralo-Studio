@@ -11,28 +11,45 @@ from app.schemas.episode_auto_planning import AutoPlanningOutput
 
 
 def _validate_source_ownership(output, sources, lines):
-    protected: dict[str, int] = {}
-    for text in lines.values():
+    protected: dict[tuple[str, str], list[int]] = {}
+    for line, text in lines.items():
         audio = re.match(r"^(?:[【\[（(])?(?:BGM|配乐|音乐|音效|环境声|SFX)\s*[：:】\]）)]", text, re.I)
         spoken = re.match(r"^[^：:\n]{1,30}[：:]\s*[\"“]", text)
         if audio or spoken:
-            protected[text] = protected.get(text, 0) + 1
+            protected.setdefault(("audio_note" if audio else "dialogue", text.strip()), []).append(line)
     for shot in output.shots:
         if not sources[shot.shot_id].source_lines:
             raise ValidationError("每个新规划镜头必须关联正文来源")
-    retained = "\n".join(shot.dialogue + "\n" + shot.audio_note for shot in output.shots)
-    for text, required in protected.items():
-        if retained.count(text) != required:
-            raise ValidationError("正文台词或声音说明必须原样保留且只归属一个镜头")
-        allowed = {
-            source.shot_id for source in sources.values()
-            if any(lines[line] == text for line in source.source_lines)
-        }
-        if any(
-            text in shot.dialogue + "\n" + shot.audio_note and shot.shot_id not in allowed
-            for shot in output.shots
-        ):
-            raise ValidationError("正文台词或声音说明归属的镜头未引用对应正文行")
+    for (field, text), source_lines in protected.items():
+        occurrences = [shot.shot_id for shot in output.shots
+                       for value in getattr(shot, field).splitlines() if value.strip() == text]
+        allowed = {line: {shot.shot_id for shot in output.shots
+                         if line in sources[shot.shot_id].source_lines} for line in source_lines}
+        if not occurrences and len(source_lines) == 1 and len(allowed[source_lines[0]]) == 1:
+            # Restore only an empty field with one unambiguous frozen source owner.
+            owner = next(shot for shot in output.shots if shot.shot_id in allowed[source_lines[0]])
+            if not getattr(owner, field).strip():
+                setattr(owner, field, lines[source_lines[0]])
+                occurrences = [owner.shot_id]
+        if len(occurrences) != len(source_lines):
+            raise ValidationError("正文台词或声音说明必须原样保留且只归属一个镜头",
+                                  details={"invalid_fields": [f"source_lines.{line}" for line in source_lines]})
+        # Match occurrences to source-line identities, including repeated identical dialogue.
+        matches: dict[int, int] = {}
+
+        def assign(line, visited):
+            for index, owner in enumerate(occurrences):
+                if owner not in allowed[line] or index in visited:
+                    continue
+                visited.add(index)
+                if index not in matches or assign(matches[index], visited):
+                    matches[index] = line
+                    return True
+            return False
+
+        if not all(assign(line, set()) for line in source_lines):
+            raise ValidationError("正文台词或声音说明归属的镜头未引用对应正文行",
+                                  details={"invalid_fields": [f"source_lines.{line}" for line in source_lines]})
 
 
 def prepare_result(payload, result):
