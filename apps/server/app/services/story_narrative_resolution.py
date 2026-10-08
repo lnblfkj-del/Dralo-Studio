@@ -31,7 +31,8 @@ def resolve_story_spec(settings: dict[str, Any], story: dict[str, Any], brief: s
                     or not isinstance(recommendation.get("reason"), str) or not recommendation["reason"].strip()):
                 raise _needs_choice()
             structure = recommendation.get("structure")
-            units = recommendation.get("units") or []
+            # Models may attach arc notes to non-unit stories; only units own ranges.
+            units = (recommendation.get("units") or []) if structure == "unit" else []
         else:
             structure = _legacy_structure(story, brief, current["episode_count"])
         if structure is None:

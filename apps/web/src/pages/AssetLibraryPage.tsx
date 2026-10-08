@@ -262,8 +262,11 @@ function AssetCard({ projectId, item, allowSelect, selected, onSelect, onDetail,
       <span>{promptBusy && <LoaderCircle size={12} className="spin" />}{({ pending: "提示词待优化", queued: "等待优化", generating: "提示词生成中", optimized: "提示词已优化", failed: "提示词优化失败" })[promptStatus]}</span>
       {promptBusy ? <Link to={`/tasks?project_id=${projectId}`}>查看</Link> : promptStatus === "optimized" ? <details><summary title="提示词操作" aria-label="提示词操作"><MoreHorizontal size={16} /></summary><button onClick={onOptimize}>重新优化</button></details> : <button disabled={!allowSelect} onClick={onOptimize}>{promptStatus === "failed" ? "重试" : "优化提示词"}</button>}
     </div>
-    {job && job.status !== "succeeded" && <div className={`r5-job ${job.status}`}><span>{jobStatus(job.status)}{active ? ` ${Math.round(job.progress)}%` : ""}</span>{active ? <button disabled={action.isPending} onClick={() => action.mutate()}>取消</button> : job.status === "failed" ? <Link to={`/tasks?project_id=${projectId}`}>查看原因</Link> : null}</div>}
-    {action.error && <div className="r5-card-job-error" role="alert"><span>{toErrorMessage(action.error)}</span><Link to={`/tasks?project_id=${projectId}`}>任务中心核对</Link></div>}
+    {((job && job.status !== "succeeded") || action.error) && <div className={`r5-job ${action.error ? "failed" : job?.status}`} role={action.error ? "alert" : undefined}>
+      <span title={action.error ? toErrorMessage(action.error) : undefined}>{action.error ? toErrorMessage(action.error) : `${jobStatus(job!.status)}${active ? ` ${Math.round(job!.progress)}%` : ""}`}</span>
+      {active ? <button disabled={action.isPending} onClick={() => action.mutate()}>取消</button> : null}
+      {action.error || job?.status === "failed" ? <Link to={`/tasks?project_id=${projectId}`}>查看原因</Link> : null}
+    </div>}
     <button className="r5-card-canvas" title="打开画布" aria-label={`在画布中打开${item.name}`} onClick={onCanvas}><MapPin size={15} /></button>
   </article>;
 }

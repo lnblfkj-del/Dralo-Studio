@@ -289,7 +289,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
     },
     onError: (error) => {
       if ((error as { details?: { needs_structure_choice?: boolean } }).details?.needs_structure_choice) {
-        selectStage("story");
+        selectStage("outline");
         setEditingSpecs(true);
       }
     },
