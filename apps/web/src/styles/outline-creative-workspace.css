@@ -102,6 +102,12 @@
   white-space: nowrap;
 }
 .creative-stage-action .creative-form-secondary { width: auto; margin-top: 0; }
+.creative-stage-action .creative-outline-submit { width: 188px; max-width: 100%; }
+@media (max-width: 600px) {
+  .creative-outline-action { box-sizing: border-box; width: calc(100% - 24px); flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; }
+  .creative-outline-action > span { text-align: center; font-size: 12px; line-height: 1.5; }
+  .creative-outline-action .creative-outline-submit { width: 100%; }
+}
 .creative-stage-action button:not(.creative-form-secondary), .outline-actions button.primary {
   border-color: var(--app-color-accent);
   color: #fff;

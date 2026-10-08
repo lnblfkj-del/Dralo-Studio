@@ -528,7 +528,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
             {storyArtifact && <StoryPlanningWorkspace projectId={projectId} sessionId={session.id} artifact={storyArtifact}
               downstreamOutline={outlineArtifact}
               versions={[...storyVersions.filter(item => item.id !== storyArtifact.id), storyArtifact].sort((a, b) => b.version - a.version)}
-              disabled={busy || applyAgentAction.isPending} agentOpen={false} onEditingChange={setStoryEditing}
+              disabled={busy || applyAgentAction.isPending || advanceToOutline.isPending} agentOpen={false} onEditingChange={setStoryEditing}
               onSaved={next => { setSavedStory(next); refresh(); }}
               agentTask={storyAgentTask}
               onAdjustSection={async (section, instruction, source) => {
@@ -552,14 +552,14 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
                 setReviewOpen(true); onJob(job); refresh();
               }} />}
             {!outlineArtifact && !editingSpecs && (
-              <div className="creative-stage-action">
+              <div className="creative-stage-action creative-outline-action">
                 <span>{storyStructureIssue || `${storyArtifact?.status === "confirmed" ? "故事已确认，可生成" : "确认设定后生成"} ${episodeCount} 集分集大纲`}</span>
                 {storyStructureIssue ? <button disabled={retryStory.isPending || storyEditing} onClick={() => retryStory.mutate()}>
                   {retryStory.isPending ? <TextGenerationIcon size={20} /> : <RotateCcw size={15} />}
                   重新生成 {episodeCount} 个逐集事件
-                </button> : <button disabled={advanceToOutline.isPending || storyEditing} onClick={() => advanceToOutline.mutate()}>
+                </button> : <button className="creative-outline-submit" disabled={advanceToOutline.isPending || storyEditing} onClick={() => advanceToOutline.mutate()}>
                   {advanceToOutline.isPending ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}
-                  {storyArtifact?.status === "confirmed" ? "生成分集大纲" : "确认设定，生成大纲"}
+                  {advanceToOutline.isPending ? "正在提交…" : storyArtifact?.status === "confirmed" ? "生成分集大纲" : "确认设定，生成大纲"}
                 </button>}
               </div>
             )}
@@ -573,13 +573,13 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
             <Sparkles size={36} />
             <h2>{storyStructureIssue ? "逐集事件尚未完整" : "准备生成分集大纲"}</h2>
             <p>{storyStructureIssue || "故事设定已就绪，可以生成分集大纲；也可以先回去调整设定。"}</p>
-            <div className="creative-stage-action">
+            <div className="creative-stage-action creative-outline-action">
               {storyStructureIssue ? <button className="primary" disabled={retryStory.isPending} onClick={() => retryStory.mutate()}>
                 {retryStory.isPending ? <TextGenerationIcon size={20} /> : <RotateCcw size={15} />}
                 重新生成 {episodeCount} 个逐集事件
-              </button> : <button className="primary" disabled={advanceToOutline.isPending} onClick={() => advanceToOutline.mutate()}>
+              </button> : <button className="primary creative-outline-submit" disabled={advanceToOutline.isPending} onClick={() => advanceToOutline.mutate()}>
                 {advanceToOutline.isPending ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}
-                {storyArtifact?.status === "confirmed" ? "生成分集大纲" : "确认设定，生成大纲"}
+                {advanceToOutline.isPending ? "正在提交…" : storyArtifact?.status === "confirmed" ? "生成分集大纲" : "确认设定，生成大纲"}
               </button>}
               <button type="button" className="creative-form-secondary" onClick={() => setActiveTab("story")}>返回故事设定</button>
             </div>
