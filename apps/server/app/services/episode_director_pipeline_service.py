@@ -306,6 +306,8 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         "你是分集导演的单片段编剧。只完成当前一个片段，不得输出其他片段，只返回 JSON。"
         "shots 必须按给定 shot_ids 逐个返回，duration 必须保持规划值；segments 必须且只能有一项，"
         "shot_ids、generation_duration 必须原样保持。完整保留来源台词以及 BGM、配乐、环境声、音效原句，"
+        "严格使用固定结构中的字段，片段镜头编号只用 shot_ids，不添加 shot_id 或 shot_id_list。"
+        "continuity_issues 只返回提醒文本数组，没有提醒则返回 []，不返回 description 等诊断对象。"
         "同一台词或声音说明只能归属一个引用了该正文行的镜头，不得因拆镜头重复朗读。"
         "已有镜头非空的 dialogue/audio_note 由系统原样继承，勿向这些字段追加解释或执行说明。"
         "锁定镜头的时长、摄影、动作、台词及声音均由系统保留，不要改写。"

@@ -57,6 +57,17 @@ class DirectorSegmentProposal(BaseModel):
                 value[key] = ""
         if "parameters" in value and value["parameters"] is None:
             value["parameters"] = {}
+        # Remove only duplicate ID spellings that exactly match the canonical
+        # list. Conflicts, missing canonical IDs and unknown fields stay invalid.
+        canonical = value.get("shot_ids")
+        for alias in ("shot_id", "shot_id_list"):
+            redundant = value.get(alias)
+            ids = [redundant] if alias == "shot_id" and type(redundant) is int else redundant
+            if (isinstance(canonical, list) and isinstance(ids, list)
+                    and all(type(item) is int for item in canonical + ids)):
+                if ids != canonical:
+                    raise ValueError(f"{alias} must match shot_ids exactly")
+                value.pop(alias)
         return value
 
 
@@ -79,7 +90,7 @@ class DirectorModelOutput(BaseModel):
         if isinstance(value, str):
             return [value] if value.strip() else []
         if isinstance(value, list):
-            return [item.get("message", item) if isinstance(item, dict) else item for item in value]
+            return [item.get("message", item.get("description", item)) if isinstance(item, dict) else item for item in value]
         return value
 
 
