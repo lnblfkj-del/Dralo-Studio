@@ -19,6 +19,13 @@
 .job-failure__cast-row small, .outline-cast-dialog__hint { color:var(--app-color-text-muted); font-size:12px; }
 .job-failure__cast-row select { width:100%; min-height:40px; font:inherit; color:var(--app-color-text); background:var(--app-color-surface,white); border:1px solid var(--app-color-border); border-radius:6px; padding:8px; }
 .asset-failed-scopes > article + article { border-top:1px solid var(--app-color-border); }
+.director-recovery { min-width:0; font-size:14px; line-height:1.7; overflow-wrap:anywhere; }
+.director-recovery p { margin:12px 0; }
+.director-recovery-dialog { overflow-wrap:anywhere; }
+.director-recovery-risk { display:flex; min-width:0; align-items:flex-start; gap:8px; line-height:1.7; }
+.director-recovery-risk input[type="checkbox"] { flex:0 0 16px; width:16px; max-width:16px; height:16px; min-height:16px; margin:4px 0 0; padding:0; accent-color:var(--app-color-accent); }
+.director-recovery-risk span { flex:1 1 0; min-width:0; overflow-wrap:anywhere; }
+.episode-director-config { min-width:0; margin:0; padding:0; border:0; }
 @media (max-width:600px) {
   .job-failure__cast-row { grid-template-columns:minmax(0,1fr); gap:6px; }
   .overview-review-dialog .job-failure { padding:16px; }

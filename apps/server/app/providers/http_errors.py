@@ -9,6 +9,7 @@ import httpx
 from app.core.errors import (
     ProviderAuthError,
     ProviderCapacityError,
+    ProviderContentBlockedError,
     ProviderEndpointError,
     ProviderError,
     ProviderMethodError,
@@ -143,6 +144,13 @@ def raise_for_provider_http_error(response: httpx.Response) -> None:
     code, message = _error_payload(response)
     haystack = f"{code or ''} {message}".lower()
     status = response.status_code
+    if status in {400, 403, 422} and (
+        code in {"content_filter", "content_policy_violation", "safety_blocked"}
+        or any(marker in message for marker in (
+            "generative ai prohibited use policy", "content policy violation", "blocked by safety",
+        ))
+    ):
+        raise ProviderContentBlockedError(details=details)
     if status == 503 and "no available image quota" in message:
         raise ProviderCapacityError(details=details)
     if status in {400, 415, 422}:

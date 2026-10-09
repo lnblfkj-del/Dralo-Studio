@@ -127,6 +127,7 @@ export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) 
     onConfigureVideoModel={setCapabilityModel}
     onPlan={(requirements) => { recoverDirectorResult.reset(); applySegmentPlan.reset(); rejectSegmentPlan.reset(); planSegments.mutate(requirements); }}
     onRecover={() => { planSegments.reset(); recoverDirectorResult.mutate(); }}
+    onRecovered={setDirectorJob}
     onApply={() => applySegmentPlan.mutate()}
     onReject={() => rejectSegmentPlan.mutate()}
     onClose={() => setDirectorOpen(false)}

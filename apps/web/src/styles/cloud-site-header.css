@@ -1,0 +1,88 @@
+.cloud-homepage .nav.studio-header {
+  height: 84px;
+  padding: 0 max(28px, 4.5%);
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 28px;
+  isolation: isolate;
+  background: rgb(255 255 255 / 94%);
+  border-bottom: 1px solid #ececf0;
+  box-shadow: 0 4px 24px rgb(24 24 28 / 3%);
+  backdrop-filter: blur(18px);
+}
+.studio-header::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 30%;
+  width: 40%;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, #8e79d2, #72b7af, transparent);
+  opacity: .4;
+  transform: scaleX(.6);
+  transition: opacity .4s, transform .6s;
+}
+.studio-header:hover::after, .studio-header:focus-within::after { opacity: 1; transform: scaleX(1); }
+.cloud-homepage .studio-header .brand { justify-self: start; color: #202024; }
+.cloud-homepage .studio-header .brand small { font-size: 11px; color: #777780; font-weight: 400; margin-top: 3px; }
+.cloud-homepage .studio-header nav { gap: 8px; display: flex; align-items: center; }
+.cloud-homepage .studio-header nav a {
+  position: relative;
+  min-height: 44px;
+  padding: 0 17px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #18181c;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 6px;
+  transition: background .25s;
+}
+.cloud-homepage .studio-header nav a::after {
+  content: "";
+  position: absolute;
+  bottom: 5px;
+  left: 17px;
+  right: 17px;
+  height: 2px;
+  background: linear-gradient(90deg, #252529 50%, #8e79d2);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .25s;
+}
+.cloud-homepage .studio-header nav a:hover, .cloud-homepage .studio-header nav a:focus-visible { color: #18181c; background: #f5f5f8; }
+.cloud-homepage .studio-header nav a:hover::after, .cloud-homepage .studio-header nav a:focus-visible::after, .cloud-homepage .studio-header nav a[aria-current="page"]::after { transform: scaleX(1); }
+.cloud-homepage .studio-header .nav-actions { justify-self: end; gap: 12px; }
+.cloud-homepage .studio-header .quiet { color: #202024; height: 40px; }
+.cloud-homepage .studio-header .studio-apply { position: relative; overflow: hidden; height: 40px; padding: 0 18px; color: #fff; box-shadow: 0 3px 12px rgb(115 83 196 / 12%); transition: background .25s, box-shadow .25s; }
+.cloud-homepage .studio-header .studio-apply:hover, .cloud-homepage .studio-header .studio-apply:focus-visible { color: #fff; background: #6848b7; box-shadow: 0 5px 18px rgb(115 83 196 / 23%); }
+.studio-apply::before { content: ""; position: absolute; inset: -50%; background: linear-gradient(110deg, transparent 40%, rgb(255 255 255 / 20%) 50%, transparent 60%); transform: translateX(-90%); pointer-events: none; }
+.studio-apply:hover::before, .studio-apply:focus-visible::before { animation: studio-header-sheen .8s ease both; }
+@keyframes studio-header-sheen { to { transform: translateX(90%); } }
+.cloud-homepage .studio-menu-toggle { display: none; width: 40px; height: 40px; padding: 0; color: #202024; background: transparent; border: 1px solid #e8e8ee; border-radius: 6px; align-items: center; justify-content: center; }
+@media (max-width: 1100px) {
+  .cloud-homepage .nav.studio-header { gap: 16px; padding: 0 24px; }
+  .cloud-homepage .studio-header nav { gap: 0; }
+  .cloud-homepage .studio-header nav a { padding: 0 11px; font-size: 13px; }
+}
+@media (max-width: 850px) {
+  .cloud-homepage .nav.studio-header { grid-template-columns: 1fr auto; height: 72px; padding: 0 20px; }
+  .cloud-homepage .studio-header nav { display: none; position: absolute; top: 100%; left: 0; right: 0; padding: 12px 20px 18px; background: #fff; border-bottom: 1px solid #e8e8ee; box-shadow: 0 12px 20px rgb(24 24 28 / 6%); }
+  .cloud-homepage .studio-header nav.is-expanded { display: grid; grid-template-columns: 1fr 1fr; }
+  .cloud-homepage .studio-menu-toggle { display: inline-flex; }
+  .cloud-homepage .studio-header .nav-actions { gap: 8px; }
+}
+@media (max-width: 480px) {
+  .cloud-homepage .nav.studio-header { padding: 0 14px; gap: 8px; }
+  .cloud-homepage .studio-header .brand { font-size: 16px; gap: 7px; }
+  .cloud-homepage .studio-header .brand img { width: 25px; height: 36px; }
+  .cloud-homepage .studio-header .quiet { min-width: 0; padding: 0 10px; }
+  .cloud-homepage .studio-header .studio-apply { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-header::after, .cloud-homepage .studio-header nav a, .studio-header nav a::after, .cloud-homepage .studio-header .studio-apply { transition: none; }
+  .studio-apply:hover::before, .studio-apply:focus-visible::before { animation: none; }
+}

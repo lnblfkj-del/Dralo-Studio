@@ -17,10 +17,8 @@ from app.services.episode_preparation_gate import require_preparation
 from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED, require_idle_shots
 
 
-async def save_draft(session, job, result):
-    previous = job.result or {}
-    if previous.get("auto_saved_draft") and previous.get("plan_id"):
-        return previous
+async def validate_sources(session, job):
+    """Shared preflight for saving and explicitly recovering a frozen plan."""
     episode = await session.get(Episode, job.target_id)
     if episode is None or episode.project_id != job.project_id or episode.owner_id != job.owner_id:
         raise NotFoundError("规划来源分集不存在")
@@ -43,6 +41,15 @@ async def save_draft(session, job, result):
     for key in ("script", "target_duration", "shots", "asset_bindings", "scene_snapshot", "asset_catalog"):
         if current.get(key) != frozen.get(key):
             raise ConflictError("规划期间分镜或资产资料已修改，不能覆盖；模型结果已保留")
+    return episode, production, frozen
+
+
+async def save_draft(session, job, result):
+    previous = job.result or {}
+    if previous.get("auto_saved_draft") and previous.get("plan_id"):
+        return previous
+    episode, production, frozen = await validate_sources(session, job)
+    execution = job.payload["director_execution"]
     capability = await director.get_video_capabilities(session, execution["video_model_id"])
     # Revalidate preserved text against the current model contract. A corrected
     # capability limit must not force another paid planning call.

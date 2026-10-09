@@ -142,6 +142,11 @@ def validate_model_result(payload: dict[str, Any], result: dict[str, Any]) -> di
 
     generated_segments: list[dict[str, Any]] = []
     blocking: list[dict[str, Any]] = []
+    from app.schemas.director_response_protocol import response_contract
+    contract = response_contract("segment")
+    model_proposed_states = (payload.get("response_protocol") == contract
+                             or (payload.get("pipeline_version") == 5
+                                 and (payload.get("response_protocols") or {}).get("segment") == contract))
     for index, segment in enumerate(output.segments, start=1):
         indices = [positions[shot_id] for shot_id in segment.shot_ids]
         if indices != list(range(min(indices), max(indices) + 1)):
@@ -194,18 +199,29 @@ def validate_model_result(payload: dict[str, Any], result: dict[str, Any]) -> di
             semantic_scenes,
             entry_state=segment.entry_state,
             exit_state=segment.exit_state,
+            model_proposed_states=model_proposed_states,
         )
         compiled_parameters[STRUCTURED_SCRIPT_KEY] = structured_script
         if current_target is not None:
             previous_script = (current_target.get("parameters") or {}).get(STRUCTURED_SCRIPT_KEY) or {}
             # A local AI pass must not undo an explicitly authored dialogue revision.
-            manual_lines = {
-                line["shot_id"]: line for line in previous_script.get("dialogue", [])
-                if line.get("text_source") == "manual" or line.get("speaker_source") == "manual"
-            }
-            structured_script["dialogue"] = [
-                manual_lines.get(line["shot_id"], line) for line in structured_script["dialogue"]
-            ]
+            previous_by_shot = {}
+            for line in previous_script.get("dialogue", []):
+                previous_by_shot.setdefault(line["shot_id"], []).append(line)
+            for shot_id, lines in previous_by_shot.items():
+                if (any(line.get("text_source") == "manual" or line.get("speaker_source") == "manual" for line in lines)
+                        and len(lines) != sum(line["shot_id"] == shot_id for line in structured_script["dialogue"])):
+                    raise ValidationError("手写台词布局与当前来源不同，请先核对，不会自动改写或丢弃手写内容")
+            positions = {}
+            for index, line in enumerate(structured_script["dialogue"]):
+                shot_id = line["shot_id"]
+                position = positions.get(shot_id, 0)
+                positions[shot_id] = position + 1
+                previous = previous_by_shot.get(shot_id, [])
+                if position < len(previous):
+                    authored = previous[position]
+                    if authored.get("text_source") == "manual" or authored.get("speaker_source") == "manual":
+                        structured_script["dialogue"][index] = authored
             if previous_script.get("scene_source") == "manual":
                 structured_script["scene"] = previous_script["scene"]
                 structured_script["scene_source"] = "manual"

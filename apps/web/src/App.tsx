@@ -14,7 +14,7 @@ import {
 
 import { CreatorLayout } from "@/components/creator/CreatorLayout";
 import { CreatorHome } from "@/components/creator/CreatorHome";
-import { PublicEntry, editionRoutes } from "@edition";
+import { PublicEntry, editionRoutes, publicEditionRoutes } from "@edition";
 import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { AssetLibraryPage } from "@/pages/AssetLibraryPage";
 import { EpisodeVideosPage } from "@/pages/EpisodeVideosPage";
@@ -134,6 +134,7 @@ const router = createBrowserRouter(createRoutesFromElements(
         <Route element={<DraftGuard />} errorElement={<RouteErrorPage />}>
         <Route path="/" element={<PublicEntry />} />
         <Route path="/login" element={<PublicEntry login />} />
+        {publicEditionRoutes()}
         <Route path="/__ui/episode-outline" element={<RequireAuth><Suspense fallback={<main>正在加载分集编辑测试页…</main>}><EpisodeOutlinePreviewPage /></Suspense></RequireAuth>} />
         <Route path="/__ui/script-import" element={<RequireAuth><Suspense fallback={<main>正在加载剧本导入测试页…</main>}><ScriptImportPreviewPage /></Suspense></RequireAuth>} />
         <Route path="/__ui/games" element={<RequireAuth><Suspense fallback={<main>正在加载小游戏测试页…</main>}><MiniGamesPage /></Suspense></RequireAuth>} />

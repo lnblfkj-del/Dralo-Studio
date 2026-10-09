@@ -168,6 +168,14 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             )
             await session.commit()
             return
+        if job.target_type in {"episode_director_outline", "episode_director_segment"}:
+            from app.services.director_recovery_service import validate_execution
+            try:
+                await validate_execution(session, job, model, provider)
+            except ConflictError as exc:
+                await job_service.mark_failed(session, job_id, worker_id, "CONFLICT", exc.message)
+                await session.commit()
+                return
         adapter = create_provider_adapter(
             provider, decrypt_api_key(provider.api_key_ciphertext), model
         )
@@ -454,21 +462,23 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             protocol = effective_protocol(provider, model)
             protocol_keys = TEXT_PROVIDER_PARAMETER_KEYS
             if protocol == "anthropic_messages":
-                protocol_keys = {"temperature", "top_p", "top_k", "max_tokens", "stop_sequences", "system", "thinking"}
+                protocol_keys = {"temperature", "top_p", "top_k", "max_tokens", "stop_sequences", "system", "thinking", "output_config"}
             elif protocol == "google_gemini":
-                protocol_keys = TEXT_PROVIDER_PARAMETER_KEYS | {"top_k", "maxOutputTokens", "topP", "topK", "stopSequences", "responseMimeType", "responseSchema", "thinkingConfig"}
+                protocol_keys = TEXT_PROVIDER_PARAMETER_KEYS | {"top_k", "maxOutputTokens", "topP", "topK", "stopSequences", "responseMimeType", "responseSchema", "responseJsonSchema", "thinkingConfig"}
             text_parameters = {
                 key: value
                 for key, value in parameters.items()
                 if key in protocol_keys
             }
-            if (
+            if not job.payload.get("response_protocol") and (
                 job.target_type in creation_service.CREATION_ARTIFACT_TYPES
                 or job.target_type == market_research_service.TARGET_MARKET_RESEARCH
                 or job.target_type == episode_director_service.TARGET_EPISODE_DIRECTOR
                 or job.target_type in {"episode_director_outline", "episode_director_segment"}
             ):
                 text_parameters.setdefault("response_format", {"type": "json_object"})
+            from app.services.director_output_transport import worker_parameters
+            text_parameters = worker_parameters(job.payload, text_parameters)
             if style_text_images:
                 text_parameters["style_reference_images"] = style_text_images
             if parameters.get("long_form_work_id"):

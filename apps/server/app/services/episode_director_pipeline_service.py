@@ -15,7 +15,6 @@ from app.models import (
     JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     JOB_STATUS_PROCESSING,
-    JOB_STATUS_QUEUED,
     JOB_STATUS_SUCCEEDED,
     Episode,
     Job,
@@ -26,6 +25,7 @@ from app.models import (
 from app.schemas.episode_director import DirectorModelOutput
 from app.schemas.episode_director_pipeline import DirectorOutlineOutput
 from app.services import job_service, text_model_policy_service
+from app.services.director_source_posture import CONTRACT_KEY, LOCKS_KEY, RULE_KEY, RULE_VERSION
 from app.services.episode_director_prompt_context import frozen_skill_rules, segment_handoff_context
 from app.services.episode_director_skill_projection import PROJECTION_VERSION
 from app.services.episode_duration_policy import episode_duration_guidance
@@ -34,7 +34,7 @@ from app.services.video_model_contract import validate_segment
 TARGET_PIPELINE = "episode_director_pipeline"
 TARGET_OUTLINE = "episode_director_outline"
 TARGET_SEGMENT = "episode_director_segment"
-PIPELINE_VERSION = 4
+PIPELINE_VERSION = 5
 
 
 def _json_object(result: dict[str, Any], label: str) -> dict[str, Any]:
@@ -71,7 +71,7 @@ def _json_object(result: dict[str, Any], label: str) -> dict[str, Any]:
     )
 
 
-def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -> str:
+def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False, contract=None) -> str:
     snapshot = execution["input"]
     capability = execution["video_model_capability_snapshot"]
     existing = snapshot.get("shots") or []
@@ -96,6 +96,24 @@ def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -
         "shots": [{"shot_id": 1, "scene_id": 1, "beat_id": "beat-001", "duration": 3, "source_lines": [1], "asset_ids": [1], "unresolved_names": []}],
         "segments": [{"key": "segment-001", "title": "片段 01", "shot_ids": [1], "generation_duration": 5}],
     }
+    ownership_rule = ""
+    if contract:
+        from app.services.director_response_assembly import protected_source_lines
+        source["protected_source_lines"] = list(protected_source_lines(snapshot).values())
+        protected_heads = [row["line"] for row in source["protected_source_lines"]]
+        schema = contract["schema"]
+        ownership_rule = (
+            "protocol_version 固定为 director.outline.v2。"
+            f"protected_line_owners 的 line 按序且各一次使用 {json.dumps(protected_heads)}，数量必须为 {len(protected_heads)}；"
+            "line 只取 protected_source_lines 每项的整句首行 line，折行续行不另设 owner。"
+            "protected_line_owners 必须逐个覆盖 protected_source_lines，"
+            "每个 line 只能有一个 shot_id；该镜头 source_lines 必须包含整句 source_lines（含折行台词）。每个非空正文行都必须完整覆盖，"
+            "台词和声音的镜头归属不得颠倒正文顺序；同一镜头内的多句台词由系统按原文说话人及顺序装配。"
+            "按上述首行列表读到的镜头位置必须不递减：若后一句台词分到下个镜头，其后声音也不能倒放回前个镜头；"
+            "可以让多句原文和声音共用一个镜头，但不得先分开再倒序归属。"
+            "已有或锁定镜头的非空台词/声音字段不能改写或追加，也不能把其原文行重复分给其他镜头；"
+            "锁定镜头空字段不能新增台词或声音。无法明确转移旧镜头的手写台词/声音时保留旧镜头。"
+        )
     existing_rule = (
         "已有分镜：scenes 为 []；锁定镜头必须原样保留。非锁定镜头可重拆，新增镜头用大于现有最大 shot_id 的局部编号，"
         "scene_id 使用已有场景 ID；重拆时覆盖每个正文行，台词/声音只归属一个镜头。"
@@ -109,6 +127,9 @@ def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -
         "不要写镜头摄影细节、完整提示词或解释。只返回一个 JSON 对象。\n"
         f"{existing_rule} {duration_guidance} segments 必须按 shots 顺序完整覆盖且不重复，"
         "一个片段不能跨场景；generation_duration 必须来自视频模型 durations，分镜数不能超过上限。"
+        "shots.duration 和 generation_duration 的单位都是秒，不是权重；每个片段所含镜头的 duration 之和必须小于等于其 generation_duration。"
+        "例如四个各15秒的镜头合计60秒，不能放入15秒或20秒片段，须拆成多个合法片段；"
+        "不能靠少算、删镜头、压缩原文或改写锁定时长满足上限。返回前逐片段核算镜头时长之和。"
         "资产只能使用 assets 中的 asset_id；不能唯一判断时写入 unresolved_names，不能猜测。"
         "asset_ids 是剧情所需资产的完整关联，不是实际发送的视频参考图列表；"
         "同一戏剧行动/反应可共用 beat_id 作为规划提示；系统会按正文来源行集合生成最终稳定锚点；"
@@ -116,6 +137,7 @@ def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -
         "按完整行动与反应选择边界，不在一句台词中间强行切开，不以空镜凑目标时长。"
         "Director Skills 仅用于本阶段的规划判断，不能扩大来源范围、改写正文或改变固定输出结构。"
         "不要为了参考图上限删掉角色、服装、场景或道具，图片输入由生成阶段单独校验。\n"
+        f"{ownership_rule}\n"
         f"固定结构：{json.dumps(schema, ensure_ascii=False)}\n"
         f"Director Skills：{json.dumps(frozen_skill_rules(execution, stage='outline' if compact_rules else None), ensure_ascii=False)}\n"
         f"视频模型能力：{json.dumps(capability, ensure_ascii=False)}\n"
@@ -124,10 +146,18 @@ def _outline_prompt(execution: dict[str, Any], *, compact_rules: bool = False) -
 
 
 def _validate_outline(payload: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
+    declared = (payload.get("director_pipeline") or {}).get("response_protocol_version")
+    if declared and not payload.get("response_protocol"):
+        raise ValidationError("任务缺少冻结响应协议，不能降级为旧格式处理")
+    assembly_audit = None
     try:
-        output = DirectorOutlineOutput.model_validate(
-            _json_object(result, "片段边界规划")
-        )
+        if payload.get("response_protocol"):
+            from app.services.director_response_assembly import parse_outline
+            from app.schemas.director_response_protocol import OutlineWireOutput
+            raw, assembly_audit = parse_outline(payload, result)
+            output = OutlineWireOutput.model_validate(raw, strict=True)
+        else:
+            output = DirectorOutlineOutput.model_validate(_json_object(result, "片段边界规划"))
     except SchemaError as exc:
         raise ValidationError(
             "片段边界规划结构不完整",
@@ -163,6 +193,9 @@ def _validate_outline(payload: dict[str, Any], result: dict[str, Any]) -> dict[s
                 raise ValidationError("已有镜头不能改变场景归属")
             elif source.get("is_locked") and abs(item.duration - float(source["duration"])) > 0.05:
                 raise ValidationError("锁定镜头时长不能修改")
+            elif (payload.get("response_protocol") and source.get("is_locked")
+                  and item.duration != float(source["duration"])):
+                raise ValidationError("新协议锁定镜头时长必须与冻结值完全一致")
         locked_ids = {int(item["shot_id"]) for item in existing if item.get("is_locked")}
         if not locked_ids <= set(shot_ids):
             raise ValidationError("锁定镜头不能从规划中移除")
@@ -208,7 +241,16 @@ def _validate_outline(payload: dict[str, Any], result: dict[str, Any]) -> dict[s
             shot_count=len(segment.shot_ids),
             timeline_duration=sum(by_id[value].duration for value in segment.shot_ids),
         )
-    return output.model_dump()
+    normalized = output.model_dump()
+    if payload.get("response_protocol"):
+        covered = {line for item in shots for line in item.source_lines}
+        if covered != source_lines or any(not item.source_lines for item in shots):
+            raise ValidationError("新协议必须为每个镜头标注来源并完整覆盖正文")
+        from app.services.director_response_assembly import canonicalize_source_owners, validate_source_owners
+        canonicalize_source_owners(execution, normalized, assembly_audit)
+        validate_source_owners(execution, normalized, _shot_snapshot(normalized, execution))
+        normalized["_response_audit"] = assembly_audit
+    return normalized
 
 
 def _shot_snapshot(outline: dict[str, Any], execution: dict[str, Any]) -> list[dict[str, Any]]:
@@ -254,6 +296,9 @@ def _segment_execution(parent: Job, outline: dict[str, Any], segment: dict[str, 
     execution = deepcopy(parent.payload["director_execution"])
     frozen = execution["input"]
     all_shots = _shot_snapshot(outline, execution)
+    if parent.payload.get("pipeline_version", 0) >= 5:
+        from app.services.director_response_assembly import validate_source_owners
+        all_shots = validate_source_owners(execution, outline, all_shots)
     target_ids = [int(value) for value in segment["shot_ids"]]
     shots = [item for item in all_shots if int(item["shot_id"]) in set(target_ids)]
     source_by_id = {int(item["shot_id"]): item for item in outline["shots"]}
@@ -280,10 +325,17 @@ def _segment_execution(parent: Job, outline: dict[str, Any], segment: dict[str, 
         "target_shot_ids": target_ids,
         "current_plan": None,
     }
+    if RULE_KEY in execution:
+        from app.services.director_source_posture import build_contract
+        if type(execution[RULE_KEY]) is not int or execution[RULE_KEY] != RULE_VERSION:
+            raise ValidationError("姿态来源检查版本不支持，不能降级处理")
+        execution.setdefault(LOCKS_KEY, [row["shot_id"] for row in frozen.get("shots") or [] if row.get("is_locked")])
+        execution[CONTRACT_KEY] = build_contract(execution, outline, segment)
     return execution
 
 
-def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any]) -> str:
+def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any], contract=None) -> str:
+    from app.services.episode_director_prompt_context import SEGMENT_HANDOFF_RULES
     execution = _segment_execution(parent, outline, segment)
     snapshot = execution["input"]
     source_ids = {
@@ -291,6 +343,13 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         for line in shot.get("source_lines") or []
     }
     source_lines = [row for row in snapshot.get("source_lines") or [] if row["line"] in source_ids]
+    source_by_shot = {int(row["shot_id"]): row for row in outline["shots"]}
+    source_assignments = [
+        {"shot_id": row["shot_id"],
+         "source_lines": list(source_by_shot[int(row["shot_id"])].get("source_lines") or []),
+         "is_locked": bool(row.get("is_locked"))}
+        for row in snapshot["shots"]
+    ]
     assets = [
         {"asset_id": row.get("asset_id"), "name": row.get("asset_name"), "type": row.get("asset_type"),
          "description": row.get("description"), "prompt_anchor": row.get("prompt_anchor")}
@@ -302,6 +361,43 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         "segments": [{"title": segment["title"], "shot_ids": segment["shot_ids"], "generation_duration": segment["generation_duration"], "prompt": "完整片段脚本", "negative_prompt": "", "entry_state": "进入状态", "exit_state": "结束状态", "parameters": {}}],
         "continuity_issues": [],
     }
+    posture_context = ""
+    if CONTRACT_KEY in execution:
+        posture_context = (
+            "主体 subject 主要写人物/物件身份与构图，姿态和动作起止写在 action、entry_state、exit_state；"
+            "各字段不得相互矛盾。下列证据只包含可确定的原文明示姿态，未列出不代表已确认；"
+            "按行号和原句保持来源姿态，原文明示坐下/起身时允许变化，不得自行新增姿态转变。\n"
+            f"只读姿态来源证据：{json.dumps(execution[CONTRACT_KEY], ensure_ascii=False)}\n"
+        )
+    if contract:
+        creative_ids = [row["shot_id"] for row in snapshot["shots"] if not row.get("is_locked")]
+        return (
+            "你是分集导演的单片段编剧。只完成当前片段，只返回一个符合给定 JSON Schema 的对象。"
+            "protocol_version 固定为 director.segment.v2，segment_key 使用当前片段 key。"
+            "shots 必须按镜头约束顺序各一次覆盖未锁定镜头；锁定镜头不要输出，全部锁定时 shots 为 []。"
+            "仅承载背景声、空台词、反应或停顿的镜头也必须写完整创作字段，不能省略或与前一镜头合并。"
+            "只写景别、机位、运镜、动作、主体、表情、台词语气、进入/结束状态和可选的负向约束。"
+            "不要输出台词/声音原文、duration、scene_id、asset_ids、生成时长、parameters、完整 prompt 或其他片段。"
+            "这些字段由系统从冻结输入装配；严禁新增台词、篡改身份、编造资产编号或媒体。"
+            "原文行与台词声音归属已确定；创作必须覆盖来源剧情而不能替代、删减或压缩台词。"
+            "动作、运镜、表情、主体、进入与结束状态必须明确，不能填空或仅写占位词。"
+            "只读衔接不是相邻片段的已生成事实；保持人物位置、道具、动作、声音衔接，不让角色提前知道后文。"
+            "same_scene 为 false 时允许合法转场；给对白表演、动作和停顿留时间，不靠删词、加速念词或改时长解决。"
+            f"{SEGMENT_HANDOFF_RULES}"
+            "continuity_issues 只写提醒文本，不能自行宣布业务校验通过。Director Skills 只在本片段内应用，"
+            "固定协议、来源保护、人物身份和已确认资产约束优先。\n"
+            f"必须返回的镜头编号（有序且各一次）：{json.dumps(creative_ids)}；shots 数量必须为 {len(creative_ids)}。\n"
+            f"响应 Schema：{json.dumps(contract['schema'], ensure_ascii=False)}\n"
+            f"Director Skills：{json.dumps(frozen_skill_rules(execution, stage='segment'), ensure_ascii=False)}\n"
+            f"当前片段：{json.dumps(segment, ensure_ascii=False)}\n"
+            f"镜头约束：{json.dumps(snapshot['shots'], ensure_ascii=False)}\n"
+            f"逐镜头正文行范围（沿用冻结归属，锁定镜头不改写）：{json.dumps(source_assignments, ensure_ascii=False)}\n"
+            f"正文来源：{json.dumps(source_lines, ensure_ascii=False)}\n"
+            f"{posture_context}"
+            f"只读剧情衔接：{json.dumps(segment_handoff_context(parent.payload['director_execution'], outline, segment), ensure_ascii=False)}\n"
+            f"可用资产：{json.dumps(assets, ensure_ascii=False)}\n"
+            f"视频模型能力：{json.dumps(execution['video_model_capability_snapshot'], ensure_ascii=False)}"
+        )
     return (
         "你是分集导演的单片段编剧。只完成当前一个片段，不得输出其他片段，只返回 JSON。"
         "shots 必须按给定 shot_ids 逐个返回，duration 必须保持规划值；segments 必须且只能有一项，"
@@ -315,6 +411,7 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         "只读剧情衔接来自冻结正文或旧分镜的节选，不是相邻片段已生成的结果，也不是完整状态。"
         "仅据明确来源核对人物位置、道具、动作和声音的交接；不得复制相邻片段台词或输出其镜头，"
         "不得让角色提前知道后文信息。same_scene 为 false 时保留合法转场，不强行沿用上一场环境。"
+        f"{SEGMENT_HANDOFF_RULES}"
         "在规划时长内给对白、动作、停顿和反应留时间；若无法自然演完，"
         "在 continuity_issues 中给出简短审阅提示，不得删词、加速念词、改时长或编造过渡剧情。"
         "Director Skills 只在当前片段范围内应用，固定输出结构与来源保护规则优先。"
@@ -323,7 +420,9 @@ def _segment_prompt(parent: Job, outline: dict[str, Any], segment: dict[str, Any
         f"Director Skills：{json.dumps(frozen_skill_rules(execution, stage='segment' if parent.payload.get('pipeline_version', 0) >= 4 else None), ensure_ascii=False)}\n"
         f"当前片段：{json.dumps(segment, ensure_ascii=False)}\n"
         f"镜头约束：{json.dumps(snapshot['shots'], ensure_ascii=False)}\n"
+        f"逐镜头正文行范围（沿用冻结归属，锁定镜头不改写）：{json.dumps(source_assignments, ensure_ascii=False)}\n"
         f"正文来源：{json.dumps(source_lines, ensure_ascii=False)}\n"
+        f"{posture_context}"
         f"只读剧情衔接：{json.dumps(segment_handoff_context(parent.payload['director_execution'], outline, segment), ensure_ascii=False)}\n"
         f"可用资产：{json.dumps(assets, ensure_ascii=False)}\n"
         f"视频模型能力：{json.dumps(execution['video_model_capability_snapshot'], ensure_ascii=False)}"
@@ -342,6 +441,10 @@ async def create_pipeline(
     input_fingerprint: str,
 ) -> Job:
     audit = deepcopy(audit)
+    audit[RULE_KEY] = RULE_VERSION
+    audit[LOCKS_KEY] = [row["shot_id"] for row in audit["input"].get("shots") or [] if row.get("is_locked")]
+    from app.schemas.director_response_protocol import response_contract
+    protocols = {stage: response_contract(stage) for stage in ("outline", "segment")} if PIPELINE_VERSION >= 5 else {}
     audit["skill_rule_projection"] = {
         "version": PROJECTION_VERSION,
         "stages": {
@@ -372,6 +475,7 @@ async def create_pipeline(
             "video_model_id": audit["video_model_id"],
             "auto_prepare": True,
             "director_execution": audit,
+            **({"response_protocols": protocols} if protocols else {}),
         },
         result={"stage": "planning_boundaries", "total": 1, "completed": 0, "segments": []},
     )
@@ -381,7 +485,7 @@ async def create_pipeline(
         session,
         episode.owner_id,
         provider_model_id=planner.id,
-        prompt=_outline_prompt(audit, compact_rules=True),
+        prompt=_outline_prompt(audit, compact_rules=True, contract=protocols.get("outline")),
         project_id=episode.project_id,
         parameters={},
     )
@@ -392,8 +496,12 @@ async def create_pipeline(
     child.payload = {
         **child.payload,
         "director_execution": audit,
-        "director_pipeline": {"stage": "outline", "parent_job_id": parent.id},
+        "director_pipeline": {"stage": "outline", "parent_job_id": parent.id,
+                              **({"response_protocol_version": protocols["outline"]["version"]} if protocols else {})},
+        **({"response_protocol": deepcopy(protocols["outline"])} if protocols else {}),
     }
+    from app.services.director_output_transport import freeze_job
+    freeze_job(child)
     parent.execution_policy_snapshot = deepcopy(child.execution_policy_snapshot)
     parent.payload = {**parent.payload, "outline_job_id": child.id}
     await session.flush()
@@ -404,6 +512,7 @@ async def finalize_outline(
     session: AsyncSession, job: Job, result: dict[str, Any]
 ) -> dict[str, Any]:
     outline = _validate_outline(job.payload or {}, result)
+    assembly_audit = outline.pop("_response_audit", None)
     parent = await session.get(Job, job.parent_job_id) if job.parent_job_id else None
     if parent is None or parent.target_type != TARGET_PIPELINE:
         raise ConflictError("导演父流程不存在")
@@ -424,11 +533,14 @@ async def finalize_outline(
     ))).all())
     if not existing:
         for order, segment in enumerate(outline["segments"], 1):
+            contract = deepcopy((parent.payload.get("response_protocols") or {}).get("segment"))
+            if parent.payload.get("pipeline_version", 0) >= 5 and not contract:
+                raise ValidationError("导演父任务缺少冻结片段协议，不能继续生成")
             child = await job_service.create_text_job(
                 session,
                 parent.owner_id,
                 provider_model_id=int(parent.payload["provider_model_id"]),
-                prompt=_segment_prompt(parent, outline, segment),
+                prompt=_segment_prompt(parent, outline, segment, contract=contract),
                 project_id=parent.project_id,
                 parameters={},
             )
@@ -436,6 +548,11 @@ async def finalize_outline(
             child.target_type = TARGET_SEGMENT
             child.target_id = parent.target_id
             child.max_attempts = 1
+            if (job.payload or {}).get("require_segment_confirmation"):
+                child.status = JOB_STATUS_FAILED
+                child.error_code = "DIRECTOR_CALL_CONFIRMATION_REQUIRED"
+                child.error_message = "边界已恢复，请确认片段范围后继续生成，可能再次收费。"
+                child.finished_at = utcnow()
             child.payload = {
                 **child.payload,
                 "director_execution": _segment_execution(parent, outline, segment),
@@ -446,8 +563,12 @@ async def finalize_outline(
                     "segment_order": order,
                     "segment_outline": segment,
                     "outline": outline,
+                    **({"response_protocol_version": contract["version"]} if contract else {}),
                 },
+                **({"response_protocol": contract} if contract else {}),
             }
+            from app.services.director_output_transport import freeze_job
+            freeze_job(child)
             text_model_policy_service.inherit_job_snapshot(parent, child)
         parent.payload = {
             **parent.payload,
@@ -464,13 +585,21 @@ async def finalize_outline(
         "pipeline_stage": "outline",
         "outline": outline,
         "usage": result.get("usage") or {},
+        **({"response_protocol": assembly_audit} if assembly_audit else {}),
     }
 
 
 async def finalize_segment(job: Job, result: dict[str, Any]) -> dict[str, Any]:
-    raw = _json_object(result, "片段脚本")
+    if ((job.payload.get("director_pipeline") or {}).get("response_protocol_version")
+            and not job.payload.get("response_protocol")):
+        raise ValidationError("任务缺少冻结响应协议，不能降级为旧格式处理")
+    assembly_audit = None
     try:
-        output = DirectorModelOutput.model_validate(raw)
+        if job.payload.get("response_protocol"):
+            from app.services.director_response_assembly import assemble_segment
+            output, assembly_audit = assemble_segment(job.payload, result)
+        else:
+            output = DirectorModelOutput.model_validate(_json_object(result, "片段脚本"))
     except SchemaError as exc:
         raise ValidationError(
             "片段脚本结构不完整",
@@ -501,8 +630,10 @@ async def finalize_segment(job: Job, result: dict[str, Any]) -> dict[str, Any]:
         for field in protected_fields:
             if source.get("is_locked") or str(source.get(field) or "").strip():
                 setattr(shot, field, source[field])
+    from app.services.director_source_posture import validate_output
     from app.services.episode_director_validation import validate_model_result
 
+    validate_output(job.payload, output)
     proposal = validate_model_result(job.payload or {}, {**result, "text": output.model_dump_json()})
     return {
         "pipeline_stage": "segment",
@@ -511,6 +642,7 @@ async def finalize_segment(job: Job, result: dict[str, Any]) -> dict[str, Any]:
         "raw": output.model_dump(),
         "proposal": proposal,
         "usage": result.get("usage") or {},
+        **({"response_protocol": assembly_audit} if assembly_audit else {}),
     }
 
 
@@ -585,13 +717,17 @@ async def aggregate_parent(session: AsyncSession, parent: Job) -> Job:
         ],
     }
     parent.payload = {**(parent.payload or {}), "recovery_summary": recovery_summary}
+    from app.services.director_recovery_service import latest_attempt
+    attempt = await latest_attempt(session, parent, children)
+    if attempt is not None:
+        parent.result = {**parent.result, "recovery_attempt": attempt}
     active = [item for item in children if item.status not in {JOB_STATUS_SUCCEEDED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}]
     if failed and not active:
         parent.status = JOB_STATUS_FAILED
         parent.error_code = "DIRECTOR_PARTIAL_FAILURE" if succeeded_segments else "DIRECTOR_PIPELINE_FAILED"
         parent.error_message = (
             (f"片段脚本完成 {len(succeeded_segments)}/{expected_segments}；" if expected_segments else "片段边界处理失败；")
-            + f"{failed[0].error_message or '存在失败范围，请在任务中心处理'}"
+            + f"{failed[0].error_message or '存在失败范围，可在当前页面重试'}"
         )
         parent.finished_at = utcnow()
         return parent
@@ -651,6 +787,7 @@ async def aggregate_parent(session: AsyncSession, parent: Job) -> Job:
             **saved,
             "pipeline": parent.result,
             "usage": usage,
+            **({"recovery_attempt": attempt} if attempt is not None else {}),
         }
         parent.status = JOB_STATUS_SUCCEEDED
         parent.progress = 100
@@ -672,77 +809,13 @@ async def confirm_recall(
     actor_id: int,
     channel_checked: bool,
     reason: str,
+    confirmation_token: str | None = None,
+    accept_unknown_charge: bool = False,
 ) -> Job:
     """Explicitly resubmit only failed pipeline children after local recovery."""
-    parent = job
-    if job.target_type in {TARGET_OUTLINE, TARGET_SEGMENT} and job.parent_job_id:
-        parent = await session.get(Job, job.parent_job_id)
-    if parent is None or parent.target_type != TARGET_PIPELINE:
-        raise ConflictError("导演流水线父任务不存在")
-    from app.services.team_access import same_team
-    if not await same_team(session, parent.owner_id, actor_id):
-        raise ConflictError("无权恢复该导演任务")
-    episode = await session.get(Episode, parent.target_id)
-    frozen = dict((parent.payload or {}).get("director_execution") or {}).get("input") or {}
-    if episode is None or not await same_team(session, episode.owner_id, actor_id):
-        raise ConflictError("分集不存在或无权访问")
-    if episode.script_revision != int(frozen.get("source_script_revision") or 0):
-        raise ConflictError("分集正文版本已变化，请重新生成片段规划")
-    failed = list((await session.scalars(select(Job).where(
-        Job.parent_job_id == parent.id,
-        Job.status.in_({JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}),
-    ))).all())
-    failed = _usable_children(failed)
-    if not failed:
-        raise ConflictError("没有需要恢复的导演失败范围")
-    for child in failed:
-        submission = dict((child.payload or {}).get("text_submission") or {})
-        recovery = dict((child.payload or {}).get("response_recovery") or {})
-        if submission.get("response_received"):
-            if not recovery.get("last_reprocess_error_code"):
-                raise ConflictError(f"子任务 #{child.id} 请先执行无费用的本地重新处理")
-        elif submission.get("status") == "submitted":
-            if not channel_checked:
-                raise ConflictError(f"子任务 #{child.id} 请先核对渠道后台并确认未生成")
-        else:
-            raise ConflictError(f"子任务 #{child.id} 可普通重试，无需付费确认恢复")
-    recalled_at = utcnow().isoformat()
-    for child in failed:
-        child.status = JOB_STATUS_QUEUED
-        child.progress = 0
-        child.attempts = 0
-        child.available_at = None
-        child.error_code = None
-        child.error_message = None
-        child.result = None
-        child.started_at = None
-        child.finished_at = None
-        child.worker_id = None
-        child.lease_expires_at = None
-        child.payload = {
-            **(child.payload or {}),
-            "recovery": {
-                "kind": "confirmed_paid_recall",
-                "confirmed_by": actor_id,
-                "confirmed_at": recalled_at,
-                "reason": reason,
-            },
-        }
-    history = list((parent.payload or {}).get("recall_history") or [])
-    history.append({
-        "child_job_ids": [child.id for child in failed],
-        "confirmed_by": actor_id,
-        "confirmed_at": recalled_at,
-        "reason": reason,
-    })
-    parent.payload = {
-        **(parent.payload or {}),
-        "recall_history": history[-20:],
-        "recovery_summary": {},
-    }
-    parent.status = JOB_STATUS_PROCESSING
-    parent.finished_at = None
-    parent.error_code = None
-    parent.error_message = None
-    await session.flush()
-    return parent
+    from app.services.director_recovery_service import confirm_paid
+    return await confirm_paid(
+        session, job, actor_id, confirmation_token=confirmation_token,
+        channel_checked=channel_checked, accept_unknown_charge=accept_unknown_charge,
+        reason=reason,
+    )

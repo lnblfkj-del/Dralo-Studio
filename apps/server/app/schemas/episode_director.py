@@ -72,7 +72,7 @@ class DirectorSegmentProposal(BaseModel):
 
 
 class DirectorModelOutput(BaseModel):
-    """The only model output accepted by the director finalizer."""
+    """Validated business proposal, assembled or parsed from a legacy response."""
 
     model_config = ConfigDict(extra="forbid")
 

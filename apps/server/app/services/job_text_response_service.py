@@ -90,6 +90,10 @@ async def preserve_response(
                 "response_chars": len(text),
                 "usage": usage,
                 "finish_reason": finish_reason,
+                **({"refusal_received": bool(result.get("refusal"))}
+                   if (job.payload or {}).get("response_protocol") else {}),
+                **({key: result[key][:255] for key in ("response_model", "provider_request_id")
+                    if isinstance(result.get(key), str)} if (job.payload or {}).get("response_protocol") else {}),
                 "stream_terminal_seen": result.get("stream_terminal_seen") if isinstance(result.get("stream_terminal_seen"), bool) else None,
                 "stream_done_marker_seen": result.get("stream_done_marker_seen") if isinstance(result.get("stream_done_marker_seen"), bool) else None,
             },

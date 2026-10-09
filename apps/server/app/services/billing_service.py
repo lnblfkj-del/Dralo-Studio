@@ -96,6 +96,12 @@ async def begin(job_id, worker_id, key):
         if existing:
             return existing.id
         snapshot = deepcopy(job.payload.get("pricing_snapshot", {}))
+        recovery = job.payload.get("recovery") or {}
+        if (job.target_type in {"episode_director_outline", "episode_director_segment"}
+                and recovery.get("kind") == "confirmed_paid_recall"):
+            # The old call's immutable snapshot is retained. This new authorized
+            # attempt uses the quote shown before confirmation, not today's rate.
+            snapshot = deepcopy(recovery.get("pricing_snapshot") or snapshot)
         row = BillingCall(call_key=key, owner_id=job.owner_id, job_id=job.id, project_id=job.project_id,
             provider_id=job.provider_id or 0, provider_name=job.provider or "未知渠道", model_name=job.model or "未知模型",
             kind=job.job_type, snapshot=snapshot, currency=snapshot.get("currency", "CNY"), meter={})

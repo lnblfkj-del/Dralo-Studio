@@ -100,6 +100,9 @@ def failure_detail(job: Any) -> dict[str, Any] | None:
     elif code == "CONFLICT":
         category, title, action = "conflict", "当前内容或任务状态已变化", "none"
         hint = "请刷新并核对当前内容。"
+    if code == "PROVIDER_CONTENT_BLOCKED":
+        category, title, action = "provider", "模型渠道拦截了内容", "none"
+        hint = "请核对请求内容与渠道规则。没有可恢复的有效脚本，系统不会自动重新调用或更换模型。"
     if job.job_type != "text":
         action = "none"
     if (payload.get("resolution") or {}).get("status") in {"superseded", "replacement_pending"}:

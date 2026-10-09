@@ -11,6 +11,7 @@ from app.core.errors import ValidationError
 
 STRUCTURED_SCRIPT_KEY = "structured_script"
 STRUCTURED_SCRIPT_VERSION = 1
+DIALOGUE_LAYOUT = "source_lines.v1"
 AI_SOURCE_TYPES = {
     "ai", "replan", "optimize_segment", "fill_empty", "optimize_selected", "split", "merge", "add",
 }
@@ -43,6 +44,60 @@ def parse_dialogue(value: Any) -> tuple[str, str, bool]:
     if match:
         return match.group(1).strip(), match.group(2).strip(), True
     return "", text, False
+
+
+def quoted_dialogue_closed(utterance: str) -> bool:
+    if not utterance.startswith(('"', '“')):
+        return True
+    opening = utterance[0]
+    depth = 1
+    escaped = False
+    for character in utterance[1:]:
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+            continue
+        if opening == '“' and character == '“':
+            depth += 1
+        elif character == ('”' if opening == '“' else '"'):
+            depth -= 1
+            if depth == 0:
+                return True
+    return False
+
+
+def _dialogue_sources(value: Any) -> list[tuple[str, str, str, bool]]:
+    text = _text(value)
+    if not text:
+        return []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    parsed = []
+    index = 0
+    while index < len(lines):
+        first = lines[index]
+        speaker, utterance, owned = parse_dialogue(first)
+        index += 1
+        group = [first]
+        if (not owned and re.fullmatch(r"[^：:\n]{1,30}[：:]\s*", first)
+                and index < len(lines) and lines[index].startswith(('"', '“'))):
+            group.append(lines[index])
+            speaker, utterance, owned = parse_dialogue("\n".join(group))
+            index += 1
+        if not owned:
+            return [(text, *parse_dialogue(text))]
+        if utterance.startswith(('"', '“')):
+            quoted = utterance
+            while not quoted_dialogue_closed(quoted):
+                if index >= len(lines) or re.match(r'^[^：:\n]{1,30}[：:]\s*(?:["“]|$)', lines[index]):
+                    return [(text, *parse_dialogue(text))]
+                group.append(lines[index])
+                quoted += "\n" + lines[index]
+                index += 1
+        source = "\n".join(group)
+        parsed.append((source, *parse_dialogue(source)))
+    return parsed
 
 
 def _audio_entries(shot_id: int, value: Any) -> dict[str, list[dict[str, Any]]]:
@@ -80,6 +135,7 @@ def build_structured_script(
     *,
     entry_state: str = "",
     exit_state: str = "",
+    model_proposed_states: bool = False,
 ) -> dict[str, Any]:
     ordered = [shots[shot_id] for shot_id in shot_ids]
     if not ordered:
@@ -96,8 +152,7 @@ def build_structured_script(
     audio = {"music": [], "ambience": [], "sound_effects": []}
     for item in ordered:
         shot_id = int(item["shot_id"])
-        speaker, line, owned = parse_dialogue(item.get("dialogue"))
-        if line:
+        for source_text, speaker, line, owned in _dialogue_sources(item.get("dialogue")):
             proposed_speaker = _text(item.get("dialogue_speaker"))
             dialogue.append({
                 "shot_id": shot_id,
@@ -105,7 +160,7 @@ def build_structured_script(
                 "speaker_source": "source" if owned else "model_suggestion",
                 "text": line,
                 "tone": _text(item.get("dialogue_tone")) or "未指定",
-                "source_text": _text(item.get("dialogue")),
+                "source_text": source_text,
             })
             if not owned:
                 issues.append({
@@ -127,6 +182,8 @@ def build_structured_script(
     explicit_states = bool(_text(entry_state) and _text(exit_state))
     return {
         "schema_version": STRUCTURED_SCRIPT_VERSION,
+        **({"dialogue_layout": DIALOGUE_LAYOUT}
+           if any(len(_dialogue_sources(item.get("dialogue"))) > 1 for item in ordered) else {}),
         "source_shot_ids": shot_ids,
         "scene": {
             "scene_id": int(scene["scene_id"]),
@@ -157,7 +214,7 @@ def build_structured_script(
         "audio": audio,
         "entry_state": _text(entry_state) or (f"开始：{first_action}" if first_action else "片段开始"),
         "exit_state": _text(exit_state) or (f"结束：{last_action}" if last_action else "片段结束"),
-        "state_source": "explicit" if explicit_states else "derived",
+        "state_source": ("model_proposal" if model_proposed_states else "explicit") if explicit_states else "derived",
         "coverage": {
             "shot_count": len(shot_ids),
             "camera_count": len(shot_ids),
@@ -210,6 +267,9 @@ def validate_structured_script(
             raise ValidationError("每个分镜都必须包含主体、表情和动作")
 
     issues: list[dict[str, Any]] = []
+    dialogue_layout = raw.get("dialogue_layout")
+    if dialogue_layout not in (None, DIALOGUE_LAYOUT):
+        raise ValidationError("结构化台词布局版本无效")
     by_dialogue: dict[int, list[dict[str, Any]]] = {}
     for record in dialogue:
         try:
@@ -220,36 +280,38 @@ def validate_structured_script(
             raise ValidationError("台词语义引用了片段外分镜")
         by_dialogue.setdefault(shot_id, []).append(record)
     for shot_id in shot_ids:
-        source_speaker, source_line, source_owned = parse_dialogue(shots[shot_id].get("dialogue"))
+        source = shots[shot_id].get("dialogue")
+        sources = (_dialogue_sources(source) if dialogue_layout == DIALOGUE_LAYOUT
+                   else [(_text(source), *parse_dialogue(source))] if _text(source) else [])
         records = by_dialogue.get(shot_id, [])
-        if not source_line:
+        if not sources:
             if records:
                 raise ValidationError("结构化片段脚本不能编造来源中不存在的台词")
             continue
-        manual_text = len(records) == 1 and records[0].get("text_source") == "manual"
-        if len(records) != 1 or (not manual_text and _text(records[0].get("text")) != source_line):
+        if len(records) != len(sources):
             raise ValidationError("结构化片段脚本必须完整且原样覆盖来源台词")
-        if not _text(records[0].get("text")):
-            raise ValidationError("人工改编台词不能为空")
-        records[0]["source_text"] = source_line
-        speaker = _text(records[0].get("speaker"))
-        if source_owned and speaker != source_speaker and records[0].get("speaker_source") != "manual":
-            raise ValidationError("结构化片段脚本的说话人与来源台词不一致")
-        if not speaker or (
-            not source_owned and records[0].get("speaker_source") != "manual"
-        ):
-            issues.append({
-                "code": "dialogue_speaker_missing",
-                "severity": "blocking",
-                "shot_id": shot_id,
-                "message": (
-                    f"这句台词的说话人建议为“{speaker}”，请人工确认后生成视频"
-                    if speaker
-                    else "来源台词没有明确说话人，必须人工确认后才能生成视频"
-                ),
-            })
-        if not _text(records[0].get("tone")):
-            raise ValidationError("每条结构化台词都必须包含语气")
+        for record, (source_text, source_speaker, source_line, source_owned) in zip(records, sources):
+            if record.get("text_source") != "manual" and _text(record.get("text")) != source_line:
+                raise ValidationError("结构化片段脚本必须完整且原样覆盖来源台词")
+            if not _text(record.get("text")):
+                raise ValidationError("人工改编台词不能为空")
+            record["source_text"] = source_text if dialogue_layout == DIALOGUE_LAYOUT else source_line
+            speaker = _text(record.get("speaker"))
+            if source_owned and speaker != source_speaker and record.get("speaker_source") != "manual":
+                raise ValidationError("结构化片段脚本的说话人与来源台词不一致")
+            if not speaker or (not source_owned and record.get("speaker_source") != "manual"):
+                issues.append({
+                    "code": "dialogue_speaker_missing",
+                    "severity": "blocking",
+                    "shot_id": shot_id,
+                    "message": (
+                        f"这句台词的说话人建议为“{speaker}”，请人工确认后生成视频"
+                        if speaker
+                        else "来源台词没有明确说话人，必须人工确认后才能生成视频"
+                    ),
+                })
+            if not _text(record.get("tone")):
+                raise ValidationError("每条结构化台词都必须包含语气")
 
     audio = raw.get("audio")
     if not isinstance(audio, dict):
@@ -295,7 +357,7 @@ def validate_structured_script(
     normalized["exit_state"] = _text(raw.get("exit_state"))
     if not normalized["entry_state"] or not normalized["exit_state"]:
         raise ValidationError("结构化片段脚本必须包含进入和结束状态")
-    normalized["state_source"] = "explicit" if raw.get("state_source") == "explicit" else "derived"
+    normalized["state_source"] = raw.get("state_source") if raw.get("state_source") in {"explicit", "model_proposal"} else "derived"
     normalized["coverage"] = {
         "shot_count": len(shot_ids),
         "camera_count": len(camera),
@@ -411,6 +473,10 @@ def continuity_issues(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for (previous, left), (current, right) in pairwise(structured):
         if not left or not right:
             continue
+        previous_scene = left.get("scene") if isinstance(left.get("scene"), dict) else {}
+        current_scene = right.get("scene") if isinstance(right.get("scene"), dict) else {}
+        scene_change = (previous_scene.get("scene_id") is not None and current_scene.get("scene_id") is not None
+                        and previous_scene["scene_id"] != current_scene["scene_id"])
         if (left.get("state_source") == "explicit" and right.get("state_source") == "explicit"
                 and _text(left.get("exit_state")) != _text(right.get("entry_state"))):
             issues.append({
@@ -420,8 +486,13 @@ def continuity_issues(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "previous_segment_id": previous.get("id"),
                 "message": "前一片段结束状态与当前片段进入状态不一致",
             })
-        previous_scene = left.get("scene") if isinstance(left.get("scene"), dict) else {}
-        current_scene = right.get("scene") if isinstance(right.get("scene"), dict) else {}
+        elif (not scene_change and "model_proposal" in {left.get("state_source"), right.get("state_source")}
+              and _text(left.get("exit_state")) and _text(right.get("entry_state"))
+              and _text(left["exit_state"]) != _text(right["entry_state"])):
+            # Different generated descriptions are not proof of a physical conflict.
+            issues.append({"code": "state_handoff_review", "severity": "warning",
+                           "segment_id": current.get("id"), "previous_segment_id": previous.get("id"),
+                           "message": "AI建议的前后状态描述不同，请核对人物位置、道具和动作交接；尚未验证语义一致"})
         if previous_scene.get("scene_id") is not None and previous_scene.get("scene_id") == current_scene.get("scene_id"):
             for field, label in (("location", "地点"), ("time_of_day", "时段")):
                 before, after = _text(previous_scene.get(field)), _text(current_scene.get(field))

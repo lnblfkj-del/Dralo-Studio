@@ -89,6 +89,9 @@ def register_frontend(app: FastAPI, dist: Path, *, execution_location: str = "lo
             continue
         app.add_api_route(route, index, methods=["GET"], include_in_schema=False)
 
+    if edition != "standalone" and execution_location == "cloud":
+        app.add_api_route("/help/creative-workflow", index, methods=["GET"], include_in_schema=False)
+
     if (dist / "favicon.svg").is_file():
         async def favicon():
             return FileResponse(

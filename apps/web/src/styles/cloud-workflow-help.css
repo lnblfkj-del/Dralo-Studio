@@ -1,0 +1,24 @@
+.workflow-help { min-height: 100vh; }
+.workflow-help-content { max-width: 1120px; margin: 0 auto; padding: 40px 32px 48px; }
+.workflow-help-breadcrumb { display: flex; gap: 14px; font-size: 13px; color: #7d7d86; }
+.workflow-help-heading { padding: 72px 0 40px; border-bottom: 1px solid #e8e8ee; }
+.workflow-help-kicker { font-size: 11px; color: #7d7d86; letter-spacing: 0; }
+.workflow-help-heading h1 { margin: 20px 0 14px; font-size: 36px; font-weight: 600; line-height: 1.3; color: #202024; }
+.workflow-help-heading p { margin: 0; font-size: 16px; color: #777780; }
+.workflow-help-status { padding: 30px 0; font-size: 14px; font-weight: 500; color: #4c4266; }
+.workflow-help-status>span { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 9px; background: #8064c5; vertical-align: middle; }
+.workflow-help-status p { margin: 12px 0 0; color: #777780; font-weight: 400; line-height: 1.8; }
+.workflow-help-stages { display: grid; grid-template-columns: repeat(4, 1fr); gap: 32px; padding: 40px 0 64px; }
+.workflow-help-stages>div { border-top: 1px solid #dddde5; padding-top: 24px; }
+.workflow-help-stages>div>span { font-size: 12px; color: #8c8c95; }
+.workflow-help-stages h2 { font-size: 18px; margin: 22px 0 12px; color: #202024; font-weight: 500; }
+.workflow-help-stages p { font-size: 14px; color: #777780; line-height: 1.9; margin: 0; }
+.workflow-help-bottom { border-top: 1px solid #e8e8ee; padding-top: 28px; display: flex; justify-content: space-between; gap: 20px; font-size: 13px; color: #8c8c95; }
+.workflow-help-bottom a { color: #202024; }
+@media(max-width:700px) {
+  .workflow-help-content { padding: 28px 22px 36px; }
+  .workflow-help-heading { padding-top: 44px; }
+  .workflow-help-heading h1 { font-size: 30px; }
+  .workflow-help-stages { grid-template-columns: 1fr 1fr; gap: 28px; padding: 20px 0 44px; }
+}
+@media(max-width:380px) { .workflow-help-stages { grid-template-columns: 1fr; } .workflow-help-bottom { flex-wrap: wrap; } }

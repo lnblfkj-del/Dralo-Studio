@@ -10,13 +10,18 @@ from app.core.errors import ValidationError
 from app.schemas.episode_auto_planning import AutoPlanningOutput
 
 
+def protected_source_kind(text):
+    audio = re.match(r"^(?:[【\[（(])?(?:BGM|配乐|音乐|音效|环境声|SFX)\s*[：:】\]）)]", text, re.I)
+    spoken = re.match(r"^[^：:\n]{1,30}[：:]\s*[\"“]", text)
+    return "audio_note" if audio else "dialogue" if spoken else None
+
+
 def _validate_source_ownership(output, sources, lines):
     protected: dict[tuple[str, str], list[int]] = {}
     for line, text in lines.items():
-        audio = re.match(r"^(?:[【\[（(])?(?:BGM|配乐|音乐|音效|环境声|SFX)\s*[：:】\]）)]", text, re.I)
-        spoken = re.match(r"^[^：:\n]{1,30}[：:]\s*[\"“]", text)
-        if audio or spoken:
-            protected.setdefault(("audio_note" if audio else "dialogue", text.strip()), []).append(line)
+        kind = protected_source_kind(text)
+        if kind:
+            protected.setdefault((kind, text.strip()), []).append(line)
     for shot in output.shots:
         if not sources[shot.shot_id].source_lines:
             raise ValidationError("每个新规划镜头必须关联正文来源")

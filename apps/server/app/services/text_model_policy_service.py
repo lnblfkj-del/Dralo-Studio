@@ -23,6 +23,11 @@ _REASONING_EFFORTS = {"auto", "low", "medium", "high"}
 def validate_defaults(model_type: str, defaults: dict[str, Any]) -> dict[str, Any]:
     """Validate the private text policy without changing unrelated model defaults."""
     normalized = dict(defaults or {})
+    from app.services.director_output_transport import CONFIG_KEY, validate_profile
+    if CONFIG_KEY in normalized:
+        if model_type != MODEL_TYPE_TEXT:
+            raise ValidationError("结构化文本输出只能配置在文本模型中")
+        normalized[CONFIG_KEY] = validate_profile(normalized[CONFIG_KEY])
     raw = normalized.get(POLICY_KEY)
     if raw is None:
         return normalized
@@ -75,6 +80,8 @@ def resolve(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Merge parameters, cap output budget and return an audit-safe policy snapshot."""
     defaults = validate_defaults(model.model_type, model.default_params or {})
+    from app.services.director_output_transport import CONFIG_KEY, resolve_profile
+    output_profile = resolve_profile(model, provider, defaults.pop(CONFIG_KEY, None))
     configured = dict(defaults.pop(POLICY_KEY, {}) or {})
     requested = dict(requested or {})
     requested_aliases = [
@@ -146,6 +153,7 @@ def resolve(
     first_byte = min(int(first_byte), int(request_timeout))
     stream_idle = min(int(stream_idle), int(request_timeout))
     frozen = {
+        "structured_output": output_profile,
         "model_id": model.id,
         "model_identifier": model.model_id,
         "output_parameter": output_key,

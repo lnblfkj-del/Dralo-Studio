@@ -98,14 +98,21 @@ class OpenAICompatibleProvider:
         self._raise_for_provider_error(response)
         try:
             data = response.json()
-            text = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            refusal = message.get("refusal")
+            text = message.get("content")
+            if text is None and refusal:
+                text = ""
             if not isinstance(text, str):
                 raise TypeError
             usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
             finish_reason = data["choices"][0].get("finish_reason")
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise ProviderError("模型渠道返回的数据格式不兼容") from exc
-        return {"text": text, "usage": usage, "finish_reason": finish_reason}
+        return {"text": text, "usage": usage, "finish_reason": finish_reason,
+                **({"refusal": refusal} if refusal else {}),
+                **({"response_model": data["model"]} if isinstance(data.get("model"), str) else {}),
+                **({"provider_request_id": data["id"]} if isinstance(data.get("id"), str) else {})}
 
     async def generate_text_stream(
         self,
@@ -143,6 +150,8 @@ class OpenAICompatibleProvider:
         chunks: list[str] = []
         usage: dict[str, object] = {}
         finish_reason: str | None = None
+        refusals: list[str] = []
+        response_metadata: dict[str, str] = {}
         done_marker_seen = False
         try:
             async with outbound_client(
@@ -193,6 +202,9 @@ class OpenAICompatibleProvider:
                             raise ProviderError("模型渠道返回的流式数据格式不兼容") from exc
                         if isinstance(event.get("usage"), dict):
                             usage = event["usage"]
+                        for source, target in (("model", "response_model"), ("id", "provider_request_id")):
+                            if isinstance(event.get(source), str):
+                                response_metadata[target] = event[source]
                         choices = event.get("choices")
                         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
                             candidate_reason = choices[0].get("finish_reason")
@@ -202,6 +214,9 @@ class OpenAICompatibleProvider:
                             delta_data = event["choices"][0].get("delta", {})
                             delta = delta_data.get("content")
                             reasoning = delta_data.get("reasoning_content")
+                            refusal_delta = delta_data.get("refusal")
+                            if isinstance(refusal_delta, str) and refusal_delta:
+                                refusals.append(refusal_delta)
                         except (KeyError, IndexError, TypeError, AttributeError):
                             delta = None
                             reasoning = None
@@ -216,7 +231,7 @@ class OpenAICompatibleProvider:
                             await on_chunk(delta)
                         if (isinstance(delta, str) and delta) or (
                             isinstance(reasoning, str) and reasoning
-                        ):
+                        ) or refusals:
                             received_progress = True
                             deadline = loop.time() + stream_idle_timeout
         except httpx.TimeoutException as exc:
@@ -224,13 +239,15 @@ class OpenAICompatibleProvider:
         except httpx.HTTPError as exc:
             raise ProviderError("无法连接模型渠道，请检查网络") from exc
         text = "".join(chunks)
-        if not text and finish_reason not in {"length", "max_tokens", "max_output_tokens"}:
+        if not text and not refusals and finish_reason not in {"length", "max_tokens", "max_output_tokens", "content_filter"}:
             raise ProviderError("模型渠道未返回可用的流式文本")
         return {
             "text": text, "usage": usage, "streaming": True,
             "finish_reason": finish_reason,
             "stream_terminal_seen": done_marker_seen or finish_reason is not None,
             "stream_done_marker_seen": done_marker_seen,
+            **({"refusal": "".join(refusals)} if refusals else {}),
+            **response_metadata,
         }
 
     async def web_search(

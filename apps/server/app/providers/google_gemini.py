@@ -73,7 +73,7 @@ class GoogleGeminiProvider:
         }
         if parameters:
             aliases = {"max_tokens": "maxOutputTokens", "max_completion_tokens": "maxOutputTokens", "top_p": "topP", "top_k": "topK", "stop": "stopSequences"}
-            allowed = {"temperature", "maxOutputTokens", "topP", "topK", "stopSequences", "responseMimeType", "responseSchema", "thinkingConfig"}
+            allowed = {"temperature", "maxOutputTokens", "topP", "topK", "stopSequences", "responseMimeType", "responseSchema", "responseJsonSchema", "thinkingConfig"}
             config = {aliases.get(key, key): value for key, value in parameters.items() if aliases.get(key, key) in allowed}
             if isinstance(config.get("stopSequences"), str):
                 config["stopSequences"] = [config["stopSequences"]]
@@ -98,15 +98,20 @@ class GoogleGeminiProvider:
         except httpx.HTTPError as exc:
             raise ProviderError("无法连接 Google AI Studio，请检查网络") from exc
         try:
+            blocked = (data.get("promptFeedback") or {}).get("blockReason")
+            if blocked and not data.get("candidates"):
+                return {"text": "", "usage": {}, "finish_reason": "blocked", "refusal": str(blocked)}
             candidate = data["candidates"][0]
             finish_reason = candidate.get("finishReason")
+            refused = str(finish_reason or "").upper() in {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"}
             parts = (candidate.get("content") or {}).get("parts") or []
             text = "".join(
                 part["text"]
                 for part in parts
                 if isinstance(part, dict) and isinstance(part.get("text"), str)
+                and not part.get("thought")
             )
-            if not text and str(finish_reason or "").lower() not in {"max_tokens", "max_output_tokens"}:
+            if not text and not refused and str(finish_reason or "").lower() not in {"max_tokens", "max_output_tokens"}:
                 raise TypeError
             metadata = data.get("usageMetadata", {})
             usage = {
@@ -122,7 +127,9 @@ class GoogleGeminiProvider:
                     usage["cached_tokens"] = metadata["cachedContentTokenCount"]
         except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
             raise ProviderError("Google AI Studio 返回的数据格式不兼容") from exc
-        return {"text": text, "usage": usage, "finish_reason": finish_reason}
+        return {"text": text, "usage": usage, "finish_reason": finish_reason,
+                **({"refusal": str(finish_reason)} if refused else {}),
+                **({"response_model": data["modelVersion"]} if isinstance(data.get("modelVersion"), str) else {})}
 
     async def generate_image(self, **_kwargs: object) -> dict[str, object]:
         raise ProviderError("Google Gemini 原生协议当前仅接入文本生成")

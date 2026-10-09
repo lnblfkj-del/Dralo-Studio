@@ -8,3 +8,4 @@ export function PublicEntry({ login = false }: { login?: boolean }) {
 export async function preparePublicEntry() {}
 export function cloudOperationsEnabled() { return false; }
 export function editionRoutes() { return null; }
+export function publicEditionRoutes() { return null; }

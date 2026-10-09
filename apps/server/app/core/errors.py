@@ -198,6 +198,12 @@ class ProviderParameterError(ProviderError):
     status_code = 422
 
 
+class ProviderContentBlockedError(ProviderError):
+    code = "PROVIDER_CONTENT_BLOCKED"
+    message = "模型渠道安全策略拦截了本次内容，请核对请求内容与渠道规则；未自动重新调用"
+    status_code = 422
+
+
 class ProviderEndpointError(ProviderError):
     code = "PROVIDER_ENDPOINT_ERROR"
     message = "模型渠道端点不存在或协议路径不匹配，请检查 Base URL 和接口协议"

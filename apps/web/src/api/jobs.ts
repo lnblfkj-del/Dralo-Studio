@@ -155,6 +155,39 @@ export async function reprocessJobResponse(jobId: number, correction?: {
   return (await http.post<Job>(`/jobs/${jobId}/reprocess-response`, correction)).data;
 }
 
+export interface DirectorRecoveryState {
+  job_id: number;
+  completed_segments: number;
+  expected_segments: number;
+  free_job_ids: number[];
+  paid_scopes: { job_id: number; label: string; provider: string | null; model: string | null; unknown_result: boolean; pricing_estimate?: { amount: string | null; currency: string; reason: string } }[];
+  blocked_scopes: { job_id: number; label: string; reason: string }[];
+  can_retry: boolean;
+  confirmation_token: string | null;
+  max_new_calls: number;
+  unknown_result_count: number;
+  fee_message: string;
+  block_reason: string | null;
+}
+
+export async function getDirectorRecovery(jobId: number): Promise<DirectorRecoveryState> {
+  return (await http.get<DirectorRecoveryState>(`/jobs/${jobId}/director-recovery`)).data;
+}
+
+export async function recoverDirectorResponses(jobId: number): Promise<{ job: Job; recovery: DirectorRecoveryState }> {
+  return (await http.post<{ job: Job; recovery: DirectorRecoveryState }>(`/jobs/${jobId}/director-recovery`)).data;
+}
+
+export async function confirmDirectorRecovery(jobId: number, state: DirectorRecoveryState, acceptUnknownCharge: boolean): Promise<Job> {
+  return (await http.post<Job>(`/jobs/${jobId}/confirm-recall`, {
+    acknowledge_new_model_call: true,
+    confirmation_token: state.confirmation_token,
+    channel_checked: false,
+    accept_unknown_charge: acceptUnknownCharge,
+    reason: "用户在当前页面确认只重试未完成范围及可能再次收费",
+  })).data;
+}
+
 export async function confirmRecallJob(jobId: number): Promise<Job> {
   return (await http.post<Job>(`/jobs/${jobId}/confirm-recall`, {
     acknowledge_new_model_call: true,

@@ -51,7 +51,7 @@ class AnthropicMessagesProvider:
         raise ProviderError("模型列表超过分页上限，请手动添加模型")
 
     async def generate_text(self, *, model, prompt, parameters):
-        allowed = {"max_tokens", "temperature", "top_p", "top_k", "stop_sequences", "system", "thinking"}
+        allowed = {"max_tokens", "temperature", "top_p", "top_k", "stop_sequences", "system", "thinking", "output_config"}
         payload = {key: value for key, value in parameters.items() if key in allowed}
         payload.setdefault("max_tokens", 4096)
         if type(payload["max_tokens"]) is not int or payload["max_tokens"] <= 0:
@@ -65,7 +65,7 @@ class AnthropicMessagesProvider:
         data = await self._request("POST", "/messages", json=payload)
         try:
             text = "".join(block["text"] for block in data["content"] if block.get("type") == "text")
-            if not text and data.get("stop_reason") != "max_tokens":
+            if not text and data.get("stop_reason") not in {"max_tokens", "refusal"}:
                 raise ValueError
             usage = data.get("usage", {})
             prompt_tokens = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
@@ -74,6 +74,9 @@ class AnthropicMessagesProvider:
             for key in ("cache_creation_input_tokens", "cache_read_input_tokens"):
                 if key in usage:
                     normalized[key] = usage[key]
-            return {"text": text, "usage": normalized, "finish_reason": data.get("stop_reason")}
+            return {"text": text, "usage": normalized, "finish_reason": data.get("stop_reason"),
+                    **({"refusal": True} if data.get("stop_reason") == "refusal" else {}),
+                    **({"response_model": data["model"]} if isinstance(data.get("model"), str) else {}),
+                    **({"provider_request_id": data["id"]} if isinstance(data.get("id"), str) else {})}
         except (KeyError, TypeError, ValueError, AttributeError) as exc:
             raise ProviderError("Anthropic 未返回可用文本") from exc

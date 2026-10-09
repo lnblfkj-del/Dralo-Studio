@@ -62,8 +62,14 @@
 .dralo-editorial .ed-platform>span { display:block; font-size:10px; color:var(--ed-muted); margin-top:7px; }
 .dralo-editorial .ed-platform-option { font-size:10px; color:var(--ed-muted); }
 .dralo-editorial .ed-platform-option select { max-width:100%; border:0; border-bottom:1px solid #cfd3d7; padding:8px 26px 8px 0; border-radius:0; background:transparent; color:#656d75; font-size:11px; }
-.dralo-editorial .ed-download-list button { display:flex; align-items:center; justify-content:center; gap:14px; height:43px; padding:10px 16px; border:1px solid #dfe2e4; background:transparent; border-radius:2px; font-size:11px; white-space:nowrap; }
-.dralo-editorial .ed-install { color:#989da2; }
+.dralo-editorial .ed-download-list button, .dralo-editorial .ed-download-list .ed-install { display:flex; align-items:center; justify-content:center; gap:14px; min-height:43px; padding:10px 16px; border:1px solid #dfe2e4; background:transparent; border-radius:2px; font-size:11px; white-space:nowrap; text-decoration:none; }
+.dralo-editorial .ed-download-list .ed-install { color:#fff; background:#7855cf; border-color:#7855cf; transition:background .2s ease; }
+.dralo-editorial .ed-download-list .ed-install:hover { color:#fff; background:#6444b4; border-color:#6444b4; }
+.dralo-editorial .ed-install:focus-visible { outline:2px solid #7855cf; outline-offset:4px; }
+.dralo-editorial .ed-platform h3 { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.dralo-editorial .ed-beta { padding:3px 6px; background:#f1edf9; color:#7350bd; border-radius:3px; font-family:inherit; font-size:10px; line-height:1.5; }
+.dralo-editorial .ed-release-note { display:block; margin-top:8px; font-size:10px; line-height:1.7; color:#727982; }
+.dralo-editorial .ed-release-version { display:block; margin-top:8px; }
 .dralo-editorial .ed-download-list .ed-web { background:#272c29; border-color:#272c29; color:white; }
 .dralo-editorial .ed-signoff { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:28px; padding:88px 0 30px; }
 .dralo-editorial .ed-signoff p { font-family:"Noto Serif SC","Songti SC","SimSun",serif; font-size:32px; line-height:1.6; }
@@ -105,8 +111,8 @@
   .dralo-editorial .ed-freedom-copy h2 { font-size:36px; }
   .dralo-editorial .ed-download { padding-top:64px; }
   .dralo-editorial .ed-download-list article { grid-template-columns:24px 1fr; gap:14px 18px; padding:24px 0; }
-  .dralo-editorial .ed-platform-option, .dralo-editorial .ed-download-list button { grid-column:2; }
-  .dralo-editorial .ed-download-list button { justify-self:start; min-width:160px; }
+  .dralo-editorial .ed-platform-option, .dralo-editorial .ed-download-list button, .dralo-editorial .ed-download-list .ed-install { grid-column:2; }
+  .dralo-editorial .ed-download-list button, .dralo-editorial .ed-download-list .ed-install { justify-self:start; min-width:160px; }
   .dralo-editorial .ed-signoff { grid-template-columns:1fr auto; padding-top:60px; gap:24px; }
   .dralo-editorial .ed-signoff p { font-size:28px; }
   .dralo-editorial .ed-signoff>span { grid-column:1/-1; justify-self:start; }

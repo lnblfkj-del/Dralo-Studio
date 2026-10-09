@@ -28,15 +28,19 @@
 
 “渠道暂无可用图片资源或额度”会暂停后续提交，不代表已经确认你的账户余额不足。核对服务商资源、配额或账单后继续未提交项，失败项单独确认重试。请求结果不确定时不要反复点击生成。
 
-## 文件、缓存与备份
+## 更新已有单机部署
 
-更新已有部署时，先等待任务完成并停止 API 与 Worker，备份数据库、素材、`.env` 和存储配置，再更新源码、重建前端并重启。本轮资产修复没有新增数据库迁移，不要删除数据库或重建加密密钥。
+先等待现有任务完成，停止 API 与 Worker，并备份数据库、素材、`.env` 和存储配置。更新源码后重新构建前端、重启服务；本轮资产修复没有新增数据库迁移，不要删除已有数据库或重新生成加密密钥。
 
-内置创作 Skill 可在停机备份后单独升级。在 `apps/server` 先运行下列预检；默认回滚，不持久修改。通过后在末尾加 `--apply` 正式应用。自定义规则拒绝覆盖，失败则整轮回滚。升级保留历史版本和任务快照，不重发模型请求，不改变风格库或模型配置。
+本轮也包含内置创作 Skill 升级。停机备份后，在 `apps/server` 中先运行以下预检；预检默认回滚，不持久修改。确认通过后，在同一命令末尾加 `--apply` 才正式应用。自定义过的规则会拒绝覆盖；失败则整轮回滚，请保留自定义内容并先核查，不要强制重置。
 
 ```bash
 python -m app.services.catalog_upgrade --skills outline.direction outline.story_bible outline.rewrite script.from_brief script.rewrite episode.script-analysis.v1 episode.shot-planning.v1 episode.segment-grouping.v1 episode.asset-binding.v1 episode.prompt-compiler.v1 episode.continuity-check.v1
 ```
+
+升级保留历史 Skill 版本和原有任务快照，不重发付费模型请求，不改变风格库和模型配置。
+
+## 文件、缓存与备份
 
 单机版的项目元数据默认位于 `data/`，素材位于 `storage/`，日志位于 `logs/`，具体可由 `.env` 和存储配置调整。停掉 API 与 Worker 后再备份 SQLite 文件。
 

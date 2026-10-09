@@ -74,6 +74,8 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
     from app.services import job_state_service
     if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
         raise ConflictError("仅失败或已取消的任务可以重试")
+    if job.target_type in {"episode_director_pipeline", "episode_director_outline", "episode_director_segment"}:
+        raise ConflictError("请使用导演失败范围恢复：先处理保存结果，再确认新增调用及费用")
     if job.job_type == "video":
         from app.core.video_submission import normalize_rejected_video_submission
         job.payload = normalize_rejected_video_submission(job.payload or {})
