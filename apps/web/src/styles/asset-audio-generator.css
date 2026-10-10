@@ -1,0 +1,9 @@
+.asset-audio-generator { display: grid; gap: 12px; border-top: 1px solid var(--app-color-border); padding-top: 16px; }
+.asset-audio-generator fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 0; margin: 0; border: 0; min-width: 0; }
+.asset-audio-generator label { display: grid; gap: 6px; min-width: 0; font-size: 13px; }
+.asset-audio-generator label:has(textarea) { grid-column: 1 / -1; }
+.asset-audio-generator :is(select,input,textarea) { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--app-color-border); border-radius: 6px; color: var(--app-color-text); background: var(--app-color-surface); font: inherit; }
+.asset-audio-generator textarea { resize: vertical; }
+.asset-audio-task { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; }
+.asset-audio-task small { flex-basis: 100%; overflow-wrap: anywhere; }
+.asset-audio-generator > button { justify-self: start; }

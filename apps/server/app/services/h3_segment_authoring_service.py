@@ -49,6 +49,8 @@ async def load_h3_segment_source(
     if (plan is None or plan.status != "confirmed"
             or plan.source_script_revision != episode.script_revision):
         raise ConflictError("当前分集片段计划尚未确认或来源剧本已变化")
+    if plan.source_type == "content_frozen":
+        raise ConflictError("冻结计划的 H3 专用提交尚未完成接线，不能使用旧改写入口绕过冻结校验")
     segment = await session.scalar(select(VideoSegment).where(
         VideoSegment.id == segment_id, VideoSegment.episode_id == episode_id,
         VideoSegment.plan_id == plan.id, VideoSegment.status != "archived",
@@ -95,6 +97,8 @@ async def load_h3_segment_source(
         )
     effective = {**(plan.parameters or {}), **(segment.parameters or {}), **parameters,
                  "duration": segment.generation_duration}
+    from app.services.audio_policy import video_context
+    effective = await video_context(session, project, segment, provider, model, effective)
     project_ratio = (project.creation_settings or {}).get("aspect_ratio")
     if project_ratio and project_ratio not in {"default", "project"}:
         effective["aspect_ratio"] = project_ratio
@@ -122,7 +126,7 @@ async def load_h3_segment_source(
         raise ConflictError("此 H3 模型尚未配置并验证当前输入模式")
     profile = resolve_model_prompt_profile(provider, model, input_contract["input_mode"])
     project_style, _ = await frozen_video_style_prompt(session, project_id, owner_id, "")
-    voice_guidance = await compile_segment_voice_guidance(session, project, segment, refs)
+    voice_guidance = await compile_segment_voice_guidance(session, project, segment, refs, policy=effective["audio_policy"])
     return {
         "project_id": project_id, "episode_id": episode_id, "segment_id": segment_id,
         "plan_id": plan.id, "plan_revision": plan.revision,

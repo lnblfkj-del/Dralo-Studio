@@ -5,6 +5,7 @@ import { toErrorMessage } from "@/api/client";
 import { confirmRecallJob, getJob, listJobChildren, reprocessJobResponse, retryJob } from "@/api/jobs";
 import { Button, Dialog } from "@/components/ui";
 import type { Job } from "@/types/api";
+import { isContentPlanningJob } from "@/domain/directorJobRecovery";
 import "@/styles/job-failure.css";
 import { OutlineCastRecovery } from "./OutlineCastRecovery";
 import { DirectorRecovery } from "./DirectorRecovery";
@@ -50,7 +51,8 @@ export function JobFailurePanel({ job, disabled = false, onRecovered, onEdit, co
       } });
     },
   });
-  if (["episode_director_pipeline", "episode_director_outline", "episode_director_segment"].includes(job.target_type ?? "")) {
+  if (job.error_code === "WORKFLOW_RETIRED") return <JobFailureDetails job={job} />;
+  if (isContentPlanningJob(job)) {
     return <><DirectorRecovery job={job} disabled={disabled} onRecovered={onRecovered} /><details><summary>失败详情</summary><JobFailureDetails job={job} /></details></>;
   }
   if (castIssue) return <OutlineCastRecovery job={job} disabled={disabled} onRecovered={onRecovered} />;
@@ -90,7 +92,7 @@ export function JobFailureById({ jobId, disabled, onRecovered, compact = false }
 export function BatchFailurePanel({ job, onRecovered }: { job: Job; onRecovered?: () => void }) {
   const children = useQuery({ queryKey: ["failed-job-children", job.id], queryFn: () => listJobChildren(job.id), refetchInterval: 3000 });
   const failures = (children.data ?? []).filter(child => ["failed", "cancelled"].includes(child.status) && !child.resolution);
-  if (job.target_type === "episode_director_pipeline") return <JobFailurePanel job={job} onRecovered={onRecovered} />;
+  if (job.target_type === "episode_content_planning") return <JobFailurePanel job={job} onRecovered={onRecovered} />;
   return <div className="asset-failed-scopes">
     {children.isError && <p role="alert">失败范围读取失败：{toErrorMessage(children.error)} <Button onClick={() => void children.refetch()}>重新读取</Button></p>}
     {failures.map(child => <JobFailurePanel key={child.id} job={child} onRecovered={() => { void children.refetch(); onRecovered?.(); }} />)}

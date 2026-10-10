@@ -1,10 +1,11 @@
 import type { AgentRouteResolution } from "./agent";
 
 export type ProviderModelType = "text" | "image" | "video" | "audio" | "tts" | "embedding";
-export type ProviderProtocol = "openai_compatible" | "google_gemini" | "anthropic_messages" | "newapi" | "sora_compatible" | "dashscope_video_t2v" | "dashscope_video_i2v" | "ark_video_t2v" | "ark_video_images" | "jimeng_video_first_last" | "jimeng_video_t2v" | "jimeng_video_pro" | "kling_video_t2v" | "kling_video_i2v" | "kling_video_multi_image";
+export type ProviderProtocol = "stepfun_tts" | "stepfun_music" | "minimax_audio_subscription" | "elevenlabs_tts" | "elevenlabs_music" | "meaicc_video_images" | "meaicc_video" | "openai_compatible" | "google_gemini" | "anthropic_messages" | "newapi" | "sora_compatible" | "dashscope_video_t2v" | "dashscope_video_i2v" | "ark_video_t2v" | "ark_video_images" | "jimeng_video_first_last" | "jimeng_video_t2v" | "jimeng_video_pro" | "kling_video_t2v" | "kling_video_i2v" | "kling_video_multi_image";
 export interface ProtocolDefinition { id: ProviderProtocol; name: string; model_types: ProviderModelType[]; default_path: string; note: string }
 
 export interface ProviderModel {
+  audio_verification?: {required: boolean; ready: boolean; reason: string} | null;
   api_protocol?: ProviderProtocol | null;
   api_base_url?: string | null;
   id: number;

@@ -12,5 +12,6 @@ export function PriceEstimate({ providerId, modelId, prompt, parameters = {} }: 
     }, 300);
     return () => { active = false; clearTimeout(timer); };
   }, [providerId, modelId, prompt, key]);
-  return <div className="price-estimate" role="status"><strong>{quote?.amount != null ? `预估 ${quote.currency} ${quote.amount}` : "费用待估算 / 未配置"}</strong><small>{quote?.reason ?? "只读本地估算，不调用模型；未知不等于免费。"}</small></div>;
+  return <div className="price-estimate" role="status"><strong>{quote?.amount != null ? `预估 ${quote.currency} ${quote.amount}` : "费用待估算 / 未配置"}</strong><small>{quote?.reason ?? "只读本地估算，不调用模型；未知不等于免费。"}</small>
+    {quote?.quota && <small>订阅额度：{quote.quota.amount ?? "待核算"} {quote.quota.unit === "credit" ? "积分" : "分钟"} · {quote.quota.reason}</small>}</div>;
 }

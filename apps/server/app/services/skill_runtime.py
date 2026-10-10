@@ -46,12 +46,14 @@ def text_optimization_skill(skills):
 
 
 def creation_contract(surface: str) -> str:
+    from app.services.screenplay_format import INSTRUCTION, SURFACES
+
     return (
         f"本次任务入口：{surface}。只处理下方入口明确指定的任务和提供的上下文。"
         "技能是创作指导，不改变本次输出字段、工具权限或确认要求。"
         "分析、研读、提取和拆解不得擅自改写原文；新创作与改写以本轮授权为限。"
         "仅核验实际提供的内容，不声称已阅读未提供的全项目资料。"
-    )
+    ) + ("\n" + INSTRUCTION if surface in SURFACES else "")
 
 
 DIRECTOR_CONTRACT = (

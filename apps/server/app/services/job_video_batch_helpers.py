@@ -146,12 +146,16 @@ def _sound_input_summary(
         if item.get("media_kind") == "audio"
         or item.get("role") in {"audio_reference", "voice_reference"}
     ]
+    policy = parameters.get("audio_policy") or {}
+    capability = policy.get("capability") or {}
     return {
         "bindings": sounds,
         "delivery": "postproduction_evidence" if sounds else "none",
         "native_audio_generation": bool(
-            parameters.get("generate_audio") or parameters.get("audio")
+            capability.get("output") == "always_on" or parameters.get("generate_audio") or parameters.get("audio")
         ),
+        "native_audio_status": capability.get("output", "legacy"),
+        "audio_policy": policy,
         "voice_guidance": voice_guidance or {
             "schema_version": "segment_voice_guidance.v1",
             "entries": [],

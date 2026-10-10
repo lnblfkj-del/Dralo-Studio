@@ -166,12 +166,12 @@ async def finalize_audio_node_job(session, job, result):
     data = result.get("audio_bytes")
     if not isinstance(data, bytes) or not data or len(data) > 50 * 1024 * 1024:
         raise ConflictError("配音结果为空或超过 50 MB")
-    relative = Path("projects") / str(job.project_id) / "audio" / f"{uuid4().hex}.mp3"
+    relative = Path("projects") / str(job.project_id) / "audio" / f"audio-job-{job.id}.mp3"
     path = settings.storage_path / relative
     await require_media_budget(session, len(data))
     write_storage_bytes(settings, path, data)
     media = MediaFile(owner_id=job.owner_id, project_id=job.project_id, kind="audio", source="generation",
-        file_path=relative.as_posix(), original_name=path.name, mime_type="audio/mpeg", size=len(data), hash=sha256(data).hexdigest())
+        file_path=relative.as_posix(), original_name=path.name, mime_type="audio/mpeg", size=len(data), hash=sha256(data).hexdigest(), duration=result.get("duration"))
     session.add(media)
     await session.flush()
     session.add(ProjectMediaLink(project_id=job.project_id, media_file_id=media.id))
@@ -204,7 +204,7 @@ async def finalize_audio_node_job(session, job, result):
                 tags=["画布生成"], is_final=not bool(primary),
             ))
     await session.flush()
-    return {"media_file_id": media.id, "canvas_node_id": node.node_key, "kind": "audio", "media_url": f"/api/media/{media.id}"}
+    return {"media_file_id": media.id, "canvas_node_id": node.node_key, "kind": "audio", "duration": media.duration, "media_url": f"/api/media/{media.id}"}
 
 
 async def assert_node_unlocked(session, project, node):

@@ -335,9 +335,6 @@ async def finalize_video_job(
             if shot.status != SHOT_STATUS_SUPERSEDED:
                 shot.status = "ready"
             await session.flush()
-            from app.services.segment_plan_service import mirror_legacy_shot_version
-
-            await mirror_legacy_shot_version(session, shot, video_version)
             result.update({"shot_id": shot.id, "video_version_id": video_version.id})
         elif job.target_type == "video_segment" and job.target_id is not None:
             segment = await session.get(VideoSegment, job.target_id)

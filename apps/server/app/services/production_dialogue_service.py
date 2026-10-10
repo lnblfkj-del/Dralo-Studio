@@ -1,5 +1,6 @@
 """Editable episode dialogue/subtitle cues bound to the active segment plan."""
 
+import math
 from typing import Any
 
 from sqlalchemy import select
@@ -23,14 +24,40 @@ from app.services.team_access import same_team
 
 
 def audio_readiness(duration: float | None, cue_duration: float) -> str:
-    if duration is None:
+    if duration is None or not math.isfinite(duration) or duration <= 0:
         return "duration_unknown"
     tolerance = 0.15
-    if duration > cue_duration + tolerance:
+    if duration > cue_duration + 0.001:
         return "too_long"
     if duration < cue_duration - tolerance:
         return "too_short"
     return "ready"
+
+
+def require_complete_dialogue(duration, cue_duration):
+    if audio_readiness(duration, cue_duration) == "duration_unknown":
+        raise ConflictError("对白音频缺少有效实测时长，请先核对素材；不会盲目截短或加速")
+    if duration > cue_duration + 0.001:
+        raise ConflictError(
+            "完整配音长于对白区间，请校准区间；"
+            "超出冻结片段时长时必须重新规划，不能截断台词"
+        )
+
+
+async def validate_export_dialogue(session, episode, cues):
+    await validate_dialogue_cues(session, episode, cues)
+    evidence, cache = [], {}
+    for cue in cues:
+        media_id = cue.get("audio_media_id")
+        if media_id is None:
+            continue
+        if media_id not in cache:
+            cache[media_id] = await _accessible_audio(session, episode, media_id)
+        media = cache[media_id]
+        require_complete_dialogue(media.duration, float(cue["end_time"]) - float(cue["start_time"]))
+        evidence.append({"segment_id":cue["segment_id"], "shot_id":cue["shot_id"],
+                         "media_file_id":media.id, "hash":media.hash, "duration":media.duration})
+    return evidence
 
 
 async def _active_context(

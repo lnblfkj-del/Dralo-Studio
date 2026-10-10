@@ -266,7 +266,10 @@ async def edit_entity(session, project, node_key, payload):
         from app.providers.speech import speech_parameters
         from app.services.canvas_generation_service import validate_model
         model = await validate_model(session, payload.speech_preset.provider_model_id, "audio", {})
-        speech_parameters(model, {"voice": payload.speech_preset.voice}, "验证")
+        from app.providers.protocols import effective_protocol
+        from app.models import Provider
+        provider = await session.get(Provider, model.provider_id)
+        speech_parameters(model, {"voice": payload.speech_preset.voice}, "验证", protocol=effective_protocol(provider, model))
     primary_kind = "audio" if node.node_type == "voice" else "image"
     for media_id, kind in [(i, primary_kind) for i in ids] + ([(payload.voice_media_id, "audio")] if payload.voice_media_id else []):
         media = await session.get(MediaFile, media_id)

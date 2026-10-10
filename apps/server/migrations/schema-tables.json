@@ -528,6 +528,18 @@
     "updated_at",
     "workspace_id"
   ],
+  "episode_planning_records": [
+    "episode_id",
+    "execution_epoch",
+    "revision",
+    "fingerprint",
+    "snapshot",
+    "analysis_snapshot",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
   "episode_production_plans": [
     "episode_id",
     "owner_id",
@@ -744,6 +756,19 @@
     "market_research_run_id",
     "idea_index",
     "project_id",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
+  "planning_response_records": [
+    "plan_id",
+    "request_id",
+    "segment_key",
+    "response_fingerprint",
+    "raw_response",
+    "status",
+    "detail",
     "id",
     "created_at",
     "updated_at",

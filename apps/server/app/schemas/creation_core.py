@@ -36,6 +36,14 @@ class CreationSettings(BaseModel):
     market_idea_snapshot: dict[str, Any] = Field(default_factory=dict)
     market_source_snapshot: list[dict[str, Any]] = Field(default_factory=list, max_length=12)
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_retired_music_setting(cls, value: Any) -> Any:
+        # Old saved drafts may still contain the retired project preference.
+        if isinstance(value, dict) and "background_music" in value:
+            return {key: item for key, item in value.items() if key != "background_music"}
+        return value
+
     @field_validator("style_id")
     @classmethod
     def valid_style_id(cls, value: str) -> str:

@@ -22,7 +22,7 @@ def validate_model_values(value, *, pricing=False):
     else:
         if {"api_key", "authorization", "headers", "base_url", "model", "messages", "stream"}.intersection(value):
             raise ValueError("默认参数不能覆盖密钥、请求地址、模型、消息或流式协议")
-        if "video_prompt_certifications" in value:
+        if {"video_prompt_certifications", "prompt_timeline"}.intersection(value):
             raise ValueError("视频提示词认证须单独配置，不能放入会发送到渠道的默认参数")
         for key in ("durations", "aspect_ratios", "resolutions"):
             if key in value and not isinstance(value[key], list):
@@ -201,6 +201,7 @@ class ProviderModelTestOut(BaseModel):
 
 
 class ProviderModelOut(ORMModel):
+    audio_verification: dict[str, Any] | None = None
     api_protocol: str | None = None
     api_base_url: str | None = None
     id: int

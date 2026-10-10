@@ -64,13 +64,8 @@ async def build_episode_video_plan(
         session, "media_task_orchestrator"
     )
     model, provider = await _video_model_pair(session, provider_model_id)
-    from app.services import segment_plan_service
-
     if production is None or production.active_plan_id is None:
-        await segment_plan_service.initialize_legacy_plan(session, episode)
-        production = await session.scalar(
-            select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
-        )
+        raise ConflictError("本集尚未启用片段生产计划，请先完成整集规划并启用到制作台")
     plan = (
         await session.get(EpisodeProductionPlan, production.active_plan_id)
         if production and production.active_plan_id
@@ -78,7 +73,13 @@ async def build_episode_video_plan(
     )
     if plan is None:
         raise ConflictError("本集尚未建立片段生产计划")
-    if plan.status not in {"confirmed", "compatibility"}:
+    if plan.source_type == "legacy" or plan.status == "compatibility":
+        raise ConflictError("旧兼容计划已停用，请重新完成整集规划并启用到制作台")
+    if plan.source_type == "content_frozen":
+        from app.services.episode_planning_video_production import build_plan
+
+        return await build_plan(session, episode, plan, provider_model_id, parameters, regenerate, orchestrator_execution)
+    if plan.status != "confirmed":
         raise ConflictError("片段脚本尚未确认，请先保存并确认生产计划")
     if plan.source_script_revision != episode.script_revision:
         raise ConflictError("片段计划来源剧本已变化，请重新规划后再生产")
@@ -115,17 +116,6 @@ async def build_episode_video_plan(
             asset_block_reason = f"缺少已确认的角色或场景最终图片{suffix}"
     if plan.provider_model_id is not None and plan.provider_model_id != model.id:
         raise ConflictError("当前片段计划使用了其他视频模型，请重新规划后再生产")
-    if plan.status == "compatibility" and plan.provider_model_id is None:
-        # Legacy one-shot-per-segment plans predate model snapshots. The first
-        # explicitly confirmed production freezes the selected model instead of
-        # applying the modern duration contract to historical shot-based plans.
-        plan.provider_model_id = model.id
-        plan.model_capability_snapshot = {
-            **(plan.model_capability_snapshot or {}),
-            "provider_model_id": model.id,
-            "model_id": model.model_id,
-            "legacy_compatibility": True,
-        }
     segments = list(
         (
             await session.scalars(
@@ -291,6 +281,7 @@ async def build_episode_video_plan(
         if project_ratio and project_ratio not in {"default", "project"}:
             segment_parameters["aspect_ratio"] = project_ratio
         try:
+            from app.services.audio_policy import apply_prompt, video_context
             from app.services.job_video_batch_service import (
                 _compile_segment_media,
                 _resolve_continuity_input,
@@ -301,6 +292,11 @@ async def build_episode_video_plan(
                 compile_segment_voice_guidance,
             )
             from app.services.video_input_compiler import compile_video_input, prepare_video_prompt
+            segment_parameters = await video_context(session, project, segment, provider, model, segment_parameters)
+            audio_capability = segment_parameters["audio_policy"]["capability"]
+            if video_contract is not None and audio_capability["verified"]:
+                video_contract = {**video_contract, "supports_audio": audio_capability["output"] != "unsupported"}
+            prompt, omitted_audio = apply_prompt(prompt, (segment.parameters or {}).get("structured_script"), segment_parameters["audio_policy"])
 
             first_frame, last_frame, reference_ids, _bindings = _compile_segment_media(
                 refs, segment_parameters
@@ -321,7 +317,7 @@ async def build_episode_video_plan(
                 media_inputs.append({"media_id": style_media_id, "role": "reference_image",
                                      "purpose": "project_style"})
             voice_guidance = await compile_segment_voice_guidance(
-                session, project, segment, refs
+                session, project, segment, refs, policy=segment_parameters["audio_policy"]
             )
             prompt = append_voice_guidance(prompt, voice_guidance)
             prompt, effective_negative_prompt = prepare_video_prompt(
@@ -412,6 +408,8 @@ async def build_episode_video_plan(
                     _bindings, segment_parameters, voice_guidance
                 ),
                 "video_prompt_freeze": prompt_freeze,
+                "audio_policy": segment_parameters["audio_policy"],
+                "omitted_audio_sources": omitted_audio,
             },
             **quote,
         })

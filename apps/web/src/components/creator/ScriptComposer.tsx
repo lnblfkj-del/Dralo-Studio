@@ -44,7 +44,8 @@ export function ScriptComposer({ initial, initialAnalysis = null, initialTitle =
   onCancel?: () => void;
   onDraftChange?: (draft: { settings: CreationSettings; title: string; analysis: ScriptImportAnalysis | null }) => void;
 }) {
-  const [settings, setSettings] = useState<CreationSettings>({ ...defaults, ...initial });
+  const initialSettings = { ...defaults, ...Object.fromEntries(Object.entries(initial ?? {}).filter(([key]) => key !== "background_music")) };
+  const [settings, setSettings] = useState<CreationSettings>(initialSettings);
   const [analysis, setAnalysis] = useState<ScriptImportAnalysis | null>(initialAnalysis);
   const [title, setTitle] = useState(initialTitle);
   useEffect(() => { onDraftChange?.({ settings, title, analysis }); }, [settings, title, analysis, onDraftChange]);
@@ -99,7 +100,7 @@ export function ScriptComposer({ initial, initialAnalysis = null, initialTitle =
   const selectedStyleName = settings.style_id === "custom" ? "自定义风格" : enabledStyles.find((item) => `preset:${item.id}` === settings.style_id)?.name ?? "风格库";
   const fileInput = useRef<HTMLInputElement>(null);
   const committed = useRef(false);
-  const initialSnapshot = useRef({ title: initialTitle, settings: { ...defaults, ...initial } });
+  const initialSnapshot = useRef({ title: initialTitle, settings: initialSettings });
   const dirty = title !== initialSnapshot.current.title || Object.keys(settings).some(key => {
     const field = key as keyof CreationSettings;
     const current = settings[field], original = initialSnapshot.current.settings[field];

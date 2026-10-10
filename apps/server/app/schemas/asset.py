@@ -253,6 +253,14 @@ class AssetGenerateRequest(BaseModel):
     view_label: str | None = Field(default=None, min_length=1, max_length=120)
 
 
+class AssetAudioGenerateRequest(BaseModel):
+    provider_model_id: int = Field(ge=1)
+    prompt: str = Field(min_length=1, max_length=10000)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    request_id: str = Field(min_length=1, max_length=128)
+    expected_revision: int = Field(ge=0)
+
+
 class AssetLinkCreate(BaseModel):
     local_slug: str | None = Field(default=None, min_length=1, max_length=128)
 

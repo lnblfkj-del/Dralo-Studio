@@ -326,6 +326,8 @@ async def update_episode_production(
 ) -> dict[str, Any]:
     """以乐观锁保存制作设置；媒体生成和状态变化不走此入口。"""
     from app.services.production_dialogue_service import validate_dialogue_cues, validate_sound_cues
+    from app.services.audio_policy import resolve
+    resolve(settings)
 
     await validate_dialogue_cues(session, episode, settings.get("dialogue_cues") or [])
     await validate_sound_cues(session, episode, settings.get("sound_cues") or [])

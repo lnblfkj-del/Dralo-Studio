@@ -1,7 +1,10 @@
 """Deterministic, warning-first structure review for generated screenplays."""
 
-import re
 from typing import Any
+
+from app.services.screenplay_review import (
+    canonical_format_warnings, character_catalog, duration_estimate, review_sources, spoken_char_count,
+)
 
 _DIRECT_HANDOFF_TERMS = ("上一集", "上集", "承接上集", "接上集", "前集")
 _OPEN_ENDING_TERMS = ("未完待续", "下集继续", "下集揭晓", "欲知后事")
@@ -13,9 +16,6 @@ _GENERIC_HANDOFF_STATES = {
     "延续上一集",
     "延续上集",
 }
-_SPOKEN_LINE = re.compile(r"^([^：:]{1,24})[：:]\s*[“\"]?(.+)$")
-_SPEAKER_NOTE = re.compile(r"[（(].*?[）)]")
-_SPOKEN_CHARS = re.compile(r"[^\w\u4e00-\u9fff]")
 
 
 def build_structure_review_context(
@@ -58,31 +58,34 @@ def _review_pacing(
     script: str, parameters: dict[str, Any], issues: list[dict[str, str]]
 ) -> dict[str, Any]:
     budget = dict(parameters.get("script_length_budget") or {})
-    known = set(parameters.get("known_character_names") or []) | {"旁白", "画外音"}
-    dialogue_chars = 0
-    counted_lines = 0
-    action_lines = 0
-    for line_number, raw in enumerate(script.splitlines(), start=1):
-        line = raw.strip()
-        match = _SPOKEN_LINE.match(line)
-        if match is None:
-            if line and not line.startswith(("场景", "【场", "时间", "地点", "配乐BGM", "环境声", "音效")):
-                action_lines += 1
+    characters = parameters.get("screenplay_characters")
+    if characters is None:
+        characters = [{"name": name} for name in parameters.get("known_character_names") or []]
+    review = review_sources(script, character_catalog(characters))
+    dialogue_chars = review["dialogue_chars"]
+    counted_lines = review["dialogue_events"]
+    action_lines = sum(record["kind"] == "action" for record in review["records"])
+    for record in review["records"]:
+        if record["kind"] != "dialogue":
             continue
-        speaker = _SPEAKER_NOTE.sub("", match.group(1)).strip()
-        if speaker not in known:
-            if not line.startswith(("配乐BGM", "环境声", "音效")):
-                action_lines += 1
-            continue
-        spoken = _SPOKEN_CHARS.sub("", match.group(2))
-        dialogue_chars += len(spoken)
-        counted_lines += 1
-        if len(spoken) > 30:
+        count = spoken_char_count(record["spoken_text"])
+        if count > 30:
             issues.append(_issue(
                 "long_spoken_line",
-                f"第 {line_number} 行 {speaker} 的台词约 {len(spoken)} 字，建议拆句或留动作反应。",
-                raw.strip(),
+                f"第 {record['line']} 行 {record['speaker']} 的台词约 {count} 字，建议拆句或留动作反应。",
+                record["text"],
             ))
+
+    for error in review["errors"]:
+        issues.append(_issue("screenplay_source_unresolved", error["message"]))
+    if review["unbound_speakers"]:
+        issues.append(_issue("screenplay_speaker_unbound", "带引号对白已保留，制作前仍需关联发声主体。",
+                             "、".join(review["unbound_speakers"])))
+    if parameters.get("screenplay_format_version"):
+        drift = canonical_format_warnings(script)
+        if drift:
+            issues.append(_issue("screenplay_format_drift", "部分正文未采用统一行式模板；可识别内容保留，不自动改写。",
+                                 "行号：" + "、".join(map(str, drift))))
 
     if counted_lines >= 2 and action_lines == 0:
         issues.append(_issue(
@@ -108,7 +111,11 @@ def _review_pacing(
         "recognized_dialogue_chars": dialogue_chars,
         "recognized_dialogue_lines": counted_lines,
         "action_lines": action_lines,
-        "dialogue_coverage": "recognized_lines_only",
+        "dialogue_coverage": "complete" if not review["errors"] else "partial",
+        "source_review": {key: value for key, value in review.items() if key != "records"},
+        "duration_estimate": duration_estimate(review),
+        "speaker_kind_counts": {kind: sum(row.get("speaker_kind") == kind for row in review["records"])
+                                for kind in ("character", "group", "narration", "device", "unbound")},
     }
 
 
@@ -117,11 +124,14 @@ def _review_closed_episode(
 ) -> None:
     new_hooks = [_text(item) for item in continuity.get("new_hooks") or [] if _text(item)]
     ending = f"{_text(continuity.get('end_state'))}\n{script[-500:]}"
-    if new_hooks:
+    # Metadata-only hooks are not evidence that this episode's core conflict is open.
+    # Only explicit deferral is flagged; semantic closure still needs human review.
+    deferred_hooks = [hook for hook in new_hooks if _contains_any(hook, _OPEN_ENDING_TERMS) or "下集" in hook]
+    if deferred_hooks:
         issues.append(_issue(
             "episode_closure_new_hooks",
-            "本集要求独立闭环，但连续性记录仍新增了悬念，请人工确认是否属于可接受的长期钩子。",
-            "；".join(new_hooks[:3]),
+            "本集要求独立闭环，但连续性记录明确把问题留待下集，请核对本集核心冲突。",
+            "；".join(deferred_hooks[:3]),
         ))
     if _contains_any(ending, _OPEN_ENDING_TERMS) or "下集" in ending:
         issues.append(_issue(
@@ -236,7 +246,7 @@ def review_episode_script_structure(
     pacing = _review_pacing(script, parameters, issues)
 
     return {
-        "version": 1,
+        "version": 2,
         "status": "warning" if issues else "passed",
         "structure": structure,
         "context_strategy": strategy,
@@ -245,6 +255,8 @@ def review_episode_script_structure(
         "unit_id": context.get("unit_id") or unit.get("unit_id"),
         "outline_cliffhanger": _text(context.get("current_outline_cliffhanger")),
         "pacing": pacing,
+        "closure_review": {"scope": "explicit_deferral_only", "semantic_closure": "not_verified",
+                           "reported_new_hooks": list(continuity.get("new_hooks") or [])},
         "issue_count": len(issues),
         "issues": issues,
     }

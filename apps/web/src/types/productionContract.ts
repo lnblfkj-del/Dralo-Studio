@@ -119,7 +119,7 @@ export interface CatalogItem {
     height: number | null;
     duration_seconds: number | null;
   } | null;
-  latest_job: { id: number; status: string; progress: number } | null;
+  latest_job: { id: number; status: string; progress: number; audio_recovery?: "save_only" | "query_only" | "check_required" | null; retry_allowed?: boolean } | null;
   prompt_optimization?: { status: "pending" | "queued" | "generating" | "optimized" | "failed"; job_id: number | null; reason: string | null };
 }
 

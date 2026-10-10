@@ -42,9 +42,9 @@ class SceneOut(ORMModel):
 class ShotCreate(BaseModel):
     order: int = Field(default=0, ge=0)
     duration: float | None = Field(default=None, ge=0)
-    shot_size: str | None = Field(default=None, max_length=32)
-    camera_angle: str | None = Field(default=None, max_length=32)
-    camera_movement: str | None = Field(default=None, max_length=32)
+    shot_size: str | None = Field(default=None, max_length=64)
+    camera_angle: str | None = Field(default=None, max_length=64)
+    camera_movement: str | None = Field(default=None, max_length=120)
     action: str | None = None
     dialogue: str | None = None
     audio_note: str | None = None
@@ -56,9 +56,9 @@ class ShotCreate(BaseModel):
 class ShotUpdate(BaseModel):
     order: int | None = Field(default=None, ge=0)
     duration: float | None = Field(default=None, ge=0)
-    shot_size: str | None = Field(default=None, max_length=32)
-    camera_angle: str | None = Field(default=None, max_length=32)
-    camera_movement: str | None = Field(default=None, max_length=32)
+    shot_size: str | None = Field(default=None, max_length=64)
+    camera_angle: str | None = Field(default=None, max_length=64)
+    camera_movement: str | None = Field(default=None, max_length=120)
     action: str | None = None
     dialogue: str | None = None
     audio_note: str | None = None

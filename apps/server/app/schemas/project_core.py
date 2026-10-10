@@ -137,6 +137,7 @@ class ScriptReadinessIssue(BaseModel):
         "stale_revision",
         "continuity_conflict",
         "continuity_stale",
+        "screenplay_source_ambiguous",
     ]
     message: str
 

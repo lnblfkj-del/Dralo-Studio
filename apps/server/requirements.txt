@@ -23,3 +23,5 @@ urllib3==2.7.0
 requests==2.34.2
 alibabacloud-oss-v2==1.4.0
 filelock==3.32.6
+# R1: Windows Python 3.12 wheel + pip check passed; other release targets pending R3.
+ortools==9.15.6755

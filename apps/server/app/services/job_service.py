@@ -30,7 +30,7 @@ BATCH_PARENT_TARGETS = {
     "episode_script_batch",
     "asset_image_batch",
     "asset_prompt_batch",
-    "episode_director_pipeline",
+    "episode_content_planning",
 }
 LOCAL_JOB_TYPES = {"media_process", "source_parse", JOB_TYPE_EXPORT}
 ACTIVE_LEASE_STATUSES = {

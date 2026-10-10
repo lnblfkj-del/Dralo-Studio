@@ -17,6 +17,9 @@ PROTOCOL_ANTHROPIC = "anthropic_messages"
 PROVIDER_PROTOCOLS = {PROTOCOL_OPENAI_COMPATIBLE, PROTOCOL_GOOGLE_GEMINI, PROTOCOL_FAKE_VIDEO, PROTOCOL_ANTHROPIC, "newapi", "sora_compatible", "dashscope_video_t2v", "dashscope_video_i2v", "ark_video_t2v", "jimeng_video_first_last", "kling_video_t2v", "kling_video_i2v", "kling_video_multi_image"}
 PROVIDER_PROTOCOLS.update({"ark_video_images", "jimeng_video_t2v", "jimeng_video_pro"})
 PROVIDER_PROTOCOLS.add("minimax_video_v2")
+PROVIDER_PROTOCOLS.add("meaicc_video")
+PROVIDER_PROTOCOLS.add("meaicc_video_images")
+PROVIDER_PROTOCOLS.update({"stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music"})
 
 MODEL_TYPE_TEXT = "text"
 MODEL_TYPE_IMAGE = "image"

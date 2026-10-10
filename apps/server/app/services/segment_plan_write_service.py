@@ -50,6 +50,9 @@ async def create_plan(
 ) -> dict[str, Any]:
     """Create and activate an immutable plan version; never creates generation jobs."""
     production = await _production(session, episode)
+    active = await session.get(EpisodeProductionPlan, production.active_plan_id) if production.active_plan_id else None
+    if active and active.source_type == "content_frozen":
+        raise ConflictError("当前片段计划已冻结；请在整集规划中调整模型或重新规划，不能直接增删片段或修改时长")
     if production.revision != expected_production_revision:
         raise ConflictError("制作配置已变化，请刷新后重新规划")
     if episode.finalized_script_revision != episode.script_revision:

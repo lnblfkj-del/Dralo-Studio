@@ -16,7 +16,17 @@ from app.core.config import settings
 from app.core.errors import ConflictError, NotFoundError
 from app.core.media_command_safety import local_media_arguments
 from app.core.storage_safety import require_storage_capacity, storage_reservation
-from app.models import Episode, EpisodeProduction, MediaFile, ProjectMediaLink, Scene, SegmentVideoVersion, Shot, VideoSegment
+from app.models import (
+    Episode,
+    EpisodeProduction,
+    EpisodeProductionPlan,
+    MediaFile,
+    ProjectMediaLink,
+    Scene,
+    SegmentVideoVersion,
+    Shot,
+    VideoSegment,
+)
 from app.services.media_core_service import MEDIA_RULES, get_owned_media
 from app.services.team_access import owner_scope, same_team
 
@@ -310,17 +320,15 @@ async def export_episode_video(
         select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
     )
     if production is None or production.active_plan_id is None:
-        from app.services import segment_plan_service
-
-        await segment_plan_service.initialize_legacy_plan(session, episode)
-        production = await session.scalar(
-            select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
-        )
+        raise ConflictError("本集尚未启用片段生产计划，请先完成整集规划并启用到制作台")
     effective_plan_id = plan_id or (production.active_plan_id if production else None)
     if effective_plan_id is None or (
         production is not None and effective_plan_id != production.active_plan_id
     ):
         raise ConflictError("片段计划已变化，请重新提交整集合成")
+    active_plan = await session.get(EpisodeProductionPlan, effective_plan_id)
+    if active_plan is None or active_plan.source_type == "legacy" or active_plan.status == "compatibility":
+        raise ConflictError("旧兼容计划已停用，请重新完成整集规划并启用到制作台")
     segments = list(
         (
             await session.scalars(
@@ -414,6 +422,10 @@ async def export_episode_video(
         end_time = float(cue.get("end_time") or 0)
         if start_time < 0 or end_time <= start_time or end_time > episode_duration + 0.001:
             raise ConflictError("对白音频时间超出整集采用区间")
+        from app.services.media_core_service import probe_media_file
+        from app.services.production_dialogue_service import require_complete_dialogue
+        metadata = await probe_media_file(path, "audio")
+        require_complete_dialogue(metadata.get("duration"), end_time - start_time)
         audio_mode = cue.get("audio_mode", "replace")
         if audio_mode not in {"replace", "mix"}:
             raise ConflictError("对白原声处理模式无效")

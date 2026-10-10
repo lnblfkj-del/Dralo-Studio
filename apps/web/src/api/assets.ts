@@ -164,6 +164,22 @@ export async function expandPrompt(projectId: number, prompt: string): Promise<P
   return (await http.post<PromptExpansion>(`/projects/${projectId}/assets/expand-prompt`, { prompt })).data;
 }
 
+export interface AssetAudioRequest {
+  provider_model_id: number;
+  prompt: string;
+  parameters: Record<string, unknown>;
+  request_id: string;
+  expected_revision: number;
+}
+
+export async function generateAssetAudio(projectId: number, assetId: number, payload: AssetAudioRequest) {
+  return (await http.post<Job>(`/projects/${projectId}/assets/${assetId}/generate-audio`, payload)).data;
+}
+
+export async function getAssetAudioTask(projectId: number, assetId: number) {
+  return (await http.get<Job | null>(`/projects/${projectId}/assets/${assetId}/audio-task`)).data;
+}
+
 export async function generateAssetImage(
   projectId: number,
   assetId: number,

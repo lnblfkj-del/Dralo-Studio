@@ -56,6 +56,7 @@ function Ledger({ onClose }: {onClose: () => void}) {
         <header><strong>#{call.id} · {call.provider} / {call.model}</strong><small>{call.job_id ? `任务 #${call.job_id}` : "模型测试"} · {new Date(call.created_at).toLocaleString()}</small></header>
         <div className="billing-amounts"><span>用量核算：{call.amount===null?"待核算":`${call.currency} ${call.amount}`}</span><span>人工账单：{call.bill_amount===null?"待登记":`${call.currency} ${call.bill_amount}`}</span><span>差额：{call.difference===null?"待核对":`${call.currency} ${call.difference}`}</span></div>
         <p>{call.reason}</p>
+        {call.quota_usage && <p>订阅额度核算：{call.quota_usage.amount ?? "待核算"} {call.quota_usage.unit === "credit" ? "积分" : "分钟"} · {call.quota_usage.reason}</p>}
         <details><summary>用量、价格快照与凭据</summary><pre>{JSON.stringify({用量:call.meter,提交时价格:call.snapshot},null,2)}</pre>{call.receipts.map(r=><p key={r.id}>{r.reference} · {r.kind==="refund"?"退款/冲销":"扣费"} {call.currency} {r.amount} · {r.note}</p>)}</details>
         <details><summary>登记已核实账单 / 退款</summary><ReceiptForm call={call} onDone={()=>client.invalidateQueries({queryKey:["billing"]})}/></details>
       </article>)}

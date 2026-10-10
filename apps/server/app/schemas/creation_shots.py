@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class ShotDraft(BaseModel):
     number: int = Field(ge=1, le=200)
     duration: float = Field(gt=0, le=120)
-    shot_size: str = Field(min_length=1, max_length=32)
-    camera_angle: str = Field(default="", max_length=32)
-    camera_movement: str = Field(default="", max_length=32)
+    shot_size: str = Field(min_length=1, max_length=64)
+    camera_angle: str = Field(default="", max_length=64)
+    camera_movement: str = Field(default="", max_length=120)
     action: str = Field(min_length=1, max_length=4000)
     dialogue: str = Field(default="", max_length=4000)
     audio_note: str = Field(default="", max_length=2000)

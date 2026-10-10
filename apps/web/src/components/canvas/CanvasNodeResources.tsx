@@ -7,7 +7,7 @@ import { toErrorMessage } from "@/api/client";
 import { useCanvasStore, type CanvasNodePayload } from "@/stores/canvasStore";
 
 const ROLES: Record<string, string> = { reference_image: "参考图", first_frame: "首帧", last_frame: "尾帧", audio_reference: "音频参考", voice_reference: "音色参考" };
-const TASK_STATUS: Record<string, string> = {queued: "排队中", claimed: "准备中", processing: "处理中", succeeded: "已完成", failed: "失败", cancelled: "已取消", submitting: "提交中", provider_pending: "等待渠道结果"};
+const TASK_STATUS: Record<string, string> = {queued: "排队中", claimed: "准备中", running: "生成中", processing: "处理中", downloading: "保存中", retrying: "等待恢复", succeeded: "已完成", failed: "失败", cancelled: "已取消", submitting: "提交中", provider_pending: "等待渠道结果"};
 
 export function CanvasNodeResources({ id, data, allowedRoles, versionSelection = "direct" }: { id: string; data: CanvasNodePayload; allowedRoles?: string[]; versionSelection?: "direct" | "editor" }) {
   const projectId = useCanvasStore((state) => state.projectId)!;
@@ -58,7 +58,7 @@ export function CanvasNodeResources({ id, data, allowedRoles, versionSelection =
     {data.pendingMediaId && <small>{versionSelection === "editor" ? "新结果已保留；请在“编辑设定与素材”中设为主视图。" : "新结果已保留，请选择版本后采用；原素材未覆盖。"}</small>}
     {job.data && <div className="canvas-node-task" role="status"><span>任务 #{job.data.id} · {TASK_STATUS[job.data.status] ?? job.data.status} · {job.data.progress}%</span>
       {!["succeeded", "failed", "cancelled"].includes(job.data.status) && <button disabled={action.isPending} onClick={() => action.mutate("cancel")}>取消</button>}
-      {["failed", "cancelled"].includes(job.data.status) && <button disabled={!editable || action.isPending} onClick={() => action.mutate("retry")}>{job.data.execution_info?.recovery === "query_only" ? "继续查询原任务" : "重试"}</button>}
+      {["failed", "cancelled"].includes(job.data.status) && <button disabled={!editable || action.isPending || job.data.retry_allowed === false} onClick={() => action.mutate("retry")}>{job.data.execution_info?.recovery === "save_only" ? "重试保存（不调用模型）" : job.data.execution_info?.recovery === "query_only" ? "继续查询原任务" : job.data.execution_info?.recovery === "check_required" ? "需核对渠道记录" : "重试"}</button>}
       {job.data.execution_info && <small>渠道任务：{job.data.execution_info.task_id || job.data.execution_info.business_id} · 取消只停止本地等待，不代表退款</small>}
       {job.data.error_message && <small>{job.data.error_code}：{job.data.error_message}</small>}
     </div>}

@@ -12,6 +12,7 @@ import { CanvasAudioPlayer } from "./CanvasAudioPlayer";
 import { CanvasMediaTools } from "./CanvasMediaTools";
 import { CanvasAdvancedTools } from "./CanvasAdvancedTools";
 import { choices, mediaModels, referenceRoles, referenceHandleTop } from "./mediaCapabilities";
+import { audioAccountReady } from "./audioVerification";
 import "@/styles/canvas-media-node.css";
 import { PriceEstimate } from "@/components/settings/PriceEstimate";
 import { CanvasNodeHeading } from "./CanvasNodeHeading";
@@ -61,6 +62,9 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
   const kind = data.kind === "prompt" ? "image" : data.kind;
   const models = mediaModels(providers.data ?? [], kind);
   const model = models.find((m) => m.id === data.providerModelId);
+  const music = kind === "audio" && model?.model_type === "audio";
+  const audioLabel = music ? "音乐" : "配音";
+  const musicDurationRequired = music && (model?.api_protocol || providers.data?.find(p => p.id === model?.provider_id)?.protocol) === "elevenlabs_music";
   const roles = referenceRoles(model, kind);
   const voices = choices(model?.default_params.voices);
   const projectRatio = projectAspectRatio && !["default", "模型默认"].includes(projectAspectRatio) ? projectAspectRatio : "";
@@ -70,7 +74,7 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
   const projectRatioSupported = !projectRatio || !declaredAspectRatios.length || declaredAspectRatios.includes(projectRatio);
   const priceParameters = { ...(effectiveAspectRatio ? {aspect_ratio: effectiveAspectRatio} : {}), ...(data.resolution ? {resolution: data.resolution} : {}), ...(data.duration ? {duration: Number(data.duration)} : {}) };
   const busy = GENERATING_STATUSES.has(data.generationStatus ?? "");
-  const speechReady = kind !== "audio" || model?.default_params.speech_verified === true && model.capabilities.includes("speech") && voices.includes(data.voice ?? "");
+  const speechReady = kind !== "audio" || (!!model && audioAccountReady(model) && (music ? model.default_params.music_verified === true && model.capabilities.includes("music") && (!musicDurationRequired || Number(data.duration || model.default_params.duration) >= 3 && Number(data.duration || model.default_params.duration) <= 600) : model.default_params.speech_verified === true && model.capabilities.includes("speech") && voices.includes(data.voice ?? "")));
   const allowed = !data.locked && !busy && !!model && hasCanvasPrompt(id, data.content) && speechReady && projectRatioSupported;
   const Icon = kind === "image" ? Image : kind === "video" ? Video : Music;
   const select = (field: "aspectRatio" | "resolution" | "duration", label: string, key: string) => {
@@ -115,7 +119,7 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
     <Handle type="target" position={Position.Left} />
     {roles.map((role) => <Handle key={role} id={role} type="target" position={Position.Left} style={{top: referenceHandleTop[role]}} title={role} />)}
     <CanvasNodeHeading data={data} />
-    {data.kind !== "prompt" && <div className={`canvas-media-stage ${kind === "audio" ? "audio" : ""}`}>{data.mediaId ? <MediaPreview id={data.mediaId} kind={kind} /> : <><Icon size={32} /><span>{kind === "audio" ? "导入声音或输入配音文本" : "上传、选取素材或开始生成"}</span></>}</div>}
+    {data.kind !== "prompt" && <div className={`canvas-media-stage ${kind === "audio" ? "audio" : ""}`}>{data.mediaId ? <MediaPreview id={data.mediaId} kind={kind} /> : <><Icon size={32} /><span>{kind === "audio" ? music ? "导入音频或输入音乐描述" : "导入声音或输入配音文本" : "上传、选取素材或开始生成"}</span></>}</div>}
     <div className="canvas-media-body nodrag nowheel">
       <CanvasGenerationActivity status={data.generationStatus} />
       <div className="canvas-media-actions"><button disabled={data.locked} onClick={() => window.dispatchEvent(new CustomEvent("canvas-node-attachment", {detail: {nodeId: id, mode: "upload"}}))}><Upload size={13} />上传</button><button disabled={data.locked} onClick={() => window.dispatchEvent(new CustomEvent("canvas-node-attachment", {detail: {nodeId: id, mode: "asset"}}))}><Boxes size={13} />素材库</button></div>
@@ -123,15 +127,16 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
       <fieldset disabled={data.locked || busy}>
         <label>生成模型<select aria-label="生成模型" value={data.providerModelId ?? ""} onChange={(e) => update(id, {providerModelId: Number(e.target.value) || undefined, aspectRatio: undefined, resolution: undefined, duration: undefined, voice: undefined})}><option value="">请选择模型</option>{data.providerModelId && !model && <option value={data.providerModelId}>原模型不可用，请重新选择</option>}{models.map((m) => <option key={m.id} value={m.id}>{m.providerName} · {m.name}</option>)}</select></label>
         <div className="canvas-media-fields">{aspectRatioField}{select("resolution", "分辨率", "resolutions")}{kind === "video" && select("duration", "时长（秒）", "durations")}</div>
-        {kind === "audio" && <label>预设音色<select aria-label="预设音色" value={data.voice ?? ""} onChange={(e) => update(id, {voice: e.target.value})}><option value="">选择已验证的音色</option>{voices.map((v) => <option key={v}>{v}</option>)}</select></label>}
-        <CanvasPromptInput nodeId={id} aria-label={kind === "audio" ? "配音文本" : "生成描述"} value={data.content} rows={3} onFocus={() => useCanvasStore.getState().checkpoint()} onValue={content => update(id, {content})} />
+        {kind === "audio" && !music && <label>预设音色<select aria-label="预设音色" value={data.voice ?? ""} onChange={(e) => update(id, {voice: e.target.value})}><option value="">选择已验证的音色</option>{voices.map((v) => <option key={v}>{v}</option>)}</select></label>}
+        {musicDurationRequired && <label>音乐时长（秒）<input aria-label="音乐时长" type="number" min={3} max={600} step={1} value={data.duration ?? String(model?.default_params.duration ?? "")} onChange={event => update(id, {duration: event.target.value})} /></label>}
+        <CanvasPromptInput nodeId={id} aria-label={kind === "audio" ? music ? "音乐描述" : "配音文本" : "生成描述"} value={data.content} rows={3} onFocus={() => useCanvasStore.getState().checkpoint()} onValue={content => update(id, {content})} />
       </fieldset>
-      {kind === "audio" && !speechReady && <small>需配置已验证接口及预设音色的 TTS 模型。参考录音不代表可克隆音色。</small>}
+      {kind === "audio" && !speechReady && <small>{music ? "需核验纯器乐接口及账户权限，并填写模型支持的音乐时长。" : "需配置已验证接口及预设音色的 TTS 模型。参考录音不代表可克隆音色。"}</small>}
       {kind !== "audio" && !projectRatioSupported && <small role="alert">当前模型不支持项目画幅 {projectRatio}，请更换支持该比例的模型。</small>}
       {kind === "video" && <div className="canvas-effective-inputs" aria-label="视频实际输入"><strong>本次实际输入 · 模型 {model?.name || "未选择"}</strong>{effectiveInputs.length ? effectiveInputs.map((input) => <span data-delivery={input.delivery} key={`${input.source}:${input.nodeId}`}>{CONNECTION_LABELS[input.purpose]} · {input.title}{input.mediaId ? ` · 素材 #${input.mediaId}` : ""}{input.source === "mention" ? "（@引用）" : ""}{input.delivery === "postprocess" ? " · 后处理" : input.delivery === "ignored" ? " · 不参与生成" : ""}</span>) : <small>暂无连线或 @ 引用；当前仅使用文字描述。</small>}<small>角色/场景/图片固定到本次媒体版本；脚本与导演镜头包编入提示上下文；音轨留给后处理。可输入 @节点标题 或 @{`{节点ID}`} 引用。</small></div>}
       {providers.isError && <small role="alert">模型列表读取失败</small>}
       {preflightError && <small role="alert">{preflightError}</small>}
-      <div className="canvas-media-actions">{model && <PriceEstimate providerId={model.provider_id} modelId={model.id} prompt={data.content} parameters={priceParameters} />}<button disabled={!allowed || preflighting} onClick={() => void openGenerationConfirm()}>{preflighting ? "正在预检…" : kind === "audio" ? "生成配音" : kind === "video" ? "生成视频" : "生成图片"}</button></div>
+      <div className="canvas-media-actions">{model && <PriceEstimate providerId={model.provider_id} modelId={model.id} prompt={data.content} parameters={priceParameters} />}<button disabled={!allowed || preflighting} onClick={() => void openGenerationConfirm()}>{preflighting ? "正在预检…" : kind === "audio" ? `生成${audioLabel}` : kind === "video" ? "生成视频" : "生成图片"}</button></div>
       </details>
       <CanvasNodeResources id={id} data={data} allowedRoles={roles} />
       {data.kind !== "prompt" && <details className="canvas-node-settings"><summary>媒体处理工具</summary>
@@ -142,7 +147,7 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
     <ConfirmDialog
       open={confirm}
       accessibleLabel="确认媒体生成"
-      title={`确认生成${kind === "audio" ? "配音" : kind === "video" ? "视频" : "图片"}`}
+      title={`确认生成${kind === "audio" ? audioLabel : kind === "video" ? "视频" : "图片"}`}
       confirmLabel="确认并提交"
       confirmDisabled={!allowed || kind === "video" && !preflight?.ready}
       onClose={() => setConfirm(false)}
@@ -153,7 +158,7 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
       message={<div className="canvas-generation-confirm-content">
         <p>{data.title} · {model?.providerName} · {model?.name}</p>
         <p>{data.content}</p>
-        <p>{effectiveAspectRatio || "默认比例"} · {data.resolution || "默认清晰度"} {data.duration && `· ${data.duration} 秒`} {data.voice && `· ${data.voice}`}</p>
+        <p>{kind === "audio" ? music ? "纯器乐" : data.voice || "默认音色" : `${effectiveAspectRatio || "默认比例"} · ${data.resolution || "默认清晰度"}`} {data.duration && `· ${data.duration} 秒`}</p>
         {kind === "video" && preflight && <section className="canvas-video-preflight" aria-label="视频输入预检">
           <strong>{preflight.ready ? "输入预检通过" : "输入预检未通过"}</strong>
           {preflight.director_shot_package && <small>导演镜头包 V1 · 工程修订 {preflight.director_shot_package.director_revision} · {preflight.director_shot_package.duration_seconds} 秒 / {preflight.director_shot_package.fps} fps</small>}

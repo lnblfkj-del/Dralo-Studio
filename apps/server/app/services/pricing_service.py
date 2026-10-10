@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from hashlib import sha256
 
-UNITS = {"image", "second", "million_tokens", "1000_chars", "request"}
+UNITS = {"image", "second", "minute", "million_tokens", "1000_chars", "request"}
 RATE_KEYS = {"rate", "input_rate", "output_rate", "cache_read_rate", "cache_write_rate"}
 
 
@@ -38,9 +38,12 @@ def validate_pricing(data):
         return data
     if data.get("version") != 2 or data.get("currency") not in {"CNY", "USD"} or data.get("unit") not in UNITS:
         raise ValueError("费用版本、币种或计费单位无效")
-    allowed = {"version", "currency", "unit", "rules", "source", "minimum_seconds", "step_seconds", "separate_audio_pricing", *RATE_KEYS}
+    allowed = {"version", "currency", "unit", "rules", "source", "minimum_seconds", "step_seconds", "separate_audio_pricing", "quota", *RATE_KEYS}
     if set(data) - allowed:
         raise ValueError("费用配置包含未支持字段")
+    if "quota" in data:
+        from app.services.audio_quota_service import validate
+        validate(data["quota"])
     if "separate_audio_pricing" in data and type(data["separate_audio_pricing"]) is not bool:
         raise ValueError("有声独立计费标记必须是布尔值")
     for key in RATE_KEYS | {"minimum_seconds", "step_seconds"}:
@@ -97,6 +100,8 @@ def estimate(model, prompt="", parameters=None):
               "pricing_version": version, "rates": rates, "quantity": None,
               "parameters": {k: params[k] for k in ("resolution", "quality", "mode", "audio", "duration", "n", "max_tokens", "max_output_tokens") if k in params},
               "reason": "价格未配置或参数未匹配；未知不等于免费", "estimated_cents": None}
+    from app.services.audio_quota_service import usage
+    result["quota"] = usage(rates.get("quota"), prompt=prompt, duration=params.get("duration"))
     if not rates:
         return result
     unit = rates["unit"]
@@ -135,13 +140,15 @@ def estimate(model, prompt="", parameters=None):
                 quantity = number(params.get("n", 1))
                 if quantity == 0 or quantity != quantity.to_integral_value():
                     return result
-            elif unit == "second":
+            elif unit in {"second", "minute"}:
                 quantity = number(params.get("duration", ""))
                 if quantity == 0:
                     return result
                 quantity = max(quantity, number(rates.get("minimum_seconds", 0)))
                 step = number(rates.get("step_seconds", "0.001"))
                 quantity = (quantity / step).to_integral_value(rounding=ROUND_CEILING) * step
+                if unit == "minute":
+                    quantity /= 60
             elif unit == "1000_chars":
                 if not prompt:
                     return result

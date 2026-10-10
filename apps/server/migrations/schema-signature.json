@@ -6356,6 +6356,158 @@
       ]
     ]
   },
+  "episode_planning_records": {
+    "columns": [
+      {
+        "name": "episode_id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "execution_epoch",
+        "type": "VARCHAR(128)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "revision",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "fingerprint",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "snapshot",
+        "type": "JSON",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "analysis_snapshot",
+        "type": "JSON",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_episode_planning_records_episode_id",
+        false,
+        [
+          "episode_planning_records.episode_id"
+        ]
+      ],
+      [
+        "ix_episode_planning_records_workspace_id",
+        false,
+        [
+          "episode_planning_records.workspace_id"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "CheckConstraint",
+        "ck_episode_planning_fingerprint",
+        [],
+        "length(fingerprint) = 64"
+      ],
+      [
+        "CheckConstraint",
+        "ck_episode_planning_revision",
+        [],
+        "revision > 0"
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "episode_id"
+        ],
+        ""
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ],
+      [
+        "UniqueConstraint",
+        "uq_episode_planning_revision",
+        [
+          "episode_id",
+          "execution_epoch",
+          "revision"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "episode_id",
+        "episodes.id",
+        "CASCADE",
+        "None"
+      ],
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
   "episode_production_plans": {
     "columns": [
       {
@@ -9200,6 +9352,170 @@
       [
         "project_id",
         "projects.id",
+        "CASCADE",
+        "None"
+      ],
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
+  "planning_response_records": {
+    "columns": [
+      {
+        "name": "plan_id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "request_id",
+        "type": "VARCHAR(128)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "segment_key",
+        "type": "VARCHAR(128)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "response_fingerprint",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "raw_response",
+        "type": "TEXT",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "VARCHAR(16)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "detail",
+        "type": "JSON",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_planning_response_records_plan_id",
+        false,
+        [
+          "planning_response_records.plan_id"
+        ]
+      ],
+      [
+        "ix_planning_response_records_workspace_id",
+        false,
+        [
+          "planning_response_records.workspace_id"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "CheckConstraint",
+        "ck_planning_response_fingerprint",
+        [],
+        "length(response_fingerprint) = 64"
+      ],
+      [
+        "CheckConstraint",
+        "ck_planning_response_saved",
+        [],
+        "status != 'saved' OR detail IS NOT NULL"
+      ],
+      [
+        "CheckConstraint",
+        "ck_planning_response_status",
+        [],
+        "status IN ('available', 'saved')"
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "plan_id"
+        ],
+        ""
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ],
+      [
+        "UniqueConstraint",
+        "uq_planning_response_request",
+        [
+          "plan_id",
+          "request_id"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "plan_id",
+        "episode_planning_records.id",
         "CASCADE",
         "None"
       ],

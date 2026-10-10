@@ -55,7 +55,10 @@ export function scriptDocument(script: Row, shots: { shot_id: number; start_time
     const timing = shots.find((s) => s.shot_id === camera.shot_id);
     content.push({ type: "paragraph", content: [{ type: "scriptTool", attrs: { kind: "shot", id: `source-${camera.shot_id}`, sourceShotId: camera.shot_id, duration: Number(camera.duration) || (timing ? timing.end_time - timing.start_time : 4) } }, { type: "text", text: ` ${camera.shot_size ?? ""} · ${camera.camera_angle ?? ""} ` }, { type: "scriptTool", attrs: { kind: "movement", value: camera.camera_movement || "固定" } }] });
     for (const [i, p] of rows(script.performances).entries()) if (p.shot_id === camera.shot_id) content.push({ type: "paragraph", content: [ ...inline(p.subject, `主体 ${i + 1}`), { type: "text", text: "，" }, ...inline(p.expression, `表情 ${i + 1}`), { type: "text", text: "，" }, ...inline(p.action, `动作 ${i + 1}`) ] });
-    for (const [i, d] of rows(script.dialogue).entries()) if (d.shot_id === camera.shot_id) content.push({ type: "paragraph", content: [{ type: "scriptTool", attrs: { kind: "dialogue", speaker: d.speaker || "", tone: d.tone || "自然", confirmed: ["manual", "source"].includes(String(d.speaker_source)), sourceShotId: camera.shot_id, id: `dialogue-${index}-${i}` } }, ...inline(d.text, `对白 ${i + 1}`)] });
+    for (const [i, d] of rows(script.dialogue).entries()) if (d.shot_id === camera.shot_id) {
+      if (Array.isArray(d.stage_directions) && d.stage_directions.length) line(`表演说明（不朗读）：${d.stage_directions.join("；")}`);
+      content.push({ type: "paragraph", content: [{ type: "scriptTool", attrs: { kind: "dialogue", speaker: d.speaker || "", tone: d.tone || "自然", confirmed: ["manual", "source"].includes(String(d.speaker_source)), sourceShotId: camera.shot_id, id: `dialogue-${index}-${i}` } }, ...inline(d.text, `对白 ${i + 1}`)] });
+    }
     const audio = (script.audio ?? {}) as Row;
     for (const [key, label] of [["music", "配乐"], ["ambience", "环境声"], ["sound_effects", "音效"]]) for (const a of rows(audio[key!]).filter((a) => a.shot_id === camera.shot_id)) line(`${label}：${a.text}`);
   }

@@ -138,6 +138,10 @@ async def _resolve_superseded_failures(session: AsyncSession, succeeded: Job) ->
         dict((succeeded.payload or {}).get("recovery") or {}).get("replaces_job_id") or 0
     )
     for item in previous:
+        if succeeded.target_type in {"episode_content_analysis", "episode_content_detail"}:
+            if (item.parent_job_id != succeeded.parent_job_id
+                    or (item.payload or {}).get("segment_key") != (succeeded.payload or {}).get("segment_key")):
+                continue
         item_parameters = dict((item.payload or {}).get("parameters") or {})
         item_pipeline = dict((item.payload or {}).get("director_pipeline") or {})
         item_scope_key = str(
@@ -218,7 +222,7 @@ async def mark_failed(
     submission = dict((job.payload or {}).get("text_submission") or {})
     response_received = bool(submission.get("response_received"))
     original_code, original_message = code, message
-    if response_received:
+    if response_received and code != "WORKFLOW_RETIRED":
         code = "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED"
         message = f"模型响应已保存，处理失败：{message}"
         if original_code == "MODEL_OUTPUT_TRUNCATED" and job.job_type == "text":
@@ -312,6 +316,7 @@ async def mark_failed(
     if uncertain_video:
         job.error_message = message + "；未确认外部任务 ID，请先在当前模型渠道核对任务/账单，系统不会自动重发"
     non_retryable = code in {
+        "WORKFLOW_RETIRED",
         "WORKSPACE_ACCESS_REVOKED",
         "MODEL_ROUTE_CHANGED",
         "PROVIDER_PARAMETER_ERROR",
@@ -326,6 +331,7 @@ async def mark_failed(
         "MODEL_NOT_FOUND",
         "VIDEO_REMOTE_TIMEOUT",
         "PROVIDER_OUTCOME_UNKNOWN",
+        "AUDIO_SAVE_FAILED", "AUDIO_QUERY_FAILED", "AUDIO_OUTCOME_UNKNOWN", "AUDIO_PROVIDER_FAILED", "AUDIO_RESULT_EXPIRED",
         "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED",
     }
     manual_text_failure = job.job_type == "text" and submission.get("status") == "submitted"
@@ -376,10 +382,9 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
     parent = await session.get(Job, child.parent_job_id)
     if parent is None or parent.target_type not in BATCH_PARENT_TARGETS:
         return None
-    if parent.target_type == "episode_director_pipeline":
-        from app.services.episode_director_pipeline_service import aggregate_parent
-
-        return await aggregate_parent(session, parent)
+    if parent.target_type == "episode_content_planning":
+        from app.services.episode_planning_workflow import aggregate_run
+        return await aggregate_run(session, parent)
     all_children = list((await session.scalars(
         select(Job).where(Job.parent_job_id == parent.id)
     )).all())

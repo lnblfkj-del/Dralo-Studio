@@ -86,9 +86,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     storage_mirror = asyncio.create_task(run_singleton("storage_mirror", mirror_loop))
     from app.services.storage_cleanup_service import supervise as storage_cleanup
     cleanup_supervisor = asyncio.create_task(run_singleton("storage_cleanup", storage_cleanup))
+    from app.services.audio_result_cleanup import supervise as audio_cleanup
+    audio_cleanup_supervisor = asyncio.create_task(run_singleton("audio_result_cleanup", audio_cleanup))
     try:
         yield
     finally:
+        audio_cleanup_supervisor.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await audio_cleanup_supervisor
         cleanup_supervisor.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cleanup_supervisor

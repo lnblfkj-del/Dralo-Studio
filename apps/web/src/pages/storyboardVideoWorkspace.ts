@@ -4,17 +4,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getProjectAssetReadiness, listAssets } from "@/api/assets";
 import { getJob } from "@/api/jobs";
-import { listEpisodeDirectorJobs } from "@/api/projectProduction";
 import { getMediaBlobUrl, listProjectAudioMedia } from "@/api/media";
 import { getAISettings } from "@/api/providers";
 import { getEpisodeDialogueCues, getEpisodeJianyingDraftPreflight, getEpisodeProduction, getProject, getSegmentProductionPlan, listEpisodeEngineeringPackages, listEpisodeExportVersions, listEpisodeJianyingDraftPackages, listEpisodePremiereXmlPackages, listEpisodes, listScenes } from "@/api/projects";
 import { toErrorMessage } from "@/api/client";
-import { findRecoverableDirectorJob } from "@/domain/directorJobRecovery";
 import { stableFingerprint } from "@/domain/episodeProductionDraft";
 import { effectiveVideoResolution, videoModelDefaultResolution, videoModelResolutions } from "@/domain/videoModelCapabilities";
 import { isTerminalVideoJob, segmentProductionPollInterval } from "@/domain/videoJobRecovery";
-import { useDirectorJobSync } from "@/hooks/useDirectorJobSync";
-import type { DirectorPlanningMode, EpisodeDialogueCue, EpisodeDialogueCuePreview, EpisodeExportPreflight, EpisodeProductionPlan, EpisodeSoundCue, Job } from "@/types/api";
+import type { EpisodeDialogueCue, EpisodeDialogueCuePreview, EpisodeExportPreflight, EpisodeProductionPlan, EpisodeSoundCue } from "@/types/api";
 
 export function mergeDialogueCueSettings(
   preview: EpisodeDialogueCuePreview[] | undefined,
@@ -76,15 +73,11 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
   const [exportPreflight, setExportPreflight] = useState<EpisodeExportPreflight | null>(null);
   const [directorOpen, setDirectorOpen] = useState(false);
   const [directorPlannerModelId, setDirectorPlannerModelId] = useState<number | null>(null);
-  const [directorJob, setDirectorJob] = useState<Job | null>(null);
-  const [directorMode, setDirectorMode] = useState<DirectorPlanningMode>("replan_episode");
-  const [directorSegmentIds, setDirectorSegmentIds] = useState<number[]>([]);
   const [sourceOpen, setSourceOpen] = useState(false);
   const [segmentDirty, setSegmentDirty] = useState(false);
   const [productionConflictRevision, setProductionConflictRevision] = useState<number | null>(null);
   const [segmentAttemptPlan, setSegmentAttemptPlan] = useState<EpisodeProductionPlan | null>(null);
   const [segmentAttemptId, setSegmentAttemptId] = useState<number | null>(null);
-  const recoveredDirectorEpisode = useRef<number | null>(null);
   const scriptBaseline = useRef<{ episodeId: number; revision: number; value: string } | null>(null);
   const productionBaseline = useRef<{ episodeId: number; revision: number; value: string } | null>(null);
   const requestedSegmentId = Number(searchParams.get("segment"));
@@ -136,13 +129,6 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
   const videoModels = (aiSettings.data?.models ?? []).filter((model) => model.enabled && model.model_type === "video");
   const imageModels = (aiSettings.data?.models ?? []).filter((model) => model.enabled && model.model_type === "image");
   const plannerModels = (aiSettings.data?.models ?? []).filter((model) => model.enabled && model.model_type === "text");
-  const directorJobs = useQuery({
-    queryKey: ["director-jobs", projectId, episodeId],
-    queryFn: () => listEpisodeDirectorJobs(projectId, episodeId),
-    enabled: Boolean(episode),
-    retry: false,
-  });
-  useDirectorJobSync(directorJob, directorOpen, setDirectorJob);
   const activeJob = useQuery({
     queryKey: ["video-job", activeJobId],
     queryFn: () => getJob(activeJobId!),
@@ -283,22 +269,6 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
     if (model) setDirectorPlannerModelId(model.id);
   }, [aiSettings.data?.default_text_model_id, aiSettings.data?.script_agent_text_model_id, directorPlannerModelId, plannerModels]);
   useEffect(() => {
-    if (!episode || !directorJobs.data || recoveredDirectorEpisode.current === episode.id) return;
-    recoveredDirectorEpisode.current = episode.id;
-    setDirectorJob(findRecoverableDirectorJob(directorJobs.data, episode.id, episode.script_revision));
-  }, [directorJobs.data, episode]);
-  useEffect(() => {
-    if (directorJob?.status !== "succeeded" || !directorJob.result?.auto_saved_draft) return;
-    setDirectorOpen(false);
-    setDirectorJob(null);
-    void Promise.all([
-      client.invalidateQueries({ queryKey: ["episode-studio", projectId, episodeId] }),
-      client.invalidateQueries({ queryKey: ["episode-production", projectId, episodeId] }),
-      client.invalidateQueries({ queryKey: ["segment-production-plan", projectId, episodeId] }),
-      client.invalidateQueries({ queryKey: ["director-jobs", projectId, episodeId] }),
-    ]);
-  }, [client, directorJob, episodeId, projectId]);
-  useEffect(() => {
     setActiveJobId(production.data?.active_job_id ?? null);
   }, [episodeId, production.data?.active_job_id]);
   useEffect(() => {
@@ -323,8 +293,7 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
     backgroundAudioId, setBackgroundAudioId, backgroundAudioVolume, setBackgroundAudioVolume, includeSubtitles, setIncludeSubtitles,
     outputResolution, setOutputResolution, dialogueCues, setDialogueCues, soundCues, setSoundCues,
     uploadProgress, setUploadProgress, selectedAssetIds, setSelectedAssetIds, exportPreflight, setExportPreflight,
-    directorOpen, setDirectorOpen, directorPlannerModelId, setDirectorPlannerModelId, directorJob, setDirectorJob, directorMode, setDirectorMode,
-    directorSegmentIds, setDirectorSegmentIds, sourceOpen, setSourceOpen,
+    directorOpen, setDirectorOpen, directorPlannerModelId, setDirectorPlannerModelId, sourceOpen, setSourceOpen,
     segmentDirty, setSegmentDirty, productionConflictRevision, setProductionConflictRevision,
     segmentAttemptPlan, setSegmentAttemptPlan, segmentAttemptId, setSegmentAttemptId, scriptBaseline, initialSegmentId,
     returnToCanvas, activeSegmentId, setActiveSegmentId, validProject, validEpisode, project, episodes, episode,

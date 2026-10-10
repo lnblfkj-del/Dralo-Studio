@@ -126,6 +126,9 @@ def validate_h3_authored_prompt(
     issues: list[dict[str, str]] = []
     expected = REF_SECTIONS if recipe == "h3_ref2va" else BASE_SECTIONS
     bodies, prefix = _sections(prompt, expected, issues)
+    policy = input_contract.get("audio_policy") or (input_contract.get("effective_parameters") or {}).get("audio_policy")
+    if policy and policy.get("background_music") is False and bodies.get("non_diegetic_music", "").strip() != "No background music.":
+        issues.append({"code": "background_music_policy", "message": "关闭配乐时 non_diegetic_music 必须为 No background music."})
     if recipe == "h3_base":
         alignment = _expected_alignment(reference_labels, duration, len(shots))
         if prefix != alignment:

@@ -1,12 +1,20 @@
 import { http } from "@/api/client";
 
 export interface PriceQuote {
+  quota?: {unit: string; amount: string | null; status: string; reason: string} | null;
   status: string;
   currency: string;
   amount: string | null;
   reason: string;
   pricing_version: string;
   estimated_cents: number | null;
+}
+export interface AudioVerification { required: boolean; ready: boolean; reason: string; model_called: boolean }
+export async function getAudioVerification(providerId: number, modelId: number): Promise<AudioVerification> {
+  return (await http.get(`/providers/${providerId}/models/${modelId}/audio-verification`)).data;
+}
+export async function verifyAudioAccount(providerId: number, modelId: number): Promise<AudioVerification> {
+  return (await http.post(`/providers/${providerId}/models/${modelId}/audio-verification`)).data;
 }
 export async function estimateModelPrice(providerId: number, modelId: number, payload: {prompt: string; parameters: Record<string, unknown>}): Promise<PriceQuote> {
   return (await http.post<PriceQuote>(`/providers/${providerId}/models/${modelId}/estimate`, payload)).data;

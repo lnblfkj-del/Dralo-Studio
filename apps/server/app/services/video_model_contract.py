@@ -2,6 +2,44 @@
 
 from typing import Any
 
+
+def audio_contract(provider, model):
+    """Capabilities belong to a verified route, not a model name or audio flag."""
+    from app.providers.protocols import effective_protocol, is_toapis_model
+    from app.services.video_prompt_compiler import video_prompt_endpoint_fingerprint
+    defaults = model.default_params or {}
+    evidence = defaults.get("native_audio_capability") or {}
+    endpoint = video_prompt_endpoint_fingerprint(provider, model)
+    result = {"verified": False, "output": "unverified", "dialogue": False,
+              "audio_reference": False, "bgm_control": "prompt_preference",
+              "parameter": None, "endpoint_fingerprint": endpoint,
+              "warning": "当前渠道原生声音尚未验证；配乐为提示词偏好，不能保证无配乐。无原生声音时需后期配音。"}
+    if not isinstance(evidence, dict) or evidence.get("endpoint_fingerprint") != endpoint or not evidence.get("evidence"):
+        return result
+    if evidence.get("status") != "verified" or evidence.get("output") not in {"always_on", "optional", "unsupported"}:
+        return result
+    protocol = effective_protocol(provider, model)
+    fields = {"ark_video_t2v": "generate_audio", "ark_video_images": "generate_audio",
+              "dashscope_video_t2v": "audio", "dashscope_video_i2v": "audio",
+              "kling_video_t2v": "generate_audio", "kling_video_i2v": "generate_audio"}
+    field = fields.get(protocol)
+    if is_toapis_model(provider, model):
+        field = "generate_audio" if model.model_id == "seedance-2-5" else "audio" if model.model_id in {
+            "kling-v3-omni", "kling-v2-6", "wan2.6", "wan2.6-flash"} else None
+    if protocol == "fake_video":
+        field = "generate_audio"
+    if evidence["output"] == "optional" and (not field or evidence.get("parameter") != field):
+        return result
+    result.update(verified=True, output=evidence["output"],
+                  dialogue=evidence.get("dialogue") is True and evidence["output"] != "unsupported",
+                  parameter=field if evidence["output"] == "optional" else None,
+                  evidence=evidence["evidence"],
+                  warning="该渠道不支持原生声音，请使用后期配音。" if evidence["output"] == "unsupported"
+                  else "背景音乐仅通过提示词约束；实际声音需试听核对。")
+    if result["output"] != "unsupported" and not result["dialogue"]:
+        result["warning"] = "本渠道尚未验证原生对白；不能以有音轨代替配音验收。" + result["warning"]
+    return result
+
 from app.core.errors import ConflictError, ValidationError
 from app.models import ProviderModel
 

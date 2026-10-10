@@ -1,6 +1,7 @@
 import { http } from "@/api/client";
 export interface Receipt { id: number; reference: string; amount: string; kind: string; note: string; created_at: string }
 export interface BillingCall {
+  quota_usage?: {unit:string;amount:string|null;reason:string} | null;
   id: number; job_id: number | null; project_id: number | null; provider_id: number;
   provider: string; model: string; kind: string; state: string; currency: string;
   amount: string | null; bill_amount: string | null; difference: string | null;

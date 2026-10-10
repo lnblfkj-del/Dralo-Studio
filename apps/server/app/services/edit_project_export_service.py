@@ -101,6 +101,11 @@ async def preflight(session, *, project_id, edit_project_id, owner_id, payload):
     row = await session.get(EditProject, edit_project_id)
     document = project.document
     blockers = package_blockers(document, payload.format)
+    if document is not None and getattr(row, "source_episode_id", None):
+        from app.services.audio_policy import for_episode
+        policy = await for_episode(session, project_id, row.source_episode_id)
+        if policy["background_music"] is False and any(clip.track == "bgm" for clip in document.clips):
+            blockers.append("本集关闭了背景音乐，但时间线存在配乐。音乐已保留，请核对配乐设置或时间线后再导出。")
     if payload.preset == "stage":
         blockers.append("旧舞台画幅导出已停用，请选择视频原始画幅后重新预检")
     if document is None or not any(clip.track == "video" for clip in document.clips):

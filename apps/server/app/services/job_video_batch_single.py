@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Episode, Job, Project, Scene, Shot, VideoSegment
+from app.models import Episode, EpisodeProductionPlan, Job, Project, Scene, Shot, VideoSegment
 from app.services import job_creation_service as _job_creation_service
 from app.services.job_concurrency_service import TERMINAL_STATUSES
 from app.services.job_video_batch_helpers import (
@@ -33,6 +33,15 @@ async def create_shot_video_job(
         raise ConflictError("历史镜头不能创建新视频任务，请选择当前计划的镜头")
     if shot.is_locked:
         raise ConflictError("分镜已锁定，不能生成新视频版本")
+    from app.models import EpisodeProduction, VideoSegmentShot
+
+    frozen = await session.scalar(select(EpisodeProductionPlan.id).join(
+        VideoSegment, VideoSegment.plan_id == EpisodeProductionPlan.id
+    ).join(VideoSegmentShot, VideoSegmentShot.segment_id == VideoSegment.id).join(
+        EpisodeProduction, EpisodeProduction.active_plan_id == EpisodeProductionPlan.id
+    ).where(VideoSegmentShot.shot_id == shot.id, EpisodeProductionPlan.source_type == "content_frozen"))
+    if frozen:
+        raise ConflictError("镜头已属于冻结片段，请通过片段预检生成视频，不能单独改变提交数量")
     active = await session.scalar(
         select(Job.id).where(
             Job.target_type == "shot",
@@ -78,6 +87,12 @@ async def create_segment_video_job(
     )
     if active is not None:
         raise ConflictError("该片段已有进行中的视频任务")
+    plan = await session.get(EpisodeProductionPlan, segment.plan_id)
+    if plan and plan.source_type == "content_frozen":
+        from app.services.episode_planning_video_production import create_job
+
+        return await create_job(session, owner_id, segment, project_id=project_id,
+                                provider_model_id=provider_model_id, parameters=parameters, shot_ids=shot_ids)
     from app.services.production_snapshot_service import capture_script
     script_snapshot = await capture_script(session, segment)
     refs = script_snapshot.content.get("refs") or {}
@@ -103,15 +118,19 @@ async def create_segment_video_job(
     project_ratio = (project.creation_settings or {}).get("aspect_ratio")
     if project_ratio and project_ratio not in {"default", "project"}:
         effective["aspect_ratio"] = project_ratio
+    from app.services.audio_policy import apply_prompt, video_context
+    from app.services.job_pricing_service import _video_model_pair
     from app.services.segment_voice_guidance_service import (
         append_voice_guidance,
         compile_segment_voice_guidance,
     )
-
+    model, provider = await _video_model_pair(session, provider_model_id)
+    effective = await video_context(session, project, segment, provider, model, effective)
     voice_guidance = await compile_segment_voice_guidance(
-        session, project, segment, refs
+        session, project, segment, refs, policy=effective["audio_policy"]
     )
-    effective_prompt = append_voice_guidance(segment.prompt, voice_guidance)
+    base_prompt, omitted = apply_prompt(segment.prompt, (segment.parameters or {}).get("structured_script"), effective["audio_policy"])
+    effective_prompt = append_voice_guidance(base_prompt, voice_guidance)
     job = await _job_creation_service.create_video_job(
         session,
         owner_id,
@@ -177,6 +196,8 @@ async def create_segment_video_job(
         "continuity_dependency": continuity_dependency,
         "sound_input": _sound_input_summary(bindings, effective, voice_guidance),
         "video_prompt_freeze": prompt_freeze,
+        "audio_policy": effective["audio_policy"],
+        "omitted_audio_sources": omitted,
     }
     from app.services.segment_video_candidate_service import attach_input_evidence
 
@@ -184,3 +205,5 @@ async def create_segment_video_job(
     segment.status = "generating"
     await session.flush()
     return job
+
+

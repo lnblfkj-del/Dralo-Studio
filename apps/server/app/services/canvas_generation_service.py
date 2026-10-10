@@ -91,9 +91,12 @@ async def validate_model(session, model_id, task_type, parameters, *, validate_p
         raise NotFoundError("模型不存在")
     if not model.enabled or not provider.enabled:
         raise ConflictError("模型渠道或模型已停用")
-    if model.model_type != ("tts" if task_type == "audio" else task_type):
+    if model.model_type not in ({"tts", "audio"} if task_type == "audio" else {task_type}):
         raise ConflictError("模型输出类型与任务不匹配")
     validate_model_protocol(provider, model)
+    if task_type == "audio":
+        from app.services.audio_verification_service import require_verified
+        require_verified(provider, model)
     if task_type == "image" and is_toapis_model(provider, model) and model.model_id == "gpt-image-2":
         from app.providers import toapis_image
         toapis_image.parameters(model.model_id, {**model.default_params, **parameters})
@@ -383,11 +386,20 @@ async def submit_media(session, project, *, node_key, task_type, provider_model_
             reference_media_ids=reference_ids, parameters=params)
     elif task_type == "audio":
         from app.providers.speech import speech_parameters
+        from app.services.canvas_processing_service import executables
+        executables()
         if refs:
             raise ConflictError("文字配音仅使用预设音色，不支持参考图或音色克隆")
-        speech = speech_parameters(model, parameters, prompt)
+        if model.model_type == "audio":
+            from app.providers.audio_contracts import music_parameters
+            if node.node_type != "audio":
+                raise ConflictError("音乐只能生成到音频节点，不能替代角色配音")
+            music_parameters(model, parameters, prompt, effective_protocol(provider, model))
+            speech = {}
+        else:
+            speech = speech_parameters(model, parameters, prompt, protocol=effective_protocol(provider, model))
         job = Job(owner_id=project.owner_id, project_id=project.id, provider_id=model.provider_id,
-            job_type="tts", status="queued", provider=provider.name, model=model.model_id,
+            job_type="audio" if model.model_type == "audio" else "tts", status="queued", provider=provider.name, model=model.model_id,
             payload={"protocol_contract": execution_contract(provider, model), "provider_model_id": model.id, "prompt": prompt, "parameters": {**params, **speech}})
         attach_pricing(job, model)
         session.add(job)

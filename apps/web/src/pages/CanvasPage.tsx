@@ -214,7 +214,7 @@ function CanvasEditor({ project, projection }: { project: Project; projection: C
       const detail = (event as CustomEvent<{ nodeId: string; prompt: string; preflightFingerprint?: string; videoInputConfirmations?: string[] }>).detail;
       const taskType = event.type === "canvas-generate-image" ? "image" : event.type === "canvas-generate-audio" ? "audio" : "video";
       const chosen = useCanvasStore.getState().nodes.find((n) => n.id === detail?.nodeId)?.data.providerModelId;
-      const model = providers.data?.filter((provider) => provider.enabled).flatMap((provider) => provider.models).find((item) => item.id === chosen && item.enabled && item.model_type === (taskType === "audio" ? "tts" : taskType));
+      const model = providers.data?.filter((provider) => provider.enabled).flatMap((provider) => provider.models).find((item) => item.id === chosen && item.enabled && (taskType === "audio" ? item.model_type === "tts" || item.model_type === "audio" && item.capabilities.includes("music") : item.model_type === taskType));
       if (!detail?.nodeId || !model) { setSaveError("请选择已启用的对应媒体模型；不会自动替换原模型"); return; }
       try {
         if (savingRef.current) throw new Error("画布正在保存，请稍后重试");

@@ -4,6 +4,8 @@ from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import AdminUser, CurrentUser, SessionDep
+from app.schemas.planning_capability_admin import PlanningCapabilityUpdate
+from app.schemas.video_prompt_certification_admin import VideoPromptCertificationUpdate
 from app.schemas.provider import (
     AISettingsOut,
     AISettingsUpdate,
@@ -21,6 +23,68 @@ from app.schemas.provider import (
 from app.services import provider_service
 
 router = APIRouter(prefix="/providers", tags=["providers"])
+
+
+@router.get("/{provider_id}/models/{model_id}/audio-verification")
+async def read_audio_verification(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
+    from app.services.audio_verification_service import read_state
+    provider = await provider_service.get_provider(session, provider_id)
+    model = await provider_service.get_model(session, provider_id, model_id)
+    return read_state(provider, model)
+
+
+@router.post("/{provider_id}/models/{model_id}/audio-verification")
+async def verify_audio_account(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
+    from app.core.errors import ConflictError
+    from app.services.audio_verification_service import KEY, verify
+    try:
+        result = await verify(session, provider_id, model_id)
+    except ConflictError as exc:
+        if exc.details.get("audio_account_check_failed"):
+            model = await provider_service.get_model(session, provider_id, model_id)
+            model.default_params = {k: v for k, v in model.default_params.items() if k != KEY}
+            await session.commit()
+        raise
+    await session.commit()
+    return result
+
+
+@router.get("/{provider_id}/models/{model_id}/video-prompt-certifications")
+async def read_prompt_certifications(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
+    from app.services.video_prompt_certification_admin import read_state
+
+    provider = await provider_service.get_provider(session, provider_id)
+    model = await provider_service.get_model(session, provider_id, model_id)
+    return read_state(provider, model)
+
+
+@router.put("/{provider_id}/models/{model_id}/video-prompt-certifications")
+async def update_prompt_certifications(provider_id: int, model_id: int, payload: VideoPromptCertificationUpdate,
+                                       session: SessionDep, _admin: AdminUser):
+    from app.services.video_prompt_certification_admin import save_certifications
+
+    result = await save_certifications(session, provider_id, model_id, payload)
+    await session.commit()
+    return result
+
+
+@router.get("/{provider_id}/models/{model_id}/planning-capability")
+async def read_planning_capability(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
+    from app.services.planning_capability_admin import read_state
+
+    provider = await provider_service.get_provider(session, provider_id)
+    model = await provider_service.get_model(session, provider_id, model_id)
+    return await read_state(session, provider, model)
+
+
+@router.put("/{provider_id}/models/{model_id}/planning-capability")
+async def update_planning_capability(provider_id: int, model_id: int, payload: PlanningCapabilityUpdate,
+                                     session: SessionDep, _admin: AdminUser):
+    from app.services.planning_capability_admin import save_capability
+
+    result = await save_capability(session, provider_id, model_id, payload)
+    await session.commit()
+    return result
 
 
 class PriceEstimateRequest(BaseModel):
@@ -166,7 +230,8 @@ async def create_provider_model(
         session, provider, payload.model_dump(exclude_unset=True)
     )
     await session.commit()
-    return ProviderModelOut.model_validate(model)
+    from app.services.audio_verification_service import model_out
+    return model_out(provider, model)
 
 
 @router.patch("/{provider_id}/models/{model_id}", response_model=ProviderModelOut)
@@ -183,7 +248,9 @@ async def update_provider_model(
         session, model, payload.model_dump(exclude_unset=True)
     )
     await session.commit()
-    return ProviderModelOut.model_validate(updated)
+    from app.services.audio_verification_service import model_out
+    provider = await provider_service.get_provider(session, provider_id)
+    return model_out(provider, updated)
 
 
 @router.post("/{provider_id}/models/{model_id}/test", response_model=ProviderModelTestOut)

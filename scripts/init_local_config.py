@@ -28,6 +28,7 @@ def main() -> None:
         f'BOOTSTRAP_ADMIN_PASSWORD="{quoted}"',
         f"JWT_SECRET={secrets.token_urlsafe(48)}",
         f"PROVIDER_ENCRYPTION_KEY={Fernet.generate_key().decode('ascii')}", "",
+        f"EPISODE_PLANNING_EPOCH=r3-{secrets.token_hex(16)}", "",
     ])
     with target.open("x", encoding="utf-8", newline="\n") as handle:
         handle.write(contents)

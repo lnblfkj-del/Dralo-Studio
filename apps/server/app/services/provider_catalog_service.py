@@ -256,6 +256,12 @@ async def delete_provider(session: AsyncSession, provider: Provider) -> None:
 async def create_model(
     session: AsyncSession, provider: Provider, data: dict[str, Any]
 ) -> ProviderModel:
+    if "_audio_verification" in data.get("default_params", {}):
+        raise ConflictError("音频账户核验记录只能由服务端生成")
+    if "episode_planning_capability" in data.get("default_params", {}):
+        raise ConflictError("请先创建视频模型，再通过规划规格入口登记能力和证据")
+    if data.get("video_prompt_certifications"):
+        raise ConflictError("请先创建视频模型，再通过提示词认证入口登记验收证据")
     if not data.get("model_type"):
         raise ConflictError("请选择模型类型，不能默认归为文本")
     if data["model_type"] != MODEL_TYPE_TEXT and data.get("is_default"):
@@ -317,6 +323,25 @@ async def get_model(session: AsyncSession, provider_id: int, model_id: int) -> P
 async def update_model(
     session: AsyncSession, model: ProviderModel, data: dict[str, Any]
 ) -> ProviderModel:
+    if "video_prompt_certifications" in data:
+        if data["video_prompt_certifications"] != (model.video_prompt_certifications or {}):
+            raise ConflictError("提示词认证须通过独立入口维护，普通模型编辑不能覆盖验收记录")
+        data.pop("video_prompt_certifications")
+    if "default_params" in data:
+        from app.services.audio_verification_service import KEY
+        saved_audio = (model.default_params or {}).get(KEY)
+        if KEY in data["default_params"] and data["default_params"][KEY] != saved_audio:
+            raise ConflictError("普通编辑不能覆盖音频核验记录")
+        if saved_audio is not None:
+            data["default_params"] = {**data["default_params"], KEY: saved_audio}
+        from app.services.episode_planning_capability import CONFIG_KEY
+
+        stored = (model.default_params or {}).get(CONFIG_KEY)
+        supplied = data["default_params"].get(CONFIG_KEY)
+        if CONFIG_KEY in data["default_params"] and supplied != stored:
+            raise ConflictError("规划规格须通过独立入口维护，普通默认参数不能覆盖验证记录")
+        if stored is not None:
+            data["default_params"] = {**data["default_params"], CONFIG_KEY: stored}
     if data.get("api_base_url") is not None:
         data["api_base_url"] = str(data["api_base_url"])
     next_type = data.get("model_type", model.model_type)

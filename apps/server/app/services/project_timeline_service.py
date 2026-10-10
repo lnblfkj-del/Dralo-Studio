@@ -6,7 +6,23 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Episode, Scene, Shot, ShotVideoVersion
+from app.models import (
+    Episode,
+    EpisodeProduction,
+    EpisodeProductionPlan,
+    Scene,
+    Shot,
+    ShotVideoVersion,
+)
+
+
+async def require_editable_timeline(session, episode_id):
+    await session.execute(update(Episode).where(Episode.id == episode_id).values(number=Episode.number))
+    source = await session.scalar(select(EpisodeProductionPlan.source_type).join(
+        EpisodeProduction, EpisodeProduction.active_plan_id == EpisodeProductionPlan.id
+    ).where(EpisodeProduction.episode_id == episode_id))
+    if source == "content_frozen":
+        raise ConflictError("本集镜头已随片段计划冻结，请在整集规划中创建新版本")
 
 
 async def update_episode(
@@ -95,6 +111,7 @@ async def get_scene(session: AsyncSession, episode_id: int, scene_id: int) -> Sc
 async def create_scene(
     session: AsyncSession, episode: Episode, data: dict[str, Any]
 ) -> Scene:
+    await require_editable_timeline(session, episode.id)
     if "order" not in data:
         last = await session.scalar(select(func.max(Scene.order)).where(Scene.episode_id == episode.id))
         data = {**data, "order": 0 if last is None else last + 1}
@@ -107,6 +124,7 @@ async def create_scene(
 async def update_scene(
     session: AsyncSession, scene: Scene, data: dict[str, Any]
 ) -> Scene:
+    await require_editable_timeline(session, scene.episode_id)
     for key, value in data.items():
         setattr(scene, key, value)
     await session.flush()
@@ -114,6 +132,7 @@ async def update_scene(
 
 
 async def delete_scene(session: AsyncSession, scene: Scene) -> None:
+    await require_editable_timeline(session, scene.episode_id)
     from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED
 
     historical = await session.scalar(select(Shot.id).where(
@@ -129,6 +148,7 @@ async def delete_scene(session: AsyncSession, scene: Scene) -> None:
 async def reorder_scenes(
     session: AsyncSession, episode_id: int, scene_ids: list[int]
 ) -> list[Scene]:
+    await require_editable_timeline(session, episode_id)
     scenes = await list_scenes(session, episode_id)
     if len(scene_ids) != len(scenes) or set(scene_ids) != {scene.id for scene in scenes}:
         raise ConflictError("分场列表已变化或包含重复项，请刷新后重试")
@@ -182,6 +202,7 @@ async def get_shot(session: AsyncSession, scene_id: int, shot_id: int) -> Shot:
 async def create_shot(
     session: AsyncSession, scene: Scene, data: dict[str, Any]
 ) -> Shot:
+    await require_editable_timeline(session, scene.episode_id)
     if "order" not in data:
         last = await session.scalar(select(func.max(Shot.order)).where(Shot.scene_id == scene.id))
         data = {**data, "order": 0 if last is None else last + 1}
@@ -201,6 +222,9 @@ async def update_shot(
     """
     from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED
 
+    if set(data) - {"is_locked"}:
+        scene = await session.get(Scene, shot.scene_id)
+        await require_editable_timeline(session, scene.episode_id)
     if shot.status == SHOT_STATUS_SUPERSEDED:
         raise ConflictError("历史镜头不能修改，请在当前计划中编辑")
     if shot.is_locked and set(data.keys()) - {"is_locked"}:
@@ -215,6 +239,8 @@ async def update_shot(
 async def delete_shot(session: AsyncSession, shot: Shot) -> None:
     from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED
 
+    scene = await session.get(Scene, shot.scene_id)
+    await require_editable_timeline(session, scene.episode_id)
     if shot.status == SHOT_STATUS_SUPERSEDED:
         raise ConflictError("历史镜头不能删除")
     if shot.is_locked:
@@ -248,9 +274,6 @@ async def select_shot_video_version(
     version.is_final = True
     shot.status = "ready"
     await session.flush()
-    from app.services.segment_plan_service import mirror_legacy_shot_version
-
-    await mirror_legacy_shot_version(session, shot, version)
     return version
 
 
@@ -261,6 +284,8 @@ async def reorder_shots(
 
     只接受与该场景现有镜头完全一致的 ID 集合，避免漏排或串场景。
     """
+    scene = await session.get(Scene, scene_id)
+    await require_editable_timeline(session, scene.episode_id)
     shots = await list_shots(session, scene_id)
     existing = {shot.id for shot in shots}
     if len(shot_ids) != len(shots) or existing != set(shot_ids):

@@ -277,3 +277,4 @@ from app.core import workspace_orm  # noqa: F401
 from app.models.media_reservation import MediaReservation  # noqa: F401
 from app.models.storage_cleanup import MediaCleanup
 from app.core import media_quota  # noqa: F401
+from app.models.episode_planning import EpisodePlanningRecord, PlanningResponseRecord  # noqa: F401

@@ -39,7 +39,7 @@ const formSchema = z.object({
   api_key: z.string().max(4096),
   timeout_seconds: z.number().int().min(5).max(600),
   max_concurrency: z.number().int().min(1).max(100),
-  protocol: z.enum(["openai_compatible", "google_gemini", "anthropic_messages", "newapi", "sora_compatible", "dashscope_video_t2v", "dashscope_video_i2v", "ark_video_t2v", "ark_video_images", "jimeng_video_first_last", "jimeng_video_t2v", "jimeng_video_pro", "kling_video_t2v", "kling_video_i2v", "kling_video_multi_image"]),
+  protocol: z.enum(["stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music", "meaicc_video_images", "meaicc_video", "openai_compatible", "google_gemini", "anthropic_messages", "newapi", "sora_compatible", "dashscope_video_t2v", "dashscope_video_i2v", "ark_video_t2v", "ark_video_images", "jimeng_video_first_last", "jimeng_video_t2v", "jimeng_video_pro", "kling_video_t2v", "kling_video_i2v", "kling_video_multi_image"]),
 });
 
 type ProviderFormValues = z.infer<typeof formSchema>;

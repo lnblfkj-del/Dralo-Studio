@@ -4,15 +4,15 @@ import { useCallback, useEffect, useMemo, useState, type ReactElement } from "re
 import { Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 
-import { cancelJob, getJob, reprocessJobResponse, retryJob, subscribeToJob } from "@/api/jobs";
+import { cancelJob, getJob, retryJob, subscribeToJob } from "@/api/jobs";
 import { getMediaBlobUrl, uploadMedia } from "@/api/media";
-import { adjustSegmentProductionPlan, applyEpisodeDirectorPlan, changeSegmentLifecycle, checkSegmentPlanContinuity, createEpisodeDirectorPlan, createSegmentProductionPlan, getEpisodeEngineeringPackagePreflight, getEpisodeExportPreflight, getEpisodeJianyingDraftPreflight, getEpisodePremiereXmlPreflight, planSegmentFirstFrames, planSegmentVideoAttempt, rejectEpisodeDirectorPlan, selectSegmentVideoVersion, startEpisodeEngineeringPackage, startEpisodeExport, startEpisodeJianyingDraft, startEpisodePremiereXml, startSegmentFirstFrames, startSegmentVideoAttempt, updateEpisode, updateEpisodeProduction } from "@/api/projects";
+import { adjustSegmentProductionPlan, changeSegmentLifecycle, checkSegmentPlanContinuity, createSegmentProductionPlan, getEpisodeEngineeringPackagePreflight, getEpisodeExportPreflight, getEpisodeJianyingDraftPreflight, getEpisodePremiereXmlPreflight, planSegmentFirstFrames, planSegmentVideoAttempt, selectSegmentVideoVersion, startEpisodeEngineeringPackage, startEpisodeExport, startEpisodeJianyingDraft, startEpisodePremiereXml, startSegmentFirstFrames, startSegmentVideoAttempt, updateEpisode, updateEpisodeProduction } from "@/api/projects";
 import { useDraftBlocker } from "@/components/DraftGuard";
 import { StoryboardVideoView } from "@/components/creator/StoryboardVideoView";
 import { dialogueCueSettings, mergeDialogueCueSettings, soundCueSettings, useStoryboardVideoWorkspace } from "@/pages/storyboardVideoWorkspace";
 import { QueryState } from "@/components/workbench/QueryState";
-import { isActiveDirectorJob } from "@/domain/directorJobRecovery";
 import { stableFingerprint } from "@/domain/episodeProductionDraft";
+import { clearVideoAttemptRequest, videoAttemptRequestId } from "@/domain/videoAttemptSubmission";
 import { effectiveVideoResolution } from "@/domain/videoModelCapabilities";
 import type { Episode, EpisodeDialogueCuePreview, EpisodeSoundCue, SegmentFirstFramePlan, SegmentPlanAdjustInput, SegmentProductionPlanInput } from "@/types/api";
 import "@/styles/episode-studio.css";
@@ -30,8 +30,7 @@ export function useStoryboardVideoModel() {
     backgroundAudioId, setBackgroundAudioId, backgroundAudioVolume, setBackgroundAudioVolume, includeSubtitles, setIncludeSubtitles,
     outputResolution, setOutputResolution, dialogueCues, setDialogueCues, soundCues, setSoundCues,
     uploadProgress, setUploadProgress, selectedAssetIds, setSelectedAssetIds, exportPreflight, setExportPreflight,
-    directorOpen, setDirectorOpen, directorPlannerModelId, setDirectorPlannerModelId, directorJob, setDirectorJob, directorMode, setDirectorMode,
-    directorSegmentIds, setDirectorSegmentIds, sourceOpen, setSourceOpen,
+    directorOpen, setDirectorOpen, directorPlannerModelId, setDirectorPlannerModelId, sourceOpen, setSourceOpen,
     segmentDirty, setSegmentDirty, productionConflictRevision, setProductionConflictRevision,
     segmentAttemptPlan, setSegmentAttemptPlan, segmentAttemptId, setSegmentAttemptId, scriptBaseline, initialSegmentId,
     returnToCanvas, activeSegmentId, setActiveSegmentId, validProject, validEpisode, project, episodes, episode,
@@ -139,46 +138,6 @@ export function useStoryboardVideoModel() {
       await jianyingDraftPackages.refetch();
     },
   });
-  const planSegments = useMutation({
-    mutationFn: async (requirements: string = "") => {
-      if (contentUnsavedChanges) throw new Error("请先保存正文和片段脚本，再请求片段规划");
-      if (sourceStale && directorMode !== "replan_episode") throw new Error("来源正文已变化，只能先整集重规划");
-      const job = await createEpisodeDirectorPlan(projectId, episodeId, {
-        planner_model_id: directorPlannerModelId!,
-        video_model_id: videoModelId!,
-        request_id: crypto.randomUUID(),
-        confirmed: true,
-        mode: directorMode,
-        auto_prepare: directorMode === "replan_episode",
-        selected_segment_ids: directorMode === "optimize_segment" ? directorSegmentIds : [],
-        parameters: { ...episodeBatchParameters, planning_requirements: requirements },
-      });
-      setDirectorJob(job);
-      return job;
-    },
-    onSuccess: setDirectorJob,
-  });
-  const applySegmentPlan = useMutation({
-    mutationFn: () => applyEpisodeDirectorPlan(projectId, episodeId, directorJob!.id, production.data!.revision),
-    onSuccess: async () => {
-      setDirectorOpen(false);
-      setDirectorJob(null);
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ["director-jobs", projectId, episodeId] }),
-        client.invalidateQueries({ queryKey: ["segment-production-plan", projectId, episodeId] }),
-        client.invalidateQueries({ queryKey: ["episode-production", projectId, episodeId] }),
-        client.invalidateQueries({ queryKey: ["episode-productions", projectId] }),
-      ]);
-    },
-  });
-  const recoverDirectorResult = useMutation({
-    mutationFn: () => reprocessJobResponse(directorJob!.id),
-    onSuccess: (job) => {
-      setDirectorJob(job.deleted_at ? null : job);
-      client.setQueryData(["director-job", job.id], job);
-      void client.invalidateQueries({ queryKey: ["director-jobs", projectId, episodeId] });
-    },
-  });
   const saveSegmentPlan = useMutation({
     mutationFn: (payload: SegmentProductionPlanInput) => createSegmentProductionPlan(projectId, episodeId, payload),
     onSuccess: async (saved) => {
@@ -222,19 +181,12 @@ export function useStoryboardVideoModel() {
   const continuityCheck = useMutation({
     mutationFn: () => checkSegmentPlanContinuity(projectId, episodeId),
   });
-  const rejectSegmentPlan = useMutation({
-    mutationFn: () => rejectEpisodeDirectorPlan(projectId, episodeId, directorJob!.id),
-    onSuccess: async () => {
-      setDirectorJob(null);
-      setDirectorOpen(false);
-      await client.invalidateQueries({ queryKey: ["director-jobs", projectId, episodeId] });
-    },
-  });
   const episodeBatchParameters = useMemo(() => {
+    if (segmentPlan.data?.source_type === "content_frozen") return {};
     const ratio = project.data?.creation_settings?.aspect_ratio;
     return { ...(outputResolution ? { resolution: outputResolution } : {}),
       ...(ratio && ratio !== "default" ? { aspect_ratio: ratio } : {}) };
-  }, [outputResolution, project.data?.creation_settings?.aspect_ratio]);
+  }, [outputResolution, project.data?.creation_settings?.aspect_ratio, segmentPlan.data?.source_type]);
   const planSingleSegment = useMutation({
     mutationFn: (segmentId: number) => {
       if (contentUnsavedChanges) throw new Error("请先保存正文和片段脚本，再预检当前片段");
@@ -253,7 +205,7 @@ export function useStoryboardVideoModel() {
     },
   });
   const startSingleSegment = useMutation({
-    mutationFn: (segmentId: number) => {
+    mutationFn: async (segmentId: number) => {
       if (contentUnsavedChanges || sourceStale) throw new Error("当前内容已变化，请保存后重新预检");
       if (!segmentAttemptPlan || segmentAttemptId !== segmentId) throw new Error("请先重新预检当前片段");
       if (!videoModelId || segmentAttemptPlan.plan_id == null || segmentAttemptPlan.plan_revision == null) throw new Error("片段预检信息不完整");
@@ -261,17 +213,22 @@ export function useStoryboardVideoModel() {
       if (!promptFingerprint) throw new Error("提示词预检信息不完整，请重新预检");
       const maxCostCents = segmentAttemptPlan.pricing_estimate.estimated_cents;
       if (typeof maxCostCents !== "number") throw new Error("费用未知，不能提交真实视频任务");
-      return startSegmentVideoAttempt(projectId, episodeId, segmentId, {
+      const input = {
         provider_model_id: videoModelId,
         parameters: episodeBatchParameters,
         regenerate: true,
-        request_id: crypto.randomUUID(),
-        confirmed: true,
+        confirmed: true as const,
         max_cost_cents: maxCostCents,
         expected_plan_id: segmentAttemptPlan.plan_id,
         expected_plan_revision: segmentAttemptPlan.plan_revision,
         expected_video_prompt_fingerprint: promptFingerprint,
+      };
+      const scope = `${projectId}:${episodeId}:${segmentId}`;
+      const job = await startSegmentVideoAttempt(projectId, episodeId, segmentId, {
+        ...input, request_id: videoAttemptRequestId(scope, input),
       });
+      clearVideoAttemptRequest(scope, input);
+      return job;
     },
     onSuccess: async (job) => {
       setSegmentAttemptPlan(null);
@@ -499,11 +456,6 @@ export function useStoryboardVideoModel() {
     (model) => model.id === aiSettings.data?.default_image_model_id,
   ) ?? imageModels[0];
   const segmentError = saveSegmentPlan.error || adjustSegments.error || changeSegmentLifecycleMutation.error || continuityCheck.error;
-  const hasRecoverableDirectorJob = Boolean(directorJob && (
-    isActiveDirectorJob(directorJob)
-    || directorJob.status === "failed"
-    || (directorJob.result?.proposal as { proposal_status?: string } | undefined)?.proposal_status === "pending"
-  ));
   const recoveredState = production.data?.active_job_id
     ? `已恢复任务 · ${production.data.active_job_status || "状态同步中"}${production.data.active_job_progress != null ? ` ${production.data.active_job_progress}%` : ""}`
     : segmentPlan.data
@@ -520,7 +472,7 @@ export function useStoryboardVideoModel() {
     includeSubtitles, setIncludeSubtitles, outputResolution, setOutputResolution,
     dialogueCues, setDialogueCues, soundCues, setSoundCues, uploadProgress, setSelectedAssetIds,
     exportPreflight, directorOpen, setDirectorOpen,
-    directorPlannerModelId, setDirectorPlannerModelId, directorJob, setDirectorJob, directorMode, setDirectorMode, directorSegmentIds, setDirectorSegmentIds,
+    directorPlannerModelId, setDirectorPlannerModelId,
     sourceOpen, setSourceOpen, segmentDirty, setSegmentDirty,
     productionConflictRevision, setProductionConflictRevision, segmentAttemptPlan,
     setSegmentAttemptPlan, setSegmentAttemptId, initialSegmentId, returnToCanvas, activeSegmentId, setActiveSegmentId, project, episodes,
@@ -528,14 +480,14 @@ export function useStoryboardVideoModel() {
     audioMedia, exportHistory, engineeringPackages, premiereXmlPackages, jianyingDraftPackages, jianyingDraftPreflight, scenes,
     videoModels, imageModels, plannerModels, activeJob, saveScript,
     saveProductionSettings, saveHeaderModel, createEngineeringPackage, createPremiereXmlPackage, createJianyingDraftPackage,
-    planSegments, recoverDirectorResult, applySegmentPlan, saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck, rejectSegmentPlan,
+    saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck,
     planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan,
     chooseSegmentVersion, preflightExport, exportEpisode, cancelActiveJob, retryActiveJob, uploadAudio, downloadMedia,
     characterAssets, voiceAssets, updateDialogueCue, episodeTimelineDuration, addSoundCue, updateSoundCue, removeSoundCue, dialogueReadiness,
     dirty, serverDialogueCues, soundCueErrors, projectAspectRatio, productionSettingsDirty,
     contentUnsavedChanges, hasUnsavedChanges, savePending, blocker, sourceStale, exportPreflightCurrent, dirtyParts, saveError,
     saveStateLabel, orderedEpisodes, switchEpisode, navigateSafely,
-    activeSegmentModel, activeImageModel, segmentError, hasRecoverableDirectorJob, recoveredState, selectedExport, episodeLabel, soundCueSettings,
+    activeSegmentModel, activeImageModel, segmentError, recoveredState, selectedExport, episodeLabel, soundCueSettings,
   };
 }
 

@@ -179,7 +179,9 @@ async def catalog(
         else []
     )
     job_map = {
-        job.target_id: {"id": job.id, "status": job.status, "progress": job.progress}
+        job.target_id: {"id": job.id, "status": job.status, "progress": job.progress,
+                       **({"audio_recovery": (job.execution_info or {}).get("recovery"),
+                           "retry_allowed": job.retry_allowed} if job.job_type in {"tts", "audio"} else {})}
         for job in jobs
     }
     prompt_ids = {(link.production_data or {}).get("prompt_optimization", {}).get("job_id")

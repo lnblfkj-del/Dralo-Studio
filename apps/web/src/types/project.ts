@@ -136,7 +136,7 @@ export interface ScriptContinuityReview {
 export interface ScriptReadinessIssue {
   episode_id?: number | null;
   episode_number?: number | null;
-  code: "no_episodes" | "non_sequential_numbers" | "missing_script" | "missing_duration" | "unconfirmed_revision" | "stale_revision" | "continuity_conflict" | "continuity_stale";
+  code: "no_episodes" | "non_sequential_numbers" | "missing_script" | "missing_duration" | "unconfirmed_revision" | "stale_revision" | "continuity_conflict" | "continuity_stale" | "screenplay_source_ambiguous";
   message: string;
 }
 

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Form, Query, UploadFile, status
 from app.api.deps import CurrentUser, ProjectDep, SessionDep
 from app.core.errors import ConflictError
 from app.schemas.asset import (
+    AssetAudioGenerateRequest,
     AssetCreate,
     AssetGenerateRequest,
     AssetImageBatchRequest,
@@ -438,6 +439,21 @@ async def expand_prompt(
 ) -> PromptExpandOut:
     prompt, references = await asset_service.expand_prompt(session, project.id, payload.prompt)
     return PromptExpandOut(prompt=prompt, references=references)
+
+
+@router.get("/{asset_id}/audio-task", response_model=JobOut | None)
+async def get_asset_audio_task(asset_id: int, project: ProjectDep, session: SessionDep):
+    from app.services import asset_audio_generation
+    job = await asset_audio_generation.latest(session, project, asset_id)
+    return JobOut.model_validate(job) if job else None
+
+
+@router.post("/{asset_id}/generate-audio", response_model=JobOut, status_code=status.HTTP_201_CREATED)
+async def generate_asset_audio(asset_id: int, payload: AssetAudioGenerateRequest, project: ProjectDep, session: SessionDep):
+    from app.services import asset_audio_generation
+    job = await asset_audio_generation.submit(session, project, asset_id, payload)
+    await session.commit()
+    return JobOut.model_validate(job)
 
 
 @router.post("/{asset_id}/generate", response_model=JobOut, status_code=status.HTTP_201_CREATED)

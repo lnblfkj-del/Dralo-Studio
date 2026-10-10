@@ -8,6 +8,7 @@ from itertools import pairwise
 from typing import Any
 
 from app.core.errors import ValidationError
+from app.services.screenplay_dialogue import LAYOUT as SCREENPLAY_LAYOUT, dialogue_units
 
 STRUCTURED_SCRIPT_KEY = "structured_script"
 STRUCTURED_SCRIPT_VERSION = 1
@@ -100,7 +101,7 @@ def _dialogue_sources(value: Any) -> list[tuple[str, str, str, bool]]:
     return parsed
 
 
-def _audio_entries(shot_id: int, value: Any) -> dict[str, list[dict[str, Any]]]:
+def _audio_entries(shot_id: int, value: Any, *, preserve_lines: bool = False) -> dict[str, list[dict[str, Any]]]:
     result: dict[str, list[dict[str, Any]]] = {
         "music": [],
         "ambience": [],
@@ -109,7 +110,7 @@ def _audio_entries(shot_id: int, value: Any) -> dict[str, list[dict[str, Any]]]:
     source = _text(value)
     if not source:
         return result
-    parts = [item.strip() for item in re.split(r"[；;\n]+", source) if item.strip()]
+    parts = [item.strip() for item in re.split(r"\n+" if preserve_lines else r"[；;\n]+", source) if item.strip()]
     for part in parts:
         lowered = part.lower()
         if re.search(r"^(配乐|音乐|bgm)\s*[：:]?", part, re.I):
@@ -136,6 +137,7 @@ def build_structured_script(
     entry_state: str = "",
     exit_state: str = "",
     model_proposed_states: bool = False,
+    screenplay_format: bool = False,
 ) -> dict[str, Any]:
     ordered = [shots[shot_id] for shot_id in shot_ids]
     if not ordered:
@@ -152,7 +154,10 @@ def build_structured_script(
     audio = {"music": [], "ambience": [], "sound_effects": []}
     for item in ordered:
         shot_id = int(item["shot_id"])
-        for source_text, speaker, line, owned in _dialogue_sources(item.get("dialogue")):
+        units = dialogue_units(item.get("dialogue")) if screenplay_format else None
+        sources = ([(u["source_text"], u["speaker"], u["text"], True) for u in units]
+                   if units is not None else _dialogue_sources(item.get("dialogue")))
+        for position, (source_text, speaker, line, owned) in enumerate(sources):
             proposed_speaker = _text(item.get("dialogue_speaker"))
             dialogue.append({
                 "shot_id": shot_id,
@@ -161,6 +166,7 @@ def build_structured_script(
                 "text": line,
                 "tone": _text(item.get("dialogue_tone")) or "未指定",
                 "source_text": source_text,
+                **({"stage_directions": units[position]["stage_directions"]} if units is not None else {}),
             })
             if not owned:
                 issues.append({
@@ -173,7 +179,7 @@ def build_structured_script(
                         else "来源台词没有明确说话人，必须人工确认后才能生成视频"
                     ),
                 })
-        classified = _audio_entries(shot_id, item.get("audio_note"))
+        classified = _audio_entries(shot_id, item.get("audio_note"), preserve_lines=screenplay_format)
         for key in audio:
             audio[key].extend(classified[key])
 
@@ -182,7 +188,7 @@ def build_structured_script(
     explicit_states = bool(_text(entry_state) and _text(exit_state))
     return {
         "schema_version": STRUCTURED_SCRIPT_VERSION,
-        **({"dialogue_layout": DIALOGUE_LAYOUT}
+        **({"dialogue_layout": SCREENPLAY_LAYOUT} if screenplay_format else {"dialogue_layout": DIALOGUE_LAYOUT}
            if any(len(_dialogue_sources(item.get("dialogue"))) > 1 for item in ordered) else {}),
         "source_shot_ids": shot_ids,
         "scene": {
@@ -268,7 +274,7 @@ def validate_structured_script(
 
     issues: list[dict[str, Any]] = []
     dialogue_layout = raw.get("dialogue_layout")
-    if dialogue_layout not in (None, DIALOGUE_LAYOUT):
+    if dialogue_layout not in (None, DIALOGUE_LAYOUT, SCREENPLAY_LAYOUT):
         raise ValidationError("结构化台词布局版本无效")
     by_dialogue: dict[int, list[dict[str, Any]]] = {}
     for record in dialogue:
@@ -281,7 +287,9 @@ def validate_structured_script(
         by_dialogue.setdefault(shot_id, []).append(record)
     for shot_id in shot_ids:
         source = shots[shot_id].get("dialogue")
-        sources = (_dialogue_sources(source) if dialogue_layout == DIALOGUE_LAYOUT
+        units = dialogue_units(source) if dialogue_layout == SCREENPLAY_LAYOUT else None
+        sources = ([(u["source_text"], u["speaker"], u["text"], True) for u in units] if units is not None
+                   else _dialogue_sources(source) if dialogue_layout == DIALOGUE_LAYOUT
                    else [(_text(source), *parse_dialogue(source))] if _text(source) else [])
         records = by_dialogue.get(shot_id, [])
         if not sources:
@@ -290,12 +298,15 @@ def validate_structured_script(
             continue
         if len(records) != len(sources):
             raise ValidationError("结构化片段脚本必须完整且原样覆盖来源台词")
-        for record, (source_text, source_speaker, source_line, source_owned) in zip(records, sources):
+        for position, (record, (source_text, source_speaker, source_line, source_owned)) in enumerate(zip(records, sources)):
+            if units is not None:
+                if record.get("stage_directions") != units[position]["stage_directions"]:
+                    raise ValidationError("来源表演说明不能静默删除或改写")
             if record.get("text_source") != "manual" and _text(record.get("text")) != source_line:
                 raise ValidationError("结构化片段脚本必须完整且原样覆盖来源台词")
             if not _text(record.get("text")):
                 raise ValidationError("人工改编台词不能为空")
-            record["source_text"] = source_text if dialogue_layout == DIALOGUE_LAYOUT else source_line
+            record["source_text"] = source_text if dialogue_layout in (DIALOGUE_LAYOUT, SCREENPLAY_LAYOUT) else source_line
             speaker = _text(record.get("speaker"))
             if source_owned and speaker != source_speaker and record.get("speaker_source") != "manual":
                 raise ValidationError("结构化片段脚本的说话人与来源台词不一致")
@@ -391,6 +402,8 @@ def compile_prompt(script: dict[str, Any]) -> str:
         lines.append("对白：")
         for item in script["dialogue"]:
             speaker = _text(item.get("speaker")) or "待确认说话人"
+            if item.get("stage_directions"):
+                lines.append(f"- 分镜{item['shot_id']}表演说明（不朗读）：" + "；".join(item["stage_directions"]))
             lines.append(f"- 分镜{item['shot_id']}：{speaker}（{_text(item.get('tone'))}）：{_text(item.get('text'))}")
     audio_lines = []
     labels = {"music": "配乐", "ambience": "环境声", "sound_effects": "音效"}

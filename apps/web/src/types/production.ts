@@ -57,6 +57,8 @@ export interface EpisodeSoundCue {
 }
 
 export interface EpisodeProductionSettings {
+  background_music?: boolean | null;
+  voice_choice?: "require_description" | "model_choice";
   aspect_ratio: "project" | "16:9" | "9:16" | "1:1";
   resolution: string;
   frame_rate?: 24 | 30;
@@ -370,56 +372,6 @@ export interface SegmentContinuityReport {
   }>;
 }
 
-export interface DirectorVideoCapabilities {
-  provider_model_id: number;
-  model_id: string;
-  name: string;
-  durations: number[];
-  aspect_ratios: string[];
-  resolutions: string[];
-  multi_shot: boolean;
-  max_shots_per_segment: number;
-  max_reference_images: number;
-  supports_first_frame: boolean;
-  supports_last_frame: boolean;
-  supports_reference_images: boolean;
-  supports_audio: boolean;
-  supports_dialogue: boolean;
-  pricing_snapshot: Record<string, unknown>;
-}
-
-export interface EpisodeDirectorProposal {
-  schema_version: "episode_director_plan.v1";
-  input_fingerprint: string;
-  source_script_revision: number;
-  production_revision: number;
-  planning_mode: DirectorPlanningMode;
-  parent_plan_id: number | null;
-  target_segment_ids: number[];
-  planner_model_id: number;
-  video_model_id: number;
-  video_model_capability_snapshot: DirectorVideoCapabilities;
-  skill_bundle: Array<{ skill_id: number; key: string; version: number; snapshot: Record<string, unknown> }>;
-  shot_plan: Array<Record<string, unknown> & { shot_id: number; duration: number }>;
-  segments: SegmentProductionPlanInput["segments"];
-  timeline_audit: {
-    target_duration: number;
-    shot_duration: number;
-    timeline_duration: number;
-    generation_duration: number;
-    trim_duration: number;
-  };
-  continuity_report: {
-    status: "passed" | "warning" | "blocked";
-    issues: Array<{ code: string; message: string; [key: string]: unknown }>;
-  };
-  proposal_status: "pending" | "confirmed" | "rejected";
-  confirmed_plan_id?: number;
-  repair_attempted: boolean;
-}
-
-export type DirectorPlanningMode = "replan_episode" | "optimize_segment";
-
 export interface EpisodeProductionShotIssue {
   segment_id?: number | null;
   shot_ids?: number[];
@@ -478,6 +430,8 @@ export interface EpisodeProductionPlan {
       bindings: Array<{ asset_id?: number; asset_version_id?: number; media_file_id?: number; role?: string }>;
       delivery: "none" | "postproduction_evidence";
       native_audio_generation: boolean;
+      native_audio_status?: "always_on" | "optional" | "unsupported" | "unverified" | "legacy";
+      audio_policy?: { background_music?: boolean | null; capability?: { warning?: string } };
       voice_guidance?: {
         schema_version: "segment_voice_guidance.v1";
         prompt_text: string;
@@ -485,7 +439,7 @@ export interface EpisodeProductionPlan {
           speaker_asset_id: number;
           speaker_name: string;
           voice_asset_id: number | null;
-          source: "voice_asset_description" | "character_voice_description";
+          source: "voice_asset_description" | "character_voice_description" | "model_choice" | "postproduction";
           description: string;
           lines: Array<{ shot_id?: number; text: string; tone: string }>;
         }>;

@@ -90,6 +90,9 @@ class Settings(BaseSettings):
     edit_render_runtime_path: Path = PROJECT_ROOT / ".runtime" / "edit-render"
     edit_render_browser_path: str = ""
     text_response_retention_days: int = Field(default=7, ge=1, le=30)
+    audio_result_retention_days: int = Field(default=7, ge=1, le=30)
+    # Set a fresh namespace when initializing the content-driven planning system.
+    episode_planning_epoch: str = Field(default="", max_length=128)
 
     def model_post_init(self, __context: object) -> None:
         """Apply a device profile only where no explicit per-limit value was supplied."""

@@ -1,0 +1,14 @@
+.planning-spec-form { display: grid; gap: 16px; }
+.planning-spec-form label { display: grid; gap: 6px; min-width: 0; }
+.planning-spec-form input, .planning-spec-form select, .planning-spec-form textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.planning-spec-form input[type="checkbox"] { width: 16px; height: 16px; flex: 0 0 16px; }
+.planning-spec-route { display: flex; gap: 20px; flex-wrap: wrap; overflow-wrap: anywhere; }
+.planning-spec-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.planning-mode-fields { margin: 0; padding: 16px; border: 1px solid var(--line-color, #ddd); min-width: 0; }
+.planning-mode-fields legend { padding: 0 8px; overflow-wrap: anywhere; }
+.planning-mode-fields > button { float: right; }
+.planning-spec-switches { display: flex; gap: 24px; margin: 16px 0; }
+.planning-spec-switches label, .planning-spec-acknowledge { display: flex !important; align-items: start; gap: 8px; }
+.planning-reference-limits { display: grid; grid-template-columns: minmax(140px, 1fr) repeat(2, minmax(100px, 140px)); gap: 8px 16px; max-width: 600px; align-items: center; }
+.planning-reference-row { display: contents; }
+@media (max-width: 1100px) { .planning-spec-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

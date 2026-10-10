@@ -140,6 +140,14 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
         return (self.payload or {}).get("pricing_snapshot")
 
     @property
+    def audio_policy_summary(self) -> dict[str, Any] | None:
+        payload = self.payload or {}
+        value = (payload.get("director_execution") or {}).get("audio_policy") or (payload.get("parameters") or {}).get("audio_policy")
+        if not isinstance(value, dict):
+            return None
+        return {key: value.get(key) for key in ("version", "background_music", "voice_choice", "source")}
+
+    @property
     def resolution(self) -> dict[str, Any] | None:
         value = (self.payload or {}).get("resolution")
         return value if isinstance(value, dict) else None
@@ -161,6 +169,11 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
 
     @property
     def retry_block_reason(self) -> str | None:
+        from app.core.retired_workflows import RETIRED_DIRECTOR_TARGETS, RETIRED_MESSAGE
+        if self.target_type in RETIRED_DIRECTOR_TARGETS:
+            return RETIRED_MESSAGE
+        if self.target_type in {"episode_content_planning", "episode_content_analysis", "episode_content_detail"}:
+            return "请从规划任务恢复未完成范围；新增调用需要先确认费用"
         if self.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
             return "仅失败或已取消的任务可以重试"
         resolution = self.resolution or {}
@@ -172,7 +185,7 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
         if self.job_type == "text" and (self.failure_detail or {}).get("action") == "none":
             return (self.failure_detail or {})["hint"]
         recovery_summary = dict((self.payload or {}).get("recovery_summary") or {})
-        if self.target_type in {"script_asset_breakdown_group", "episode_director_pipeline"}:
+        if self.target_type == "script_asset_breakdown_group":
             if int(
                 recovery_summary.get("local_reprocess_pending")
                 or recovery_summary.get("local_reprocess_required")
@@ -192,6 +205,16 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
             return "模型响应已保存，请先重新处理已保存响应，禁止重复调用模型"
         if text_submission.get("status") == "submitted" and self.job_type != "text":
             return "模型请求结果或费用待核实，确认渠道未生成前禁止重新调用"
+        audio = (self.payload or {}).get("audio_submission", {})
+        if self.job_type in {"tts", "audio"} and audio.get("started"):
+            from app.services.audio_result_lifecycle import result_expired
+            if result_expired(self):
+                return "音频恢复结果已过期；请在原页面确认费用后创建新任务，不会自动重新生成"
+            if self.error_code == "AUDIO_PROVIDER_FAILED":
+                return "渠道已明确生成失败；请在原页面确认费用后创建新的生成任务"
+            if audio.get("result_received") or self.error_code == "AUDIO_SAVE_FAILED" or audio.get("id"):
+                return None
+            return "音频提交结果不确定，需先核对渠道记录；不会自动重发"
         if self.job_type == "tts" and (self.payload or {}).get("media_submission", {}).get("started"):
             return "配音提交结果不确定，需先核对渠道记录"
         submission = (self.payload or {}).get("video_submission", {})
@@ -213,7 +236,7 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
             "replacement_pending",
         }:
             return False
-        if self.target_type in {"script_asset_breakdown_group", "episode_director_pipeline"}:
+        if self.target_type == "script_asset_breakdown_group":
             summary = dict((self.payload or {}).get("recovery_summary") or {})
             return bool(summary.get("paid_recall_allowed"))
         if self.target_type != "script_asset_breakdown_batch":
@@ -377,6 +400,15 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
     def execution_info(self) -> dict[str, Any] | None:
         """Safe recovery metadata; never expose provider configuration or payload."""
         payload = self.payload or {}
+        audio = payload.get("audio_submission", {})
+        if self.job_type in {"tts", "audio"} and audio.get("started"):
+            from app.services.audio_result_lifecycle import result_expired
+            expired = result_expired(self)
+            saved = audio.get("result_received") or self.error_code == "AUDIO_SAVE_FAILED"
+            return {"recovery": "check_required" if expired else "save_only" if saved else "check_required" if self.error_code == "AUDIO_PROVIDER_FAILED" else "query_only" if audio.get("id") else "check_required",
+                    "task_id": audio.get("id"), "cancel_scope": "local_only",
+                    "result_expires_at": audio.get("receipt_expires_at"), "result_expired": expired,
+                    "phase": self.execution_phase, "started_at": audio.get("started_at")}
         submission = payload.get("image_submission", {})
         attempted = submission.get("attempted")
         if not attempted:

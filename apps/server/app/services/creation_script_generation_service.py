@@ -42,7 +42,7 @@ from app.services.creation_session_service import (
     SESSION_STATUS_SCRIPT_REVIEWING,
     get_artifact,
 )
-from app.services.episode_duration_policy import episode_duration_window
+from app.services.episode_duration_policy import episode_duration_guidance
 from app.services.episode_generation_context import (
     episode_generation_context,
     episode_generation_instruction,
@@ -59,7 +59,7 @@ SCRIPT_BATCH_ACTIVE_STATUSES = {
     JOB_STATUS_RETRYING,
 }
 
-SCREENPLAY_PACING_POLICY_VERSION = "screenplay-pacing-v2"
+SCREENPLAY_PACING_POLICY_VERSION = "screenplay-pacing-v3"
 
 def episode_script_length_limits(
     duration_seconds: int | None, *, genre: str = ""
@@ -87,10 +87,9 @@ def episode_script_length_guidance(
     limits = episode_script_length_limits(duration_seconds, genre=genre)
     if limits is None:
         return "本集目标时长未设置；保持篇幅克制，不要用冗长动作描写填充正文。"
-    lower, upper = episode_duration_window(limits["seconds"])
     return (
-        f"本集目标成片时长约 {limits['seconds']} 秒，可在 {lower:g}-{upper:g} 秒之间自然浮动。"
-        f"正文（含场景、动作、对白）可参考 {limits['minimum_chars']}-{limits['maximum_chars']} 字；"
+        episode_duration_guidance(limits["seconds"])
+        + f"正文（含场景、动作、对白）可参考 {limits['minimum_chars']}-{limits['maximum_chars']} 字；"
         f"可朗读对白可参考约 {limits['dialogue_chars']} 字，"
         f"场景可参考 {limits['maximum_scenes']} 个。"
         "这些是审阅提示而非截断或保存上限；优先保证已确认剧情、人物动机和可表演的行动/反应。"
@@ -380,7 +379,7 @@ async def _build_episode_generation_prompt(
 你是专业短剧编剧。首字符必须是 {{，末字符必须是 }}；只输出符合给定 Schema 的 JSON，禁止输出分析、草稿、解释或 Markdown。
 叙事结构规则：{structure_instruction}
 人物姓名、身份、关系和已确认的长期事实必须与全剧设定一致；不得依赖模型会话、渠道账号或未提供的记忆。
-script 使用中文剧本格式，明确场景、时间、人物、动作和对白，不输出分镜。每集必须包含明确的“配乐BGM：”声音标注，描述原创配乐的情绪、节奏、音色、进入与淡出时机及对白下压低音量；与“环境声：”“音效：”分别标注，不以环境声代替配乐，不指定受版权保护的曲目。配乐须服务剧情，不要求全程铺满；留白场景明确无配乐。落实本集目标；只在已确认大纲要求时设置集尾钩子，不得强行添加跨集承接。
+script 使用中文剧本格式，明确场景、时间、人物、动作和对白，不输出分镜。按剧情需要保留声音与配乐建议，剧情内音乐明确标注。落实本集目标；只在已确认大纲要求时设置集尾钩子，不得强行添加跨集承接。
 continuity_update 与正文必须在同一次返回中给出：start_state 为本集承接状态，end_state 为本集结束状态，并列出人物/道具变化、已回收与新产生的悬念。
 长期记录按来源集与版本追溯：generated_* 为模型从当集正文报告的状态变化，并非人工确认事实。结合后续 resolved_hooks 判断早期 new_hooks 是否已回收，不得把已回收伏笔再次当成悬而未决；不确定时保留疑问，不编造解决过程。
 history_coverage说明历史覆盖范围。检索记录不是完整当前状态，未检索到不代表未发生；同一人物的新变化不自动撤销旧能力或关系。优先遵守已确认设定、上一集实际正文和有来源的明确事实，不能把历史悬念重新开场。
@@ -398,6 +397,8 @@ history_coverage说明历史覆盖范围。检索记录不是完整当前状态�
         "source_revision": episode.script_revision,
         "source_episode_context": episode_context(episode),
         "known_character_names": known_character_names(bible),
+        "screenplay_characters": list(bible.get("characters") or []),
+        "screenplay_format_version": (payload.get("agent_execution") or {}).get("screenplay_format_version"),
         "target_duration_seconds": target_duration or None,
         "script_length_guidance": length_guidance,
         "script_length_budget": episode_script_length_limits(target_duration, genre=genre),
@@ -647,13 +648,15 @@ async def create_episode_script_optimization_job(
     model, execution, instruction_prefix = await _resolve_agent_execution(
         session, "script", "episode_script_optimization"
     )
+    from app.services.screenplay_preflight import project_catalog
+    source_catalog = await project_catalog(session, episode.project_id)
     task = "优化" if source else "创作"
     prompt = f"""{instruction_prefix}
 
 你是短剧编剧。根据用户要求{task}单集剧本，保留既有核心剧情和人物关系，不得输出分镜。
 严格输出单个 JSON 对象，不要 Markdown、代码围栏或解释文字：
 {{"reply":"优化说明","title":"","synopsis":"","script":""}}
-script 必须是完整、可编辑的中文剧本正文；title 和 synopsis 必须与优化后的正文一致。每集必须包含“配乐BGM：”声音标注，写明原创配乐情绪、节奏、音色、进入与淡出时机及对白时压低音量；与“环境声：”“音效：”分开，保留合理的无配乐留白，不指定受版权保护曲目。
+script 必须是完整、可编辑的中文剧本正文；title 和 synopsis 必须与优化后的正文一致。按剧情需要保留声音与配乐建议，剧情内音乐明确标注。
 用户要求：{instruction.strip() or ("优化节奏、人物动机和对白，保留核心剧情。" if source else "根据标题与摘要创作完整可拍摄正文。")}
 当前集号：{episode.number}
 当前标题：{episode.title or ""}
@@ -667,6 +670,8 @@ script 必须是完整、可编辑的中文剧本正文；title 和 synopsis 必
         project_id=episode.project_id,
         parameters={
             "agent_workspace": "episode_script_optimization",
+            "screenplay_format_version": execution.get("screenplay_format_version"),
+            "screenplay_source_catalog": source_catalog,
             "source_revision": episode.script_revision,
             "source_script": episode.script or "",
             "source_episode_context": episode_context(episode),

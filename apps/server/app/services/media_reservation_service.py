@@ -10,7 +10,7 @@ from app.core.errors import ConflictError
 from app.core.media_quota import lock_workspace, reserved_media_bytes, workspace_media_limit, pending_cleanup_bytes
 from app.models import Job, MediaFile, MediaReservation
 
-OUTPUT_LIMITS = {"image": 20 * 1024 ** 2, "video": 500 * 1024 ** 2, "tts": 100 * 1024 ** 2}
+OUTPUT_LIMITS = {"image": 20 * 1024 ** 2, "video": 500 * 1024 ** 2, "tts": 100 * 1024 ** 2, "audio": 100 * 1024 ** 2}
 
 
 async def reserve(job_id, worker_id):
@@ -46,7 +46,7 @@ async def reserve(job_id, worker_id):
             # the remaining account capacity instead of inventing a package size cap.
             size = old.size if old else max(0, limit - used - held)
         if size <= 0 or used + held + (0 if old else size) > limit:
-            label = {"image": "图片", "video": "视频", "tts": "音频", "media_process": "本地处理", "export": "导出"}[job.job_type]
+            label = {"image": "图片", "video": "视频", "tts": "音频", "audio": "音乐", "media_process": "本地处理", "export": "导出"}[job.job_type]
             raise ConflictError(
                 f"素材空间不足：本次{label}任务需预占 {size // 1024 ** 2} MiB，已用或其他任务预占占满额度；请清理素材或联系管理员调额，未提交新的模型请求",
                 details={"reason": "media_quota_insufficient", "required_bytes": size,

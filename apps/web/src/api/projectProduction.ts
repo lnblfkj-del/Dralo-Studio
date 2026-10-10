@@ -1,7 +1,7 @@
 /** Episode production, segment planning, export, and director APIs. */
 
 import { http } from "@/api/client";
-import type { DirectorVideoCapabilities, Episode, EpisodeDialogueCueList, EpisodeEngineeringPackagePreflight, EpisodeEngineeringPackageVersion, EpisodeExportPreflight, EpisodeExportVersion, EpisodeJianyingDraftPreflight, EpisodeJianyingDraftVersion, EpisodePremiereXmlPreflight, EpisodePremiereXmlVersion, EpisodeProduction, EpisodeProductionPlan, EpisodeProductionSettings, Job, ProjectScriptReadiness, SegmentContinuityReport, SegmentFirstFramePlan, SegmentLifecycleInput, SegmentPlanAdjustInput, SegmentProductionPlan, SegmentProductionPlanInput, SegmentVideoVersion } from "@/types/api";
+import type { Episode, EpisodeDialogueCueList, EpisodeEngineeringPackagePreflight, EpisodeEngineeringPackageVersion, EpisodeExportPreflight, EpisodeExportVersion, EpisodeJianyingDraftPreflight, EpisodeJianyingDraftVersion, EpisodePremiereXmlPreflight, EpisodePremiereXmlVersion, EpisodeProduction, EpisodeProductionPlan, EpisodeProductionSettings, Job, ProjectScriptReadiness, SegmentContinuityReport, SegmentFirstFramePlan, SegmentLifecycleInput, SegmentPlanAdjustInput, SegmentProductionPlan, SegmentProductionPlanInput, SegmentVideoVersion } from "@/types/api";
 
 export async function listEpisodes(projectId: number): Promise<Episode[]> {
   const { data } = await http.get<Episode[]>(`/projects/${projectId}/episodes`);
@@ -67,16 +67,6 @@ export async function getSegmentProductionPlan(
   return data;
 }
 
-export async function initializeSegmentProductionPlan(
-  projectId: number,
-  episodeId: number,
-): Promise<SegmentProductionPlan> {
-  const { data } = await http.post<SegmentProductionPlan>(
-    `/projects/${projectId}/episodes/${episodeId}/production/segment-plan/initialize`,
-  );
-  return data;
-}
-
 export async function createSegmentProductionPlan(
   projectId: number,
   episodeId: number,
@@ -119,67 +109,6 @@ export async function checkSegmentPlanContinuity(
 ): Promise<SegmentContinuityReport> {
   const { data } = await http.post<SegmentContinuityReport>(
     `/projects/${projectId}/episodes/${episodeId}/production/segment-plan/continuity-check`,
-  );
-  return data;
-}
-
-export async function getEpisodeDirectorCapabilities(
-  projectId: number,
-  episodeId: number,
-  videoModelId: number,
-): Promise<DirectorVideoCapabilities> {
-  const { data } = await http.get<DirectorVideoCapabilities>(
-    `/projects/${projectId}/episodes/${episodeId}/production/director/capabilities`,
-    { params: { video_model_id: videoModelId } },
-  );
-  return data;
-}
-
-export async function listEpisodeDirectorJobs(projectId: number, episodeId: number): Promise<Job[]> {
-  return (await http.get<Job[]>(`/projects/${projectId}/episodes/${episodeId}/production/director/jobs`)).data;
-}
-
-export async function createEpisodeDirectorPlan(
-  projectId: number,
-  episodeId: number,
-  payload: {
-    planner_model_id: number;
-    video_model_id: number;
-    request_id: string;
-    confirmed: true;
-    mode?: "replan_episode" | "optimize_segment";
-    auto_prepare?: boolean;
-    selected_segment_ids?: number[];
-    parameters?: Record<string, unknown>;
-  },
-): Promise<Job> {
-  const { data } = await http.post<Job>(
-    `/projects/${projectId}/episodes/${episodeId}/production/director/plan`,
-    payload,
-  );
-  return data;
-}
-
-export async function applyEpisodeDirectorPlan(
-  projectId: number,
-  episodeId: number,
-  jobId: number,
-  expectedProductionRevision: number,
-): Promise<SegmentProductionPlan> {
-  const { data } = await http.post<SegmentProductionPlan>(
-    `/projects/${projectId}/episodes/${episodeId}/production/director/plan/${jobId}/apply`,
-    { expected_production_revision: expectedProductionRevision, confirmed: true },
-  );
-  return data;
-}
-
-export async function rejectEpisodeDirectorPlan(
-  projectId: number,
-  episodeId: number,
-  jobId: number,
-): Promise<Job> {
-  const { data } = await http.post<Job>(
-    `/projects/${projectId}/episodes/${episodeId}/production/director/plan/${jobId}/reject`,
   );
   return data;
 }

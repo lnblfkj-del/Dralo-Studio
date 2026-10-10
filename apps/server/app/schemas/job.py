@@ -39,6 +39,7 @@ class BatchVideoJobCreate(BaseModel):
 
 
 class JobOut(ORMModel):
+    audio_policy_summary: dict[str, Any] | None = None
     failure_detail: dict[str, Any] | None = None
     runtime_progress: dict[str, Any] = Field(default_factory=dict)
     continuation_context: dict[str, Any] | None = None

@@ -2,6 +2,8 @@
 from app.core.errors import ConflictError
 
 VIDEO_CONTRACTS = {
+    "meaicc_video_images": "meaicc.images.v1",
+    "meaicc_video": "meaicc.text.v1",
     "minimax_video_v2": "minimax.h3.video.v2.registration-only",
     "kling_video_t2v": "kling.text2video.v1",
     "kling_video_i2v": "kling.image2video.v1",
@@ -18,6 +20,26 @@ VIDEO_CONTRACTS = {
 }
 
 VIDEO_PROTOCOL_TEMPLATES = {
+    "meaicc_video_images": {
+        "name": "MEAICC 图生／参考图（待实测）",
+        "input_modes": ["first_frame", "first_last_frame", "single_image", "multi_reference"],
+        "capabilities": ["image_to_video", "first_last_frame", "multi_reference"],
+        "default_params": {"durations": list(range(4, 16)), "resolutions": ["768p"],
+                           "aspect_ratios": ["16:9", "9:16", "1:1"], "max_reference_images": 9,
+                           "supports_first_frame": True, "supports_last_frame": True,
+                           "supported_video_input_modes": ["first_frame", "first_last_frame", "single_image", "multi_reference"]},
+        "api_base_url": "https://api.meaicc.com/v1", "model_id_hint": "mx-h3",
+        "note": "首尾帧或普通参考图不可混用；上传到渠道 minioapi.meaicc.com，参考音视频未开放。",
+    },
+    "meaicc_video": {
+        "name": "MEAICC 文生视频",
+        "input_modes": ["text"], "capabilities": ["text_to_video"],
+        "default_params": {"durations": list(range(4, 16)), "resolutions": ["768p"],
+                           "aspect_ratios": ["16:9", "9:16", "1:1"], "max_reference_images": 0,
+                           "supported_video_input_modes": ["text"]},
+        "api_base_url": "https://api.meaicc.com/v1", "model_id_hint": "mx-h3",
+        "note": "mx-h3 为 768p；sd-2-c4 需改为 720p。仅文生视频，素材上传尚未开放。",
+    },
     "minimax_video_v2": {
         "name": "MiniMax H3 原生视频 V2（待生产验收）",
         "input_modes": ["text"],
@@ -139,6 +161,10 @@ def supplier_video_templates(supplier_id):
 
 
 def validate_video_parameters(protocol, parameters, *, first=False, last=False, references=0, negative_prompt=None):
+    if protocol in {"meaicc_video", "meaicc_video_images"}:
+        from app.providers.meaicc_video import video_parameters
+        return video_parameters(parameters, first=first, last=last, references=references,
+                                negative_prompt=negative_prompt, image_mode=protocol == "meaicc_video_images")
     if protocol == "minimax_video_v2":
         raise ConflictError("MiniMax H3 生产提交尚未开放；已验证密钥连通，但不得据此提交收费视频任务")
     if protocol.startswith("kling_video_"):

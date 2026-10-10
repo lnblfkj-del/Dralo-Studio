@@ -36,6 +36,9 @@ def build_h3_authoring_contract(
     sections = REF_SECTIONS if recipe == "h3_ref2va" else BASE_SECTIONS
     frames = [item for item in compiled["reference_labels"] if item["role"] in {"first_frame", "last_frame"}]
     alignment = compiled["prompt"].split("\n\n", 1)[0] if frames else ""
+    from app.services.audio_policy import effective_script
+    policy = input_contract.get("audio_policy") or (input_contract.get("effective_parameters") or {}).get("audio_policy")
+    effective, _ = effective_script(script, policy)
     source = {
         "schema": AUTHORING_VERSION,
         "compiler_fingerprint": compiled["fingerprint"],
@@ -45,7 +48,8 @@ def build_h3_authoring_contract(
         "reference_labels": compiled["reference_labels"],
         "project_style": project_style,
         "voice_guidance": voice_guidance,
-        "script": script,
+        "script": effective,
+        "audio_policy": policy,
     }
     instruction = (
         "Write the final MiniMax H3 video prompt in English from the frozen JSON below. "
@@ -59,6 +63,9 @@ def build_h3_authoring_contract(
         "Do not invent people, reference media, voice assets, actions, or camera cuts. "
         "Use only the listed <Picture N> media labels; keep their role and ordering. "
         "The soundscape is diegetic ambience and physical effects; non_diegetic_music is audience-only score. "
+        + ("Background score is disabled. Write exactly 'No background music.' in non_diegetic_music. "
+           "Preserve dialogue, ambience, physical effects and plot-internal music. Do not mute all audio. "
+           if policy and policy.get("background_music") is False else "")
         + (f"Start with this exact frame-alignment line, then one blank line: {alignment} " if alignment else "")
         + ("For reference mode, define reusable visible content as <Subject N> and cite its source "
            "<Picture N> in subject_definitions; use a standalone <Picture N> only for a concrete frame anchor. "

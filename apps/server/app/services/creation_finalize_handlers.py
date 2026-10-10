@@ -202,6 +202,9 @@ async def finalize_episode_job(session: AsyncSession, job: Job, result: dict[str
             "source_script": str(parameters.get("source_script", episode.script or "")),
         }
         result["proposal"] = proposal_data
+        from app.services.screenplay_review import review_sources
+        source_review = review_sources(proposal["script"], parameters.get("screenplay_source_catalog") or [])
+        result["screenplay_source_review"] = {key: value for key, value in source_review.items() if key != "records"}
         result["action_preview"] = {
             "kind": "episode_script",
             "status": "pending",

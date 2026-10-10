@@ -8,6 +8,7 @@ import { toErrorMessage } from "@/api/client";
 import { getAssetProduction, getAssetUsagePage, getAssetVersionPage, patchAssetProduction } from "@/api/productionContract";
 import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
 import { AssetVersionSplitDialog } from "@/components/assets/AssetVersionSplitDialog";
+import { AssetAudioGenerator } from "@/components/assets/AssetAudioGenerator";
 import { Button, Dialog } from "@/components/ui";
 import type { AssetProfile, CatalogItem } from "@/types/productionContract";
 import type { AssetViewType } from "@/types/asset";
@@ -160,6 +161,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
         {tab === "versions" && <section className="r5-version-tab">
           <div className="r5-adoption-key"><label>采用用途<input value={key} onChange={(event) => setKey(event.target.value)} /></label><small>不同用途独立采用，不会覆盖其他造型、视角或音色。</small></div>
           {!archived && <div className="r5-version-upload"><label><span>新素材分类</span><select value={uploadViewType} onChange={(event) => setUploadViewType(event.target.value as AssetViewType)}>{(VIEW_TYPES[item.asset_type] ?? ["base"]).map((value) => <option key={value} value={value}>{VIEW_LABELS[value]}</option>)}</select></label><label className="r5-upload-button"><Upload size={15} />{uploadProgress === null ? "上传新候选" : `上传 ${uploadProgress}%`}<input type="file" disabled={upload.isPending} accept={item.asset_type === "voice" ? "audio/*" : item.asset_type === "video" ? "video/*" : "image/*"} onChange={(event) => { const file = event.target.files?.[0]; if (file) upload.mutate(file); }} /></label></div>}
+          {!archived && item.asset_type === "voice" && production.data && <AssetAudioGenerator key={item.id} projectId={projectId} assetId={item.id} revision={production.data.revision} usage={profile.audio_usage} onChanged={()=>void refresh()} />}
           <div className="r5-version-list">{versions.data?.items.map((version) => <article key={version.id}>
             <div className="r5-version-media"><AssetMediaPreview mediaFileId={version.media.id} kind={version.media.kind} assetType={item.asset_type} alt={`${item.name} V${version.version}`} compact /></div>
             <div><strong>V{version.version}</strong><span>{version.view_label} · {version.media.mime_type}</span><small>{formatMedia(version.media)}</small>{version.tags?.includes("qa:manual-review-required") && <span className="r5-split-warning">角色设定图 · 请确认四个视图的身份、服装和体型一致后采用</span>}{version.tags?.includes("qa:landscape-orientation-mismatch") && <span className="r5-split-warning">角色设定图应为横向画幅，建议重新生成</span>}{version.needs_split && <span className="r5-split-warning">待拆分：不能设为最终版或直接采用</span>}</div>

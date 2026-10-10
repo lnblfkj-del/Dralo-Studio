@@ -28,6 +28,7 @@ class LocalConfigTests(unittest.TestCase):
             self.assertEqual(values["RUNTIME_EXECUTION_LOCATION"], "local")
             self.assertGreaterEqual(len(values["JWT_SECRET"]), 32)
             self.assertNotEqual(values["JWT_SECRET"], values["PROVIDER_ENCRYPTION_KEY"])
+            self.assertTrue(values["EPISODE_PLANNING_EPOCH"].startswith("r3-"))
             Fernet(values["PROVIDER_ENCRYPTION_KEY"].encode("ascii"))
 
     def test_existing_config_is_preserved(self):

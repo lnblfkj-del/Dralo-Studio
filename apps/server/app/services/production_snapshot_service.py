@@ -337,6 +337,8 @@ async def export_snapshot(
         }
         for item in settings.get("sound_cues") or []
     ]
+    from app.services.production_dialogue_service import validate_export_dialogue
+    audio_sources = await validate_export_dialogue(session, episode, dialogue_cues)
     return {
         "schema_version": 1,
         "time_unit": "seconds",
@@ -354,6 +356,7 @@ async def export_snapshot(
         },
         "subtitle_source": subtitle_source,
         "dialogue_cues": dialogue_cues,
+        "dialogue_audio_sources": audio_sources,
         "dialogue_duplicate_audio_policy": {
             "default_mode": "replace",
             "replace_native_audio_in_cue_interval": True,

@@ -59,9 +59,20 @@ async def recover_expired_leases(session: AsyncSession, local_media_only: bool =
         job.worker_id = None
         job.lease_expires_at = None
         uncertain_speech = (
-            job.job_type in {"tts", "image"}
-            and (job.payload or {}).get("media_submission", {}).get("started")
+            job.job_type in {"tts", "image", "audio"}
+            and ((job.payload or {}).get("media_submission", {}).get("started")
+                 or (job.payload or {}).get("audio_submission", {}).get("started"))
         )
+        if job.job_type in {"tts", "audio"} and (job.payload or {}).get("audio_submission"):
+            from app.jobs.audio_task import has_receipt
+            if has_receipt(job):
+                job.status, job.execution_phase = JOB_STATUS_PROCESSING, "download"
+                job.available_at = now
+                continue
+            if job.payload["audio_submission"].get("id"):
+                job.status, job.execution_phase = JOB_STATUS_PROCESSING, "poll"
+                job.available_at = now
+                continue
         if job.execution_phase in REMOTE_EXECUTION_PHASES:
             # A lost polling lease is not a fresh generation attempt.
             job.status = JOB_STATUS_PROCESSING

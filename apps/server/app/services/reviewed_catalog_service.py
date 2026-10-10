@@ -106,4 +106,10 @@ async def install_styles(session, *, upgrade=False):
             row.category_id = row.category_id or (ids[0] if ids else None)
             if row.preview_media_id is None and row.reference_media_id is None:
                 row.preview_media_id = row.reference_media_id = media.get(entry["name"])
+        elif (row.preview_media_id is None and row.reference_media_id is None
+              and all(getattr(row, key) == value for key, value in desired.items())
+              and row.default_params == entry["default_params"]):
+            # Relink unchanged product styles after explicit resource installation/reset.
+            # Never replace a user's image selection or customized style behavior.
+            row.preview_media_id = row.reference_media_id = media.get(entry["name"])
     await session.flush()

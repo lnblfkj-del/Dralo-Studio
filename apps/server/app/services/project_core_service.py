@@ -85,6 +85,7 @@ async def create_project(
 ) -> Project:
     data = dict(data)
     settings = dict(data.get("creation_settings") or {})
+    settings.pop("background_music", None)
     if settings.get("reference_text") and not settings.get("import_session_id"):
         from app.services.source_index_service import build_source_index, parse_source_async
         settings["import_analysis"] = {

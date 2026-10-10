@@ -15,7 +15,7 @@ from app.core.database import engine
 
 logger = logging.getLogger(__name__)
 LOCK_KEYS = {"canvas_workflow": 76422002, "storage_mirror": 76422003,
-             "bootstrap": 76422004, "storage_cleanup": 76422005}
+             "bootstrap": 76422004, "storage_cleanup": 76422005, "audio_result_cleanup": 76422006}
 # Long-lived leadership connections must not consume the business pool's slots.
 _coordination_engine = (
     create_async_engine(settings.database_url, poolclass=NullPool,

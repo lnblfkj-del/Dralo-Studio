@@ -89,6 +89,8 @@ class EpisodeProductionSettings(BaseModel):
     frame_rate: Literal[24, 30] = 24
     default_shot_duration: float = Field(default=4, ge=1, le=30)
     include_subtitles: bool = True
+    background_music: bool | None = None
+    voice_choice: Literal["require_description", "model_choice"] = "require_description"
     background_audio_media_id: int | None = Field(default=None, ge=1)
     background_audio_volume: float = Field(default=0.3, ge=0, le=1)
     video_model_id: int | None = Field(default=None, ge=1)

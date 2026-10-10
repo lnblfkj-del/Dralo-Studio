@@ -206,9 +206,10 @@ class Shot(IdMixin, TimestampMixin, WorkspaceScoped, Base):
     duration: Mapped[float | None] = mapped_column()
 
     # 摄影语言
-    shot_size: Mapped[str | None] = mapped_column(String(32))
-    camera_angle: Mapped[str | None] = mapped_column(String(32))
-    camera_movement: Mapped[str | None] = mapped_column(String(32))
+    # SQLite does not enforce VARCHAR length; retain its frozen public baseline.
+    shot_size: Mapped[str | None] = mapped_column(Text().with_variant(String(32), "sqlite"))
+    camera_angle: Mapped[str | None] = mapped_column(Text().with_variant(String(32), "sqlite"))
+    camera_movement: Mapped[str | None] = mapped_column(Text().with_variant(String(32), "sqlite"))
 
     # 内容
     action: Mapped[str | None] = mapped_column(Text)

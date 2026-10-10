@@ -130,9 +130,9 @@ const CREATION_TARGET_LABELS: Record<string, string> = {
   script_asset_breakdown_group: "制作资产拆解",
   script_asset_breakdown_batch: "资产拆解批次",
   script_asset_breakdown: "制作资产拆解",
-  episode_director_pipeline: "分集导演规划",
-  episode_director_outline: "导演片段边界",
-  episode_director_segment: "导演片段脚本",
+  episode_content_planning: "整集内容规划",
+  episode_content_analysis: "正文与时长分析",
+  episode_content_detail: "冻结片段脚本",
 };
 
 export function workflowTaskLabel(job: Job): { title: string; subtitle: string } | null {

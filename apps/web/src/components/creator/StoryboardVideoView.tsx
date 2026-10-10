@@ -4,20 +4,19 @@ import { ChevronLeft, FileText, MoreHorizontal, Settings2 } from "lucide-react";
 import { useMultitrackEntry } from "@/components/multitrack/useMultitrackEntry";
 
 import { toErrorMessage } from "@/api/client";
-import { EpisodeDirectorDialog } from "@/components/creator/EpisodeDirectorDialog";
+import { ContentPlanningDialog } from "@/components/creator/ContentPlanningDialog";
 import { EpisodeScriptConfirmation } from "@/components/creator/EpisodeScriptConfirmation";
 import { EpisodeSegmentWorkspace } from "@/components/creator/EpisodeSegmentWorkspace";
 import { VideoModelCapabilityDialog } from "@/components/creator/VideoModelCapabilityDialog";
 import { ConfirmDialog, Dialog } from "@/components/ui/Dialog";
 import { ProjectHeader } from "@/components/creator/ProjectHeader";
-import { isActiveDirectorJob } from "@/domain/directorJobRecovery";
 import { formatResolution, videoModelDefaultResolution, videoModelDurations, videoModelResolutions } from "@/domain/videoModelCapabilities";
 import type { ModelOption } from "@/types/api";
 import type { StoryboardVideoModel } from "@/pages/StoryboardVideoPage";
 const MultitrackProjectEntry = lazy(() => import("@/components/multitrack/MultitrackProjectEntry"));
 export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) {
   const {
-    projectId, episodeId, studioRef, script, videoModelId, setVideoModelId, setVideoModelManuallyChanged, outputResolution, setOutputResolution, directorOpen, setDirectorOpen, directorPlannerModelId, setDirectorPlannerModelId, directorJob, setDirectorJob, directorMode, setDirectorMode, directorSegmentIds, setDirectorSegmentIds, sourceOpen, setSourceOpen, setSegmentDirty, segmentAttemptPlan, setSegmentAttemptPlan, setSegmentAttemptId, initialSegmentId, returnToCanvas, activeSegmentId, setActiveSegmentId, project, episode, production, segmentPlan, episodeAssetReadiness, assets, videoModels, plannerModels, activeJob, saveProductionSettings, saveHeaderModel, planSegments, recoverDirectorResult, applySegmentPlan, saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck, rejectSegmentPlan, planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan, chooseSegmentVersion, soundCueErrors, projectAspectRatio, productionSettingsDirty, contentUnsavedChanges, hasUnsavedChanges, savePending, blocker, sourceStale, dirtyParts, saveError, saveStateLabel, orderedEpisodes, switchEpisode, navigateSafely, activeSegmentModel, activeImageModel, segmentError, hasRecoverableDirectorJob, recoveredState, episodeLabel
+    projectId, episodeId, studioRef, script, videoModelId, setVideoModelId, setVideoModelManuallyChanged, outputResolution, setOutputResolution, directorOpen, setDirectorOpen, directorPlannerModelId, sourceOpen, setSourceOpen, setSegmentDirty, segmentAttemptPlan, setSegmentAttemptPlan, setSegmentAttemptId, initialSegmentId, returnToCanvas, activeSegmentId, setActiveSegmentId, project, episode, production, segmentPlan, episodeAssetReadiness, assets, videoModels, plannerModels, activeJob, saveProductionSettings, saveHeaderModel, saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck, planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan, chooseSegmentVersion, soundCueErrors, projectAspectRatio, productionSettingsDirty, contentUnsavedChanges, hasUnsavedChanges, savePending, blocker, sourceStale, dirtyParts, saveError, saveStateLabel, orderedEpisodes, switchEpisode, navigateSafely, activeSegmentModel, activeImageModel, segmentError, recoveredState, episodeLabel
   } = model;
   const [independentOpen, setIndependentOpen] = useMultitrackEntry();
   const [capabilityModel, setCapabilityModel] = useState<ModelOption | null>(null);
@@ -36,8 +35,6 @@ export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) 
   const openPlanning = () => {
     if (contentUnsavedChanges) return;
     if (!scriptConfirmed) { setSourceOpen(true); return; }
-    setDirectorMode("replan_episode"); setDirectorSegmentIds([]);
-    if (!hasRecoverableDirectorJob) setDirectorJob(null);
     setDirectorOpen(true);
   };
   return <><ProjectHeader projectId={projectId} name={project.data.name} active="production" settings={project.data.creation_settings} controls={<>
@@ -63,7 +60,6 @@ export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) 
       initialSegmentId={initialSegmentId}
       onSelectedSegmentChange={setActiveSegmentId}
       onManageAssets={() => navigateSafely(`/projects/${projectId}/assets`)}
-      onOptimize={(segmentId) => { if (contentUnsavedChanges || sourceStale) return; setDirectorMode("optimize_segment"); setDirectorSegmentIds([segmentId]); if (!hasRecoverableDirectorJob) setDirectorJob(null); setDirectorOpen(true); }}
       onChooseVersion={(segmentId, versionId, inputFingerprint) => chooseSegmentVersion.mutate({ segmentId, versionId, inputFingerprint })}
       choosingVersion={chooseSegmentVersion.isPending || contentUnsavedChanges || sourceStale}
       versionChoiceError={chooseSegmentVersion.error ? toErrorMessage(chooseSegmentVersion.error) : undefined}
@@ -111,25 +107,15 @@ export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) 
   />
   <Dialog open={sourceOpen} title="本集正文" size="large" onClose={() => setSourceOpen(false)} footer={<><button onClick={() => navigateSafely(`/projects/${projectId}/outline?episode=${episodeId}`)}>编辑正文</button><EpisodeScriptConfirmation projectId={projectId} episode={episode} disabled={contentUnsavedChanges} /></>}><pre className="segment-source-text">{episode.script || "暂无正文"}</pre></Dialog>
   {independentOpen && <Suspense fallback={<div className="production-overlay"><p role="status">正在打开整集剪辑...</p></div>}><MultitrackProjectEntry key={`${projectId}:${episodeId}`} projectId={projectId} episodeId={episodeId} title={episodeLabel(episode)} frameRate={production.data?.settings.frame_rate ?? 24} aspectRatio={!projectAspectRatio || projectAspectRatio === "default" ? "16:9" : projectAspectRatio} onClose={() => setIndependentOpen(false)} /></Suspense>}
-  {directorOpen && <EpisodeDirectorDialog
+  {directorOpen && <ContentPlanningDialog
+    key={`${projectId}:${episodeId}`}
+    scope={{ projectId, episodeId }}
+    scriptRevision={episode.script_revision}
     plannerModels={plannerModels}
     videoModels={videoModels}
-    plannerModelId={directorPlannerModelId}
-    videoModelId={videoModelId}
-    plan={segmentPlan.data ?? null}
-    mode={directorMode}
-    selectedSegmentIds={directorSegmentIds}
-    job={directorJob}
-    busy={planSegments.isPending || recoverDirectorResult.isPending || isActiveDirectorJob(directorJob) || applySegmentPlan.isPending || rejectSegmentPlan.isPending}
-    error={planSegments.error ? toErrorMessage(planSegments.error) : recoverDirectorResult.error ? toErrorMessage(recoverDirectorResult.error) : applySegmentPlan.error ? toErrorMessage(applySegmentPlan.error) : rejectSegmentPlan.error ? toErrorMessage(rejectSegmentPlan.error) : undefined}
-    onPlannerModelChange={setDirectorPlannerModelId}
-    onVideoModelChange={chooseVideoModel}
-    onConfigureVideoModel={setCapabilityModel}
-    onPlan={(requirements) => { recoverDirectorResult.reset(); applySegmentPlan.reset(); rejectSegmentPlan.reset(); planSegments.mutate(requirements); }}
-    onRecover={() => { planSegments.reset(); recoverDirectorResult.mutate(); }}
-    onRecovered={setDirectorJob}
-    onApply={() => applySegmentPlan.mutate()}
-    onReject={() => rejectSegmentPlan.mutate()}
+    initialPlannerId={directorPlannerModelId}
+    initialVideoId={videoModelId}
+    backgroundMusic={production.data?.settings.background_music}
     onClose={() => setDirectorOpen(false)}
   />}
   <VideoModelCapabilityDialog model={capabilityModel} onClose={() => setCapabilityModel(null)} onSaved={(saved) => { const resolutions = Array.isArray(saved.default_params.resolutions) ? saved.default_params.resolutions.map(String) : []; const preferred = String(saved.default_params.resolution ?? resolutions[0] ?? "").toLowerCase(); if (preferred) setOutputResolution(preferred); setCapabilityModel(null); }} />

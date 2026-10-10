@@ -19,6 +19,8 @@ async def require_preparation(session, episode, *, confirming=False):
         raise ConflictError("请先设置本集目标时长（1–3600秒）")
     if episode.continuity_review_status in {"conflict", "needs_review"}:
         raise ConflictError(episode.continuity_review_reason or "请先处理本集一致性问题")
+    from app.services.screenplay_preflight import require_sources
+    await require_sources(session, episode)
     if not confirming:
         require_episode_script_finalized(episode)
     context = episode_generation_context(settings.get("narrative_spec"), episode.number)

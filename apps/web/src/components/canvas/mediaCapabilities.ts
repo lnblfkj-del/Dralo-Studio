@@ -2,7 +2,7 @@ import type { Provider, ProviderModel } from "@/types/api";
 
 export const choices = (value: unknown): string[] => Array.isArray(value) ? value.filter((x) => typeof x === "string" || typeof x === "number").map(String) : [];
 export function mediaModels(providers: Provider[], kind: string) {
-  return providers.filter((p) => p.enabled).flatMap((p) => p.models.filter((m) => m.enabled && m.model_type === (kind === "audio" ? "tts" : kind === "prompt" ? "image" : kind)).map((m) => ({...m, providerName: p.name})));
+  return providers.filter((p) => p.enabled).flatMap((p) => p.models.filter((m) => m.enabled && (kind === "audio" ? m.model_type === "tts" || m.model_type === "audio" && m.capabilities.includes("music") : m.model_type === (kind === "prompt" ? "image" : kind))).map((m) => ({...m, providerName: p.name})));
 }
 export const referenceHandleTop: Record<string, number> = { reference_image: 70, first_frame: 100, last_frame: 130 };
 

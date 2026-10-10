@@ -7,7 +7,7 @@ import type { ScriptReadinessIssue } from "@/types/api";
 import { Icon } from "./Icon";
 
 const stateCopy = { no_episodes: ["尚未开始", "创建分集并完成正文后，即可定稿。"], incomplete: ["内容未齐", "打开定稿核对，查看需要补齐的内容。"], ready: ["等待定稿", "正文与硬性条件已齐，可以核对当前版本。"], confirmed: ["剧本已定稿", "制作阶段将以当前锁定版本为准。"], stale: ["版本已变化", "打开定稿核对，处理版本或一致性提醒。"] } as const;
-const HARD_CODES = new Set(["no_episodes", "non_sequential_numbers", "missing_script"]);
+const HARD_CODES = new Set(["no_episodes", "non_sequential_numbers", "missing_script", "screenplay_source_ambiguous"]);
 const parseDuration = (raw: string | undefined) => { const value = Number((raw ?? "").trim()); return Number.isInteger(value) && value >= 1 && value <= 3600 ? value : null; };
 const visibleIssues = (issues: ScriptReadinessIssue[], durations: Record<number, string>) => issues.filter(issue => issue.code !== "missing_duration" || !issue.episode_id || parseDuration(durations[issue.episode_id]) === null);
 

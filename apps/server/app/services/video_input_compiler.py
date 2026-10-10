@@ -23,6 +23,13 @@ def _normalize_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _effective_parameters(model, parameters):
+    effective = {**(model.default_params or {}), **parameters}
+    # Administrator evidence is an input-planning record, never a wire field.
+    effective.pop("episode_planning_capability", None)
+    return effective
+
+
 def _confirmation_id(role: str, media_id: int) -> str:
     return f"{role}_to_reference:{media_id}"
 
@@ -38,7 +45,7 @@ def prepare_video_prompt(provider, model, prompt: str, negative_prompt: str | No
 def _validate(provider, model, parameters, negative_prompt, first, last, references,
               *, preview_only=False, h3_authorized=False) -> dict[str, Any]:
     protocol = effective_protocol(provider, model)
-    effective = {**(model.default_params or {}), **parameters}
+    effective = _effective_parameters(model, parameters)
     if protocol == "minimax_video_v2":
         if not preview_only and not h3_authorized:
             raise ConflictError("MiniMax H3 生产提交尚未开放；请先完成片段英文提示词审核")
@@ -111,6 +118,7 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
     """Compile roles to exact adapter fields without silently dropping a binding."""
     original_duration = parameters.get("duration")
     parameters = _normalize_parameters(parameters)
+    audio_policy = parameters.pop("audio_policy", None)
     style_in_first_frame = parameters.pop("project_style_in_first_frame", False)
     if type(style_in_first_frame) is not bool:
         raise ConflictError("首帧已包含项目风格的确认必须为布尔值")
@@ -168,7 +176,7 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
         if not convertible:
             blockers.append(direct_error.message)
             first, last, ordinary = _fields(normalized)
-            effective_parameters = {**(model.default_params or {}), **parameters}
+            effective_parameters = _effective_parameters(model, parameters)
         else:
             required = [{"id": _confirmation_id(item["role"], item["media_id"]),
                          "source": item["role"], "media_id": item["media_id"],
@@ -180,7 +188,7 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
             if valid_ids - confirmed:
                 blockers.append("存在需要明确确认的图像用途降级")
                 first, last, ordinary = _fields(normalized)
-                effective_parameters = {**(model.default_params or {}), **parameters}
+                effective_parameters = _effective_parameters(model, parameters)
             else:
                 effective_refs, first, last, ordinary = converted, c_first, c_last, c_ordinary
                 effective_parameters = converted_parameters
@@ -219,6 +227,9 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
             "confirmed_downgrades": sorted(confirmed)}
     if preview_only:
         core["preview_only"] = True
+    if audio_policy is not None:
+        core["audio_policy"] = audio_policy
+        effective_parameters["audio_policy"] = audio_policy
     core["fingerprint"] = _digest(core)
     return {**core, "ready": not blockers and not required, "effective_references": effective_refs,
             "effective_parameters": effective_parameters, "actions": actions,
@@ -243,6 +254,10 @@ def assert_frozen_video_input(payload: dict[str, Any]) -> dict[str, Any]:
         keys.append("submission_mode")
     keys.extend(["first_frame_media_id", "last_frame_media_id",
                  "reference_media_ids", "confirmed_downgrades"])
+    if "audio_policy" in contract:
+        keys.append("audio_policy")
+        if contract["audio_policy"] != (payload.get("parameters") or {}).get("audio_policy"):
+            raise ConflictError("音频策略与冻结输入不一致，已停止提交")
     core = {key: contract.get(key) for key in keys}
     if contract.get("fingerprint") != _digest(core):
         raise ConflictError("视频任务冻结输入协议指纹无效，已停止提交")

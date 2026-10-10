@@ -16,7 +16,7 @@ from app.services.pricing_service import estimate, number
 
 
 def calculate(snapshot, meter):
-    if meter.get("measurement_conflict") or meter.get("invalid_usage"):
+    if meter.get("measurement_conflict") or meter.get("invalid_usage") or meter.get("provider_usage_invalid"):
         return None, "用量数据冲突或无效，待核对"
     rates = snapshot.get("rates", {})
     if not rates:
@@ -43,12 +43,12 @@ def calculate(snapshot, meter):
             if not meter.get("image_count"):
                 return None, "没有确认的产物张数"
             params["n"] = meter["image_count"]
-        elif unit == "second":
+        elif unit in {"second", "minute"}:
             if not meter.get("duration_seconds"):
                 return None, "缺少可验证的媒体时长，未使用请求时长代替"
             params["duration"] = meter["duration_seconds"]
         elif unit == "1000_chars":
-            count = meter.get("input_chars")
+            count = meter.get("provider_usage_chars", meter.get("input_chars"))
             if count is None or not meter.get("returned"):
                 return None, "没有确认成功的配音请求"
             if "rate" not in rates:
@@ -92,16 +92,12 @@ async def begin(job_id, worker_id, key):
         if not locked.rowcount:
             raise ConflictError("任务已停止，未提交新请求")
         job = await session.get(Job, job_id)
+        from app.core.retired_workflows import require_active_workflow
+        require_active_workflow(job.target_type)
         existing = await session.scalar(select(BillingCall).where(BillingCall.call_key == key))
         if existing:
             return existing.id
         snapshot = deepcopy(job.payload.get("pricing_snapshot", {}))
-        recovery = job.payload.get("recovery") or {}
-        if (job.target_type in {"episode_director_outline", "episode_director_segment"}
-                and recovery.get("kind") == "confirmed_paid_recall"):
-            # The old call's immutable snapshot is retained. This new authorized
-            # attempt uses the quote shown before confirmation, not today's rate.
-            snapshot = deepcopy(recovery.get("pricing_snapshot") or snapshot)
         row = BillingCall(call_key=key, owner_id=job.owner_id, job_id=job.id, project_id=job.project_id,
             provider_id=job.provider_id or 0, provider_name=job.provider or "未知渠道", model_name=job.model or "未知模型",
             kind=job.job_type, snapshot=snapshot, currency=snapshot.get("currency", "CNY"), meter={})
@@ -252,7 +248,9 @@ async def report(session, owner_id, *, offset=0, limit=20, since=None, until=Non
         difference = bill-calculated if bill is not None and calculated is not None else None
         if difference:
             t["difference_count"] += 1
+        from app.services.audio_quota_service import usage as quota_usage
         items.append({"id":call.id,"job_id":call.job_id,"project_id":call.project_id,"provider_id":call.provider_id,
+            "quota_usage": quota_usage(call.snapshot.get("rates", {}).get("quota"), meter=call.meter),
             "provider":call.provider_name,"model":call.model_name,"kind":call.kind,"state":call.state,"currency":call.currency,
             "amount":call.amount,"bill_amount":str(bill) if bill is not None else None,"difference":str(difference) if difference is not None else None,
             "meter":call.meter,"snapshot":call.snapshot,"reason":call.reason,"created_at":call.created_at,

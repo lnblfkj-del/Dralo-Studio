@@ -265,6 +265,7 @@ function AssetCard({ projectId, item, allowSelect, selected, onSelect, onDetail,
     {((job && job.status !== "succeeded") || action.error) && <div className={`r5-job ${action.error ? "failed" : job?.status}`} role={action.error ? "alert" : undefined}>
       <span title={action.error ? toErrorMessage(action.error) : undefined}>{action.error ? toErrorMessage(action.error) : `${jobStatus(job!.status)}${active ? ` ${Math.round(job!.progress)}%` : ""}`}</span>
       {active ? <button disabled={action.isPending} onClick={() => action.mutate()}>取消</button> : null}
+      {!active && job?.status === "failed" && job.audio_recovery && <button disabled={action.isPending || job.retry_allowed === false} onClick={()=>action.mutate()}>{job.audio_recovery === "save_only" ? "重试保存" : job.audio_recovery === "query_only" ? "继续查询" : "待核对"}</button>}
       {action.error || job?.status === "failed" ? <Link to={`/tasks?project_id=${projectId}`}>查看原因</Link> : null}
     </div>}
     <button className="r5-card-canvas" title="打开画布" aria-label={`在画布中打开${item.name}`} onClick={onCanvas}><MapPin size={15} /></button>

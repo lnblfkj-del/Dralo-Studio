@@ -14,8 +14,13 @@ from typing import Any
 
 from app.core.errors import ConflictError, ValidationError
 from app.services.segment_script_semantics import compile_prompt
+from app.services.video_prompt_timeline import (
+    TIMELINE_ROUTES,
+    compile_timeline,
+    validate_certificate,
+)
 
-COMPILER_VERSION = "video_prompt_compiler.v6"
+COMPILER_VERSION = "video_prompt_compiler.v7"
 H3_SOURCE = "https://github.com/MiniMax-AI/MiniMax-H3/blob/main/.agents/skills/h3-prompt-writing/SKILL.md"
 SEEDANCE_SOURCE = "https://docs.volcengine.com/docs/ark/seedance-2-5-prompt-guide?lang=zh"
 SEEDANCE_2_SOURCE = "https://www.volcengine.com/docs/82379/2222480?lang=zh"
@@ -56,7 +61,7 @@ def validate_video_prompt_certifications(value: Any) -> dict[str, Any]:
             raise ValueError("视频提示词认证包含未知输入模式")
         if not {"status", "evidence", "revision"} <= set(record) or set(record) - {
             "status", "evidence", "revision", "native_multi_shot", "native_multi_shot_parameter",
-            "production_enabled",
+            "production_enabled", "prompt_timeline",
         }:
             raise ValueError("视频提示词认证记录字段无效")
         if record["status"] not in {"mock_verified", "channel_verified"}:
@@ -70,6 +75,10 @@ def validate_video_prompt_certifications(value: Any) -> dict[str, Any]:
             raise ValueError("生产提示词启用状态必须为布尔值")
         if record.get("production_enabled") and record["status"] != "channel_verified":
             raise ValueError("生产提示词仅能在渠道认证后启用")
+        if "prompt_timeline" in record:
+            validate_certificate(record["prompt_timeline"])
+            if record.get("native_multi_shot") is True:
+                raise ValueError("提示词时间轴和原生分镜字段不能混为同一种提交认证")
         if "native_multi_shot_parameter" in record and (
             not isinstance(record["native_multi_shot_parameter"], str)
             or len(record["native_multi_shot_parameter"]) > 128
@@ -141,6 +150,13 @@ def resolve_prompt_profile(
         and bool(_text(proof.get("revision")))
     )
     certified = evidence_matches and proof["status"] == "channel_verified"
+    timeline = proof.get("prompt_timeline")
+    if timeline is not None:
+        validate_certificate(timeline)
+    timeline_enabled = bool(
+        certified and proof.get("production_enabled") is True and timeline
+        and (protocol, model_id) in TIMELINE_ROUTES
+    )
     return {
         **route, "recipe": recipe, "source_url": source,
         "verification": ("channel_verified" if certified else "mock_verified" if evidence_matches
@@ -148,6 +164,7 @@ def resolve_prompt_profile(
         "evidence": _text(proof.get("evidence")) if evidence_matches else None,
         "certification_revision": _text(proof.get("revision")) if evidence_matches else None,
         "production_enabled": bool(certified and proof.get("production_enabled") is True),
+        "prompt_timeline": dict(timeline) if timeline_enabled else None,
         "native_multi_shot": bool(certified and proof.get("native_multi_shot") is True
                                   and _text(proof.get("native_multi_shot_parameter"))
                                   and NATIVE_MULTI_SHOT_FIELDS.get((protocol, model_id))
@@ -170,12 +187,12 @@ def _probe_adapter_mode(provider: Any, model: Any, mode: str, recipe: str) -> di
         return {"passed": False, "reason": "H3 模型与当前官方 V2 视频协议不匹配"}
     if recipe.startswith("seedance_") and not (
         protocol in {"ark_video_t2v", "ark_video_images"}
-        or toapis and model.model_id == "seedance-2-5"
+        or (toapis and model.model_id == "seedance-2-5")
     ):
         return {"passed": False, "reason": "Seedance 模型与当前视频协议不匹配"}
     if recipe == "kling" and not (
         protocol.startswith("kling_video_")
-        or toapis and model.model_id in {"kling-v2-6", "kling-v3-omni"}
+        or (toapis and model.model_id in {"kling-v2-6", "kling-v3-omni"})
     ):
         return {"passed": False, "reason": "可灵模型与当前视频协议不匹配"}
     if protocol not in VIDEO_CONTRACTS and not (toapis and model.model_id in VIDEO_MODELS):
@@ -401,6 +418,12 @@ def compile_model_prompt(
     if input_contract.get("protocol") != profile.get("protocol") or input_contract.get("model_id") != profile.get("model_id"):
         raise ValidationError("视频输入协议或模型已变化，请重新预检并编译")
     refs = _validate_input_and_script(script, input_contract)
+    from app.services.audio_policy import effective_script
+    from app.services.audio_policy import instruction as audio_instruction
+    policy = input_contract.get("audio_policy") or (input_contract.get("effective_parameters") or {}).get("audio_policy")
+    if isinstance(voice_guidance, dict):
+        voice_guidance = voice_guidance.get("prompt_text", "")
+    script, omitted_audio = effective_script(script, policy)
     recipe = profile["recipe"]
     blockers = list(input_contract.get("blockers") or [])
     if input_contract.get("required_confirmations"):
@@ -423,7 +446,11 @@ def compile_model_prompt(
             if all(item["order_status"] == "adapter_order_verified" for item in reference_labels)
             else "Seedance 参考素材与提示词标签尚未完成当前渠道的逐项映射"
         )
-    split = len(shots) > 1 and not profile["native_multi_shot"]
+    timeline = profile.get("prompt_timeline")
+    timeline_enabled = bool(timeline and len(shots) <= timeline["max_shots"])
+    split = len(shots) > 1 and not (profile["native_multi_shot"] or timeline_enabled)
+    if timeline and len(shots) > timeline["max_shots"]:
+        blockers.append("镜头数量超过当前渠道时间轴验收上限，请重新规划；不会自动拆成视频请求")
     if require_submission and split:
         blockers.append("当前渠道未认证原生多镜头；须先拆成逐镜头任务并完成费用/衔接预检")
     if require_submission:
@@ -436,7 +463,9 @@ def compile_model_prompt(
         intro.append(f"项目风格：{_text(project_style)}")
     if _text(voice_guidance):
         intro.append(f"声音要求：{_text(voice_guidance)}")
-    if recipe == "generic":
+    if timeline_enabled:
+        prompt = compile_timeline(script, input_contract, intro)
+    elif recipe == "generic":
         prompt = compile_prompt(script)
         extras = [line for line in intro if not line.startswith("场景：")]
         prompt = "\n".join([prompt, *extras])
@@ -473,6 +502,8 @@ def compile_model_prompt(
         reference_guidance = _seedance_reference_guidance(reference_labels) if recipe.startswith("seedance_") else []
         prompt = "\n".join([*intro, *reference_guidance, *lines,
                             f"结束状态：{_text(script.get('exit_state'))}"])
+    if policy and policy.get("background_music") is not None:
+        prompt += "\n" + audio_instruction(policy)
     reference_manifest = [
         {key: ref.get(key) for key in ("role", "media_id", "asset_id", "asset_version_id", "purpose") if key in ref}
         for ref in refs
@@ -493,6 +524,8 @@ def compile_model_prompt(
             })
     compiled = {
         "compiler_version": COMPILER_VERSION,
+        "audio_policy": policy,
+        "omitted_audio_sources": omitted_audio,
         "profile": profile,
         "prompt": prompt,
         "reference_manifest": reference_manifest,

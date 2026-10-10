@@ -195,48 +195,28 @@ async def reprocess_preserved_response(
     expected_response_sha256: str | None = None,
 ) -> Job:
     """Re-run local business processing only; this function has no provider path."""
+    from app.core.retired_workflows import require_active_workflow
+    require_active_workflow(job.target_type)
     if job.status != JOB_STATUS_FAILED:
         raise ConflictError("仅本地处理失败的任务可以重新处理已保存响应")
     if job.error_code != "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED":
         raise ConflictError("该任务没有可重新处理的已保存模型响应")
     if character_name_corrections is not None and not ((job.payload or {}).get("parameters") or {}).get("long_form_work_id"):
         raise ConflictError("角色对应仅用于分批大纲结果恢复")
-    recovery = dict((job.payload or {}).get("response_recovery") or {})
-    if (
-        job.target_type == "episode_director_pipeline"
-        and recovery.get("kind") == "director_child_results"
-    ):
-        from app.services.episode_director_pipeline_service import aggregate_parent
-
-        job.status = "processing"
-        job.finished_at = None
-        job.error_code = None
-        job.error_message = None
-        job.payload = {
-            **(job.payload or {}),
-            "response_recovery": {**recovery, "status": "processing"},
-        }
-        await aggregate_parent(session, job)
-        if job.status == "succeeded":
-            job.payload = {
-                **(job.payload or {}),
-                "response_recovery": {
-                    **dict((job.payload or {}).get("response_recovery") or {}),
-                    "status": "processed",
-                    "processed_at": utcnow().isoformat(),
-                    "model_called": False,
-                },
-            }
-        await session.flush()
-        return job
     stored = await _latest_response(session, job)
-    if stored is None:
+    if stored is None and job.target_type not in {"episode_content_analysis", "episode_content_detail"}:
         stored = await _migrate_legacy_payload_response(session, job)
     if stored is None:
         raise ConflictError("已保存模型响应不存在或已清理，不能执行本地重处理")
     if stored.expires_at.replace(tzinfo=None) <= utcnow().replace(tzinfo=None):
         stored.status = "expired"
         raise ConflictError("已保存模型响应已超过保留期限，不能执行本地重处理")
+    if job.target_type in {"episode_content_analysis", "episode_content_detail"}:
+        submission = (job.payload or {}).get("text_submission") or {}
+        if (hashlib.sha256(stored.response_text.encode("utf-8")).hexdigest() != stored.response_sha256
+                or stored.response_sha256 != submission.get("response_sha256")
+                or stored.call_id != submission.get("call_id")):
+            raise ConflictError("已保存响应的完整性校验失败，不能恢复或覆盖计划")
 
     corrections = None
     if character_name_corrections is not None:
@@ -388,12 +368,6 @@ async def reprocess_preserved_response(
         }
         await session.flush()
         await session.refresh(job)
-        parent = await session.get(Job, job.parent_job_id) if job.parent_job_id else None
-        if parent is not None and parent.target_type == "episode_director_pipeline":
-            from app.services.episode_director_pipeline_service import aggregate_parent
-
-            await aggregate_parent(session, parent)
-        else:
-            await aggregate_parent_job(session, job.id)
+        await aggregate_parent_job(session, job.id)
     await session.flush()
     return job

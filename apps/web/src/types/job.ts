@@ -59,6 +59,7 @@ export interface AgentActionPreview {
 }
 
 export interface Job {
+  audio_policy_summary?: { version: string; background_music: boolean | null; voice_choice: "require_description" | "model_choice"; source: string } | null;
   failure_detail?: {
     category: string;
     title: string;
@@ -94,7 +95,7 @@ export interface Job {
       worker_elapsed_ms?: number;
     };
   };
-  execution_info?: {recovery: "query_only"; task_id: string | null; business_id?: string | null; cancel_scope: "local_only"; phase?: "submit" | "poll" | "download"; started_at?: string | null; timeout_seconds?: number | null} | null;
+  execution_info?: {recovery: "query_only" | "save_only" | "check_required"; result_expired?: boolean; result_expires_at?: string | null; task_id: string | null; business_id?: string | null; cancel_scope: "local_only"; phase?: "submit" | "poll" | "download"; started_at?: string | null; timeout_seconds?: number | null} | null;
   media_processing?: {
     operation: {kind: string; audio_media_id?: number; start?: number; trim_start?: number; trim_end?: number; volume?: number};
     source_media_id?: number; source_hash?: string | null; audio_hash?: string | null; source_duration?: number; output_kind?: string;

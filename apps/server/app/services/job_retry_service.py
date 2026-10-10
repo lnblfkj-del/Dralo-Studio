@@ -69,13 +69,15 @@ async def _prepare_video_segment_retry(session: AsyncSession, job: Job) -> None:
 
 
 async def retry_job(session: AsyncSession, job: Job) -> Job:
+    from app.core.retired_workflows import require_active_workflow
+    require_active_workflow(job.target_type)
     from app.services.long_form_workflow import validate_job
     await validate_job(session, job)
     from app.services import job_state_service
     if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
         raise ConflictError("仅失败或已取消的任务可以重试")
-    if job.target_type in {"episode_director_pipeline", "episode_director_outline", "episode_director_segment"}:
-        raise ConflictError("请使用导演失败范围恢复：先处理保存结果，再确认新增调用及费用")
+    if job.target_type in {"episode_content_planning", "episode_content_analysis", "episode_content_detail"}:
+        raise ConflictError("请在规划页面恢复已有结果；新增调用需要先确认费用与范围")
     if job.job_type == "video":
         from app.core.video_submission import normalize_rejected_video_submission
         job.payload = normalize_rejected_video_submission(job.payload or {})
@@ -83,6 +85,16 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
         raise ConflictError(job.retry_block_reason or "任务已由后续成功结果替代")
     if job.retry_block_reason:
         raise ConflictError(job.retry_block_reason)
+    if job.target_type == "asset" and job.job_type in {"tts", "audio"}:
+        from app.services.asset_audio_generation import target
+        await session.execute(update(Project).where(Project.id == job.project_id).values(name=Project.name))
+        await target(session, job)
+        active = await session.scalar(select(Job.id).where(
+            Job.project_id == job.project_id, Job.target_type == "asset", Job.target_id == job.target_id,
+            Job.id != job.id, Job.status.not_in(TERMINAL_STATUSES),
+        ))
+        if active:
+            raise ConflictError("该声音资产已有进行中的任务")
     if job.job_type == "text" and (job.failure_detail or {}).get("action") == "none":
         raise ConflictError((job.failure_detail or {})["hint"])
     if job.target_type == "edit_project_asr":
@@ -178,7 +190,9 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
             from app.services import canvas_processing_service
             await canvas_processing_service.preflight(session, job, retry=True)
         else:
-            await canvas_generation_service.validate_model(session, job.payload["provider_model_id"], "audio" if job.job_type == "tts" else job.job_type, job.payload.get("parameters", {}))
+            saved_audio = job.job_type in {"tts", "audio"} and (job.payload.get("audio_submission", {}).get("result_received") or job.error_code == "AUDIO_SAVE_FAILED")
+            if not saved_audio:
+                await canvas_generation_service.validate_model(session, job.payload["provider_model_id"], "audio" if job.job_type in {"tts", "audio"} else job.job_type, job.payload.get("parameters", {}))
             from app.services import canvas_advanced_service
             await canvas_advanced_service.preflight(session, job)
         if job.target_type == "canvas_agent":
@@ -299,6 +313,10 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
             if production is not None:
                 production.last_error = None
     job.progress = 0
+    if job.job_type in {"tts", "audio"} and job.payload.get("audio_submission", {}).get("id"):
+        from datetime import timedelta
+        job.payload = {**job.payload, "audio_submission": {**job.payload["audio_submission"],
+                       "poll_deadline_at": (utcnow() + timedelta(minutes=30)).isoformat()}}
     await _refresh_text_model_defaults(session, job)
     _reset_text_attempt(job)
     job.attempts = 0

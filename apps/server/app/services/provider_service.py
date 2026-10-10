@@ -532,6 +532,7 @@ async def check_connection(provider: Provider) -> dict:
     protocol = effective_protocol(provider)
     headers = ({"x-api-key": key, "anthropic-version": "2023-06-01"} if protocol == "anthropic_messages"
                else {"x-goog-api-key": key} if protocol == "google_gemini"
+               else {"xi-api-key": key} if protocol in {"elevenlabs_tts", "elevenlabs_music"}
                else {"Authorization": f"Bearer {key}"})
     started = perf_counter()
     base_url = effective_base_url(provider)
@@ -539,12 +540,17 @@ async def check_connection(provider: Provider) -> dict:
     last_error: httpx.HTTPError | None = None
     probe_path = (
         "/v2/query/video_generation?page_num=1&page_size=1"
-        if protocol == "minimax_video_v2" else "/models"
+        if protocol == "minimax_video_v2" else "/get_voice"
+        if protocol == "minimax_audio_subscription" else "/models"
     )
     for attempt in range(2):
         try:
             async with outbound_client(timeout=provider.timeout_seconds, proxy=provider.proxy_url, follow_redirects=False) as client:
-                async with client.stream("GET", base_url + probe_path, headers=headers) as response:
+                async with client.stream(
+                    "POST" if protocol == "minimax_audio_subscription" else "GET",
+                    base_url + probe_path, headers=headers,
+                    **({"json": {"voice_type": "system"}} if protocol == "minimax_audio_subscription" else {}),
+                ) as response:
                     status = response.status_code
             break
         except httpx.HTTPError as exc:
@@ -582,6 +588,8 @@ async def check_connection(provider: Provider) -> dict:
                 message = "后端运行在受限进程中，渠道连接失败；请从正常 Windows 终端启动服务，或为启动操作批准联网权限"
         raise ProviderError(message, details=details) from last_error
     message = "端点已响应；这不代表模型发现或生成能力已验证"
+    if protocol == "minimax_audio_subscription" and status == 200:
+        message = "只读音色查询端点已响应；HTTP 200 不代表业务成功、音色或订阅额度已核验"
     if protocol == "minimax_video_v2" and status == 200:
         message = "MiniMax H3 V2 只读查询已通过；不代表生成权限、价格或素材输入已验收"
     if status in {401, 403}:
@@ -647,6 +655,7 @@ async def test_provider_model(
 
 
 def to_provider_out(provider: Provider) -> dict[str, Any]:
+    from app.services.audio_verification_service import model_out
     return {
         "id": provider.id,
         "name": provider.name,
@@ -659,7 +668,7 @@ def to_provider_out(provider: Provider) -> dict[str, Any]:
         "enabled": provider.enabled,
         "is_builtin": is_builtin_provider(provider),
         "created_by": provider.created_by,
-        "models": provider.models,
+        "models": [model_out(provider, model) for model in provider.models],
         "created_at": provider.created_at,
         "updated_at": provider.updated_at,
     }

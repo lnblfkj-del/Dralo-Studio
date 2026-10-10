@@ -25,6 +25,13 @@ def create_provider_adapter(provider: Provider, api_key: str, model=None):
         "timeout_seconds": provider.timeout_seconds,
         "proxy_url": provider.proxy_url,
     }
+    from app.providers.audio_contracts import AUDIO_PROTOCOLS
+    if protocol in AUDIO_PROTOCOLS:
+        from app.providers.audio_transport import NativeAudioProvider
+        return NativeAudioProvider(protocol=protocol, **options)
+    if protocol in {"meaicc_video", "meaicc_video_images"}:
+        from app.providers.meaicc_video import MeaiccVideoProvider
+        return MeaiccVideoProvider(image_mode=protocol == "meaicc_video_images", **options)
     if protocol == "newapi":
         from app.providers.newapi import NewAPIProvider
         return NewAPIProvider(**options)

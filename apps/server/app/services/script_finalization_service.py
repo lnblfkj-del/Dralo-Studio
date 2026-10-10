@@ -95,8 +95,15 @@ async def get_project_readiness(
             "code": "non_sequential_numbers",
             "message": "分集编号必须从 1 开始连续排列且不能重复。",
         })
+    from app.services.screenplay_preflight import episode_review, project_catalog
+    catalog = await project_catalog(session, project.id)
     for episode in episodes:
         state = _episode_status(episode)
+        source_review = await episode_review(session, episode, catalog=catalog)
+        if source_review["blocking"]:
+            issues.append({"episode_id": episode.id, "episode_number": episode.number,
+                           "code": "screenplay_source_ambiguous",
+                           "message": f"第 {episode.number} 集：" + source_review["errors"][0]["message"]})
         rows.append({
             "episode_id": episode.id,
             "number": episode.number,
@@ -149,7 +156,7 @@ async def get_project_readiness(
     )
     can_confirm = not outline_pending and bool(episodes) and numbers == list(range(1, len(episodes) + 1)) and all(
         row["status"] not in {"missing_script", "missing_duration"} for row in rows
-    ) and not continuity_blocked
+    ) and not continuity_blocked and not any(issue["code"] == "screenplay_source_ambiguous" for issue in issues)
     confirmed_count = sum(row["status"] == "confirmed" for row in rows)
     finalization = dict((project.creation_settings or {}).get("script_finalization") or {})
     has_stale = (
@@ -239,7 +246,7 @@ async def finalize_project_scripts(
     readiness = await get_project_readiness(session, project)
     continuity_issue = next((
         issue for issue in readiness["issues"]
-        if issue["code"] in {"continuity_conflict", "continuity_stale"}
+        if issue["code"] in {"continuity_conflict", "continuity_stale", "screenplay_source_ambiguous"}
     ), None)
     if continuity_issue is not None:
         raise ConflictError(f"剧本一致性尚未通过: {continuity_issue['message']}")

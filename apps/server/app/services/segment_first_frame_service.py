@@ -187,6 +187,8 @@ async def _prepare_batch(
     if production is None or production.active_plan_id is None:
         raise ConflictError("请先建立本集片段计划")
     plan = await session.get(EpisodeProductionPlan, production.active_plan_id)
+    if plan and plan.source_type == "content_frozen":
+        raise ConflictError("首帧引用已随片段计划冻结，请在整集规划中显式选择素材，不得自动替换")
     ordered_ids = list(dict.fromkeys(segment_ids))
     segments = list((await session.scalars(
         select(VideoSegment).where(

@@ -36,6 +36,11 @@ async def save_script(session: AsyncSession, episode: Episode, script: str | Non
         from app.services.script_finalization_service import invalidate_script_dependents
 
         await invalidate_script_dependents(session, episode, expected)
+        from app.services.screenplay_preflight import episode_review
+        review = await episode_review(session, episode)
+        if review["blocking"]:
+            episode.continuity_review_status = "warning"
+            episode.continuity_review_reason = "正文已保存，确认前请核对：" + review["errors"][0]["message"]
     return episode
 
 

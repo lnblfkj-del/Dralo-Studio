@@ -87,6 +87,9 @@ async def _resolve_agent_execution(
     for item in bound_skills:
         prompt_parts.append(f"已绑定 Skill {item.name}（{item.key}，V{item.version}）：{item.instruction}")
     prompt_parts.append(creation_contract(surface))
+    from app.services.screenplay_format import SURFACES, VERSION
+    if surface in SURFACES:
+        execution["screenplay_format_version"] = VERSION
     return model, execution, "\n".join(prompt_parts)
 
 

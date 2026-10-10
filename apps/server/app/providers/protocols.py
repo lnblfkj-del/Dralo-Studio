@@ -5,8 +5,23 @@ from urllib.parse import urlsplit, urlunsplit
 from app.core.errors import ConflictError
 from app.providers.toapis import is_toapis
 from app.providers.video_contracts import VIDEO_CONTRACTS
+from app.providers.audio_contracts import AUDIO_PROTOCOLS, validate_audio_model
 
 PROTOCOL_CATALOG = [
+    {"id": "stepfun_tts", "name": "StepFun 原生配音", "model_types": ["tts"], "default_path": "/v1",
+     "note": "预设音色、MP3；最多 1000 字符。3 / 2.5 TTS 支持 instruction；括号内容需先核对。音色权限须单独验收。"},
+    {"id": "stepfun_music", "name": "StepFun 原生纯音乐（待实测）", "model_types": ["audio"], "default_path": "/v1",
+     "note": "独立 submit/query，纯器乐；无法精确指定时长。画布及持久查询/保存恢复已接入，真实媒体验收及资产库入口待完成。"},
+    {"id": "minimax_audio_subscription", "name": "MiniMax Audio API Subscription（配音）", "model_types": ["tts"], "default_path": "/v1",
+     "note": "独立 t2a_v2、Bearer 鉴权、预设音色和 MP3 Hex 输出；订阅是额度，不等于免费或音乐权限，不使用 Coding Plan 密钥。"},
+    {"id": "elevenlabs_tts", "name": "ElevenLabs API Subscription（配音）", "model_types": ["tts"], "default_path": "/v1",
+     "note": "独立 text-to-speech/音色ID，xi-api-key 鉴权，MP3 44.1kHz/128kbps；按账户额度及音色权限计费，不使用 OpenAI 兼容鉴权。"},
+    {"id": "elevenlabs_music", "name": "ElevenLabs API Subscription（纯音乐，待实测）", "model_types": ["audio"], "default_path": "/v1",
+     "note": "独立 /music，强制器乐；长度 3–600 秒，账户须有 API 权限。画布及保存恢复已接入，真实媒体验收及资产库入口待完成。"},
+    {"id": "meaicc_video_images", "name": "MEAICC 图生／参考图（待实测）", "model_types": ["video"], "default_path": "/v1",
+     "note": "PNG/JPEG 经渠道预签名上传，至少 300×300，单图 10 MB；首尾帧或普通参考图最多共 9 张，不混用。参考音视频尚未开放。"},
+    {"id": "meaicc_video", "name": "MEAICC 视频（文生）", "model_types": ["video"], "default_path": "/v1",
+     "note": "独立 JSON /videos；mx-h3 768p、sd-2-c4 720p，4–15 秒。此协议仅文生，带图请选择独立图生协议；配乐通过提示词约束。"},
     {"id": "minimax_video_v2", "name": "MiniMax H3 原生视频 V2", "model_types": ["video"], "default_path": "",
      "note": "官方 /v2/video_generation 协议；当前仅开放只读连通检查和模型登记，付费生成需完成素材公网地址、价格和提示词验收。"},
     {"id": "jimeng_video_t2v", "name": "即梦原生 3.0 文生（720p）", "model_types": ["video"], "default_path": "",
@@ -51,6 +66,19 @@ def effective_base_url(provider, model=None):
     parsed = urlsplit(raw)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ConflictError("Base URL 只允许 HTTP(S) 服务地址，不得包含凭证、查询参数或片段")
+    protocol = effective_protocol(provider, model)
+    if protocol in AUDIO_PROTOCOLS:
+        hosts = ({"api.stepfun.com"} if protocol.startswith("stepfun_") else
+                 {"api.minimax.io", "api.minimax.cn"} if protocol == "minimax_audio_subscription" else
+                 {"api.elevenlabs.io", "api.us.elevenlabs.io", "api.eu.residency.elevenlabs.io",
+                  "api.in.residency.elevenlabs.io", "api.sg.residency.elevenlabs.io"})
+        if parsed.scheme != "https" or parsed.hostname not in hosts or parsed.path not in {"", "/v1"} or parsed.port not in (None, 443):
+            raise ConflictError("原生音频请填写对应官方 HTTPS 根地址或 /v1；网关、订阅计划其他前缀和具体端点不能混用")
+        return urlunsplit((parsed.scheme, parsed.netloc, "/v1", "", ""))
+    if effective_protocol(provider, model) in {"meaicc_video", "meaicc_video_images"}:
+        if parsed.scheme != "https" or parsed.hostname != "api.meaicc.com" or parsed.path not in {"", "/v1"} or parsed.port not in (None, 443):
+            raise ConflictError("MEAICC 视频请使用 https://api.meaicc.com 或 https://api.meaicc.com/v1")
+        return "https://api.meaicc.com/v1"
     if effective_protocol(provider, model) == "minimax_video_v2":
         if parsed.scheme != "https" or parsed.hostname not in {"api.minimax.cn", "api.minimax.io"} or parsed.path or parsed.port not in (None, 443):
             raise ConflictError("MiniMax H3 原生协议请使用 https://api.minimax.cn 根地址，不带 /v1、/v2 或其他路径")
@@ -82,6 +110,10 @@ def validate_protocol_type(protocol, model_type):
 
 
 def validate_model_protocol(provider, model, *, configuration=False):
+    if effective_protocol(provider, model) in AUDIO_PROTOCOLS:
+        validate_audio_model(effective_protocol(provider, model), model.model_id)
+    if effective_protocol(provider, model) in {"meaicc_video", "meaicc_video_images"} and model.model_id not in {"mx-h3", "sd-2-c4"}:
+        raise ConflictError("MEAICC 当前只适配 mx-h3 和 sd-2-c4")
     if effective_protocol(provider, model) == "minimax_video_v2" and model.model_id not in {"MiniMax-H3", "MiniMax-H3-Max"}:
         raise ConflictError("MiniMax V2 视频协议只适配官方 MiniMax-H3 或 MiniMax-H3-Max 模型 ID")
     if effective_protocol(provider, model) == "kling_video_multi_image" and model.model_id != "kling-v1-6":
@@ -105,6 +137,10 @@ def execution_contract(provider, model):
                 "protocol": effective_protocol(provider, model), "base_url": effective_base_url(provider, model)}
     if model.model_type == "video" and contract["protocol"] in VIDEO_CONTRACTS:
         contract["video_protocol_version"] = VIDEO_CONTRACTS[contract["protocol"]]
+    if contract["protocol"] in AUDIO_PROTOCOLS:
+        contract["audio_protocol_version"] = AUDIO_PROTOCOLS[contract["protocol"]]["version"]
+        from app.services.audio_verification_service import config_fingerprint
+        contract["audio_account_fingerprint"] = config_fingerprint(provider, model)
     return contract
 
 

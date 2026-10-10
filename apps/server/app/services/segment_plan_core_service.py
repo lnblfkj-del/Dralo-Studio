@@ -1,8 +1,8 @@
-"""Core plan access, reference validation and legacy migration."""
+"""Core plan access, reference validation and candidate selection."""
 
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError, ValidationError
@@ -16,9 +16,7 @@ from app.models import (
     Scene,
     SegmentVideoVersion,
     Shot,
-    ShotVideoVersion,
     VideoSegment,
-    VideoSegmentShot,
 )
 from app.services import asset_service
 from app.services.asset_binding_service import binding_role, resolve_asset_binding
@@ -165,6 +163,8 @@ async def get_active_plan(session: AsyncSession, episode: Episode) -> dict[str, 
     plan = await session.get(EpisodeProductionPlan, production.active_plan_id)
     if plan is None or plan.episode_id != episode.id:
         raise NotFoundError("本集片段生产计划不存在")
+    if plan.source_type == "legacy" or plan.status == "compatibility":
+        raise ConflictError("旧兼容计划已停用，请重新完成整集规划并启用到制作台")
     return await serialize_plan(session, plan)
 
 
@@ -225,144 +225,3 @@ async def select_segment_video_version(
     return version
 
 
-async def initialize_legacy_plan(session: AsyncSession, episode: Episode) -> dict[str, Any]:
-    """为迁移后新增的旧结构数据显式建立一分镜一片段兼容计划。"""
-    production = await _production(session, episode)
-    if production.active_plan_id is not None:
-        plan = await session.get(EpisodeProductionPlan, production.active_plan_id)
-        if plan is not None:
-            return await serialize_plan(session, plan)
-    shots = await _episode_shots(session, episode.id)
-    if not shots:
-        raise ConflictError("请先完成场景与分镜拆解，再建立片段计划")
-    durations = [float(shot.duration or 4) for shot in shots]
-    plan = EpisodeProductionPlan(
-        episode_id=episode.id,
-        owner_id=episode.owner_id,
-        version=1,
-        source_type="legacy",
-        status="compatibility",
-        source_script_revision=episode.script_revision,
-        model_capability_snapshot={},
-        parameters={"source": "legacy_shot_video"},
-        total_timeline_duration=sum(durations),
-        total_generation_duration=sum(durations),
-    )
-    session.add(plan)
-    await session.flush()
-    production.active_plan_id = plan.id
-    for order, (shot, duration) in enumerate(zip(shots, durations, strict=True), start=1):
-        old_versions = list(
-            (
-                await session.scalars(
-                    select(ShotVideoVersion)
-                    .where(ShotVideoVersion.shot_id == shot.id)
-                    .order_by(ShotVideoVersion.version)
-                )
-            ).all()
-        )
-        segment = VideoSegment(
-            plan_id=plan.id,
-            episode_id=episode.id,
-            order=order,
-            lineage_key=f"legacy-segment-{shot.id}",
-            parent_lineage_keys=[],
-            title=f"片段 {order:02d}",
-            generation_duration=duration,
-            timeline_duration=duration,
-            prompt=shot.prompt or shot.action or "待补充片段提示词",
-            negative_prompt=shot.negative_prompt,
-            parameters={"legacy_compatibility": True},
-            refs=shot.refs or {},
-            status="ready" if any(item.is_final for item in old_versions) else shot.status,
-        )
-        session.add(segment)
-        await session.flush()
-        session.add(
-            VideoSegmentShot(
-                segment_id=segment.id,
-                shot_id=shot.id,
-                order=1,
-                start_time=0,
-                end_time=duration,
-            )
-        )
-        for old in old_versions:
-            session.add(
-                SegmentVideoVersion(
-                    segment_id=segment.id,
-                    media_file_id=old.media_file_id,
-                    source_job_id=old.source_job_id,
-                    legacy_shot_video_version_id=old.id,
-                    version=old.version,
-                    prompt=old.prompt,
-                    negative_prompt=old.negative_prompt,
-                    parameters=old.parameters or {},
-                    is_final=old.is_final,
-                )
-            )
-    await session.flush()
-    return await serialize_plan(session, plan)
-
-
-async def mirror_legacy_shot_version(
-    session: AsyncSession, shot: Shot, version: ShotVideoVersion
-) -> SegmentVideoVersion | None:
-    """Keep compatibility plans current while E5 has not switched job targets."""
-    row = (
-        await session.execute(
-            select(VideoSegment, EpisodeProductionPlan)
-            .join(VideoSegmentShot, VideoSegmentShot.segment_id == VideoSegment.id)
-            .join(EpisodeProductionPlan, EpisodeProductionPlan.id == VideoSegment.plan_id)
-            .join(
-                EpisodeProduction,
-                EpisodeProduction.active_plan_id == EpisodeProductionPlan.id,
-            )
-            .where(
-                VideoSegmentShot.shot_id == shot.id,
-                EpisodeProductionPlan.status == "compatibility",
-            )
-        )
-    ).one_or_none()
-    if row is None:
-        return None
-    segment, _plan = row
-    link_count = int(
-        await session.scalar(
-            select(func.count(VideoSegmentShot.id)).where(VideoSegmentShot.segment_id == segment.id)
-        )
-        or 0
-    )
-    if link_count != 1:
-        return None
-    mirrored = await session.scalar(
-        select(SegmentVideoVersion).where(
-            SegmentVideoVersion.legacy_shot_video_version_id == version.id
-        )
-    )
-    if mirrored is None:
-        mirrored = SegmentVideoVersion(
-            segment_id=segment.id,
-            media_file_id=version.media_file_id,
-            source_job_id=version.source_job_id,
-            legacy_shot_video_version_id=version.id,
-            version=version.version,
-            prompt=version.prompt,
-            negative_prompt=version.negative_prompt,
-            parameters=version.parameters or {},
-            is_final=version.is_final,
-        )
-        session.add(mirrored)
-    if version.is_final:
-        await session.execute(
-            update(SegmentVideoVersion)
-            .where(
-                SegmentVideoVersion.segment_id == segment.id,
-                SegmentVideoVersion.legacy_shot_video_version_id != version.id,
-            )
-            .values(is_final=False)
-        )
-        mirrored.is_final = True
-        segment.status = "ready"
-    await session.flush()
-    return mirrored

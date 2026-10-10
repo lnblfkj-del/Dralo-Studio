@@ -4,7 +4,7 @@ import json
 from hashlib import sha256
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
@@ -29,6 +29,21 @@ from app.services.job_video_batch_single import (
 )
 from app.services.job_video_plan_service import build_episode_video_plan
 from app.services.team_access import owner_scope
+
+
+async def _lock_attempt_scope(session, owner_id, project_id, episode_id):
+    active_plan = await session.scalar(select(EpisodeProductionPlan).join(
+        EpisodeProduction, EpisodeProduction.active_plan_id == EpisodeProductionPlan.id
+    ).join(Episode, Episode.id == EpisodeProduction.episode_id).where(
+        Episode.id == episode_id, Episode.project_id == project_id, owner_scope(Episode.owner_id, owner_id)
+    ))
+    if active_plan and active_plan.source_type == "content_frozen":
+        from app.services import episode_planning_workflow as workflow
+
+        await workflow._lock_parent(session, active_plan.parameters["planning_run_id"])
+    await session.execute(update(Episode).where(
+        Episode.id == episode_id, Episode.project_id == project_id, owner_scope(Episode.owner_id, owner_id)
+    ).values(number=Episode.number))
 
 
 async def create_episode_segment_jobs(
@@ -231,6 +246,7 @@ async def start_segment_video_attempt(
     expected_video_prompt_fingerprint: str | None = None,
 ) -> Job:
     """Create one idempotent candidate attempt without touching other segments."""
+    await _lock_attempt_scope(session, owner_id, project_id, episode_id)
     request_fingerprint = sha256(
         json.dumps(
             {
@@ -435,6 +451,7 @@ async def start_episode_video_batch(
     expected_plan_id: int | None = None,
     expected_plan_revision: int | None = None,
 ) -> Job:
+    await _lock_attempt_scope(session, owner_id, project_id, episode_id)
     request_fingerprint = sha256(
         json.dumps(
             {

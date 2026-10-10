@@ -275,11 +275,10 @@ async def reprocess_job_response(
     if not allowed(user, "tasks.retry"):
         raise PermissionDeniedError("无本地重新处理任务结果的权限")
     job = await job_service.get_job(session, job_id, user.id)
-    if job.target_type in {"episode_director_pipeline", "episode_director_outline", "episode_director_segment"}:
-        from app.services.director_recovery_service import recover_saved
-        parent = await recover_saved(session, job, user.id)
-        await session.commit()
-        return JobOut.model_validate(parent)
+    from app.core.errors import ConflictError
+    from app.services.episode_planning_workflow import TARGETS
+    if job.target_type in TARGETS:
+        raise ConflictError("请使用规划任务的范围恢复入口，先恢复保存结果，再确认新增调用费用")
     await job_text_response_service.reprocess_preserved_response(
         session, job, user.id,
         **(payload.model_dump() if payload is not None else {}),
@@ -301,51 +300,16 @@ async def confirm_job_recall(
     if not allowed(user, "tasks.retry"):
         raise PermissionDeniedError("无确认重新调用模型的权限")
     job = await job_service.get_job(session, job_id, user.id)
-    if job.target_type in {"episode_director_pipeline", "episode_director_outline", "episode_director_segment"}:
-        from app.services.episode_director_pipeline_service import confirm_recall
+    from app.core.retired_workflows import require_active_workflow
+    from app.services.creation_breakdown_recovery import confirm_asset_breakdown_recall
 
-        parent = await confirm_recall(
-            session, job, actor_id=user.id,
-            channel_checked=payload.channel_checked, reason=payload.reason,
-            confirmation_token=payload.confirmation_token,
-            accept_unknown_charge=payload.accept_unknown_charge,
-        )
-    else:
-        from app.services.creation_breakdown_recovery import (
-            confirm_asset_breakdown_recall,
-        )
-
-        parent = await confirm_asset_breakdown_recall(
-            session, job, actor_id=user.id,
-            channel_checked=payload.channel_checked, reason=payload.reason,
-        )
+    require_active_workflow(job.target_type)
+    parent = await confirm_asset_breakdown_recall(
+        session, job, actor_id=user.id,
+        channel_checked=payload.channel_checked, reason=payload.reason,
+    )
     await session.commit()
     return JobOut.model_validate(parent)
-
-
-@router.get("/{job_id}/director-recovery")
-async def director_recovery_state(job_id: int, session: SessionDep, user: CurrentUser):
-    from app.services.director_recovery_service import recovery_state
-    from app.services.permission_service import allowed
-    job = await job_service.get_job(session, job_id, user.id)
-    state = await recovery_state(session, job, user.id)
-    if not allowed(user, "tasks.retry"):
-        state.update(can_retry=False, confirmation_token=None, block_reason="无恢复导演任务的权限")
-    return state
-
-
-@router.post("/{job_id}/director-recovery")
-async def recover_director_responses(job_id: int, session: SessionDep, user: CurrentUser):
-    from app.core.errors import PermissionDeniedError
-    from app.services.permission_service import allowed
-    from app.services.director_recovery_service import recover_saved, recovery_state
-    if not allowed(user, "tasks.retry"):
-        raise PermissionDeniedError("无恢复导演任务的权限")
-    job = await job_service.get_job(session, job_id, user.id)
-    parent = await recover_saved(session, job, user.id)
-    await session.commit()
-    state = await recovery_state(session, parent, user.id)
-    return {"job": JobOut.model_validate(parent), "recovery": state}
 
 
 @router.post("/{job_id}/pause", response_model=JobOut)

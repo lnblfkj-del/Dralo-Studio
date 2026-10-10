@@ -19,7 +19,6 @@ from app.core.errors import (
     GenerationFailedError,
     ProviderRoutingError,
     RemoteJobDeferredError,
-    ValidationError,
 )
 from app.core.logging import get_logger, setup_logging
 from app.core.provider_crypto import decrypt_api_key
@@ -48,7 +47,6 @@ from app.services import (
     canvas_agent_service,
     canvas_service,
     creation_service,
-    episode_director_service,
     job_service,
     market_research_service,
     media_service,
@@ -116,6 +114,10 @@ async def _execute_scoped_job(job_id: int, worker_id: str) -> None:
         if job and job.job_type == JOB_TYPE_EXPORT:
             await _execute_export_job(job_id, worker_id)
             return
+        if job and job.job_type in {"tts", "audio"}:
+            from app.jobs import audio_task
+            await audio_task.execute(job_id, worker_id)
+            return
         await _execute_job(job_id, worker_id)
     except AppError as exc:
         # Preparation (model lookup/decryption/reference loading) must also reach
@@ -156,6 +158,13 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
         if not claimed:
             await session.rollback()
             return
+        from app.core.retired_workflows import WorkflowRetiredError, require_active_workflow
+        try:
+            require_active_workflow(job.target_type)
+        except WorkflowRetiredError as exc:
+            await job_service.mark_failed(session, job_id, worker_id, exc.code, exc.message)
+            await session.commit()
+            return
         if job.started_at is not None and job.created_at is not None:
             queue_wait_ms = max(
                 0, round((job.started_at - job.created_at).total_seconds() * 1000)
@@ -168,10 +177,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             )
             await session.commit()
             return
-        if job.target_type in {"episode_director_outline", "episode_director_segment"}:
-            from app.services.director_recovery_service import validate_execution
+        if job.target_type in {"episode_content_analysis", "episode_content_detail"}:
+            from app.services.episode_planning_workflow import validate_execution
             try:
-                await validate_execution(session, job, model, provider)
+                await validate_execution(session, job)
             except ConflictError as exc:
                 await job_service.mark_failed(session, job_id, worker_id, "CONFLICT", exc.message)
                 await session.commit()
@@ -185,15 +194,19 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
         if not provider.enabled or not model.enabled:
             raise GenerationFailedError("执行前模型或渠道已停用")
         job.payload = {**job.payload, "protocol_contract": contract}
-        if job.job_type == "tts" and job.payload.get("media_submission", {}).get("started"):
-            await job_service.mark_failed(
-                session, job_id, worker_id, "CONFLICT",
-                "配音提交结果不确定，请先核对渠道记录；系统不会自动重发",
-            )
-            await session.commit()
-            return
+        if job.job_type in {"tts", "audio"}:
+            raise GenerationFailedError("音频任务必须使用持久音频执行器，未提交请求")
         if job.job_type == JOB_TYPE_VIDEO:
             from app.services.video_prompt_freeze_service import assert_frozen_video_prompt
+
+            if job.payload.get("content_planning_run_id"):
+                from app.services.episode_planning_video_production import validate_execution
+                try:
+                    await validate_execution(session, job)
+                except AppError as exc:
+                    await job_service.mark_failed(session, job_id, worker_id, exc.code, exc.message)
+                    await session.commit()
+                    return
 
             if effective_protocol(provider, model) == "minimax_video_v2":
                 from app.services.h3_video_job_service import assert_h3_video_job
@@ -282,7 +295,6 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
     billing_not_submitted = False
     pulse = asyncio.create_task(heartbeat(job_id, worker_id))
     try:
-        usage_observed = False
         from app.services.media_reservation_service import reserve
         await reserve(job_id, worker_id)
         if job.target_type == market_research_service.TARGET_MARKET_RESEARCH:
@@ -311,19 +323,6 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 reference_images=reference_images,
                 parameters={key: value for key, value in parameters.items() if key not in CANVAS_INTERNAL_PARAMETER_KEYS},
             )
-        elif job.job_type == "tts":
-            from app.providers.speech import generate_speech, speech_parameters
-            speech = speech_parameters(model, parameters, prompt)
-            if effective_protocol(provider, model) != "openai_compatible" or job.target_type != "canvas_node":
-                raise GenerationFailedError("该配音任务没有已适配的画布输出路径")
-            async with SessionLocal() as submit_session:
-                current = await submit_session.get(Job, job_id)
-                if not current or current.worker_id != worker_id or current.status in job_service.TERMINAL_STATUSES:
-                    return
-                current.payload = {**current.payload, "media_submission": {"started": True, "model": model_id}}
-                await submit_session.commit()
-            call_id = await billing_service.begin(job_id, worker_id, f"job:{job_id}:tts")
-            result = await generate_speech(adapter, model=model_id, prompt=prompt, parameters=speech)
         elif job.job_type == JOB_TYPE_VIDEO:
             toapis = is_toapis_model(provider, model)
             h3_video = effective_protocol(provider, model) == "minimax_video_v2"
@@ -433,8 +432,9 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                             worker_id,
                             progress=video_status.progress,
                             delay_seconds=max(
-                                5, settings.job_poll_interval_seconds
-                            ) if toapis else settings.job_poll_interval_seconds,
+                                getattr(adapter, "poll_interval_seconds", 0),
+                                5 if toapis else 0, settings.job_poll_interval_seconds,
+                            ),
                         )
                         await status_session.commit()
                     if released:
@@ -444,7 +444,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                     await status_session.execute(update(Job).where(Job.id == job_id, Job.worker_id == worker_id,
                         Job.status.not_in(job_service.TERMINAL_STATUSES)).values(progress=video_status.progress))
                     await status_session.commit()
-                await asyncio.sleep(max(5, settings.job_poll_interval_seconds) if toapis else settings.job_poll_interval_seconds)
+                await asyncio.sleep(max(getattr(adapter, "poll_interval_seconds", 0),
+                                        5 if toapis else 0, settings.job_poll_interval_seconds))
             async with SessionLocal() as status_session:
                 downloading = await job_service.mark_downloading(
                     status_session, job_id, worker_id
@@ -473,8 +474,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             if not job.payload.get("response_protocol") and (
                 job.target_type in creation_service.CREATION_ARTIFACT_TYPES
                 or job.target_type == market_research_service.TARGET_MARKET_RESEARCH
-                or job.target_type == episode_director_service.TARGET_EPISODE_DIRECTOR
-                or job.target_type in {"episode_director_outline", "episode_director_segment"}
+                or job.target_type in {"episode_content_analysis", "episode_content_detail"}
             ):
                 text_parameters.setdefault("response_format", {"type": "json_object"})
             from app.services.director_output_transport import worker_parameters
@@ -590,41 +590,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 streaming=bool(result.get("streaming")),
                 first_chunk_ms=first_chunk_ms,
             )
-            if job.target_type == episode_director_service.TARGET_EPISODE_DIRECTOR:
-                await billing_service.observe(call_id, billing_service.usage_meter(result))
-                usage_observed = True
-                text_model_policy_service.ensure_complete_result(
-                    result, policy=frozen_text_policy,
-                )
-                try:
-                    episode_director_service.validate_model_result(job.payload or {}, result)
-                    result["_director_repair_attempted"] = False
-                except ValidationError as first_error:
-                    repair = episode_director_service.repair_prompt(job.payload or {}, result, first_error.message, first_error.details)
-                    call_id = await billing_service.begin(job_id, worker_id, f"job:{job_id}:text-repair:{uuid4().hex}")
-                    await job_text_response_service.mark_submission_started(job_id, worker_id, call_id, model_id)
-                    provider_clock_started = time.perf_counter()
-                    result = await text_model_policy_service.execute(
-                        adapter,
-                        model=model_id,
-                        prompt=repair,
-                        parameters=text_parameters,
-                        policy=frozen_text_policy,
-                    )
-                    provider_request_ms += round((time.perf_counter() - provider_clock_started) * 1000)
-                    await billing_service.observe(call_id, billing_service.usage_meter(result))
-                    result["_director_repair_attempted"] = True
-                    await job_text_response_service.preserve_response(job_id, worker_id, call_id, result)
-                    text_model_policy_service.ensure_complete_result(
-                        result, policy=frozen_text_policy,
-                    )
-        if not usage_observed or job.target_type != episode_director_service.TARGET_EPISODE_DIRECTOR:
-            meter = billing_service.usage_meter(result)
-            if job.job_type == "tts":
-                meter["input_chars"] = len(prompt)
-            if job.job_type == JOB_TYPE_VIDEO:
-                meter["external_task_id"] = handle.id
-            await billing_service.observe(call_id, meter)
+        meter = billing_service.usage_meter(result)
+        if job.job_type == JOB_TYPE_VIDEO:
+            meter["external_task_id"] = handle.id
+        await billing_service.observe(call_id, meter)
         async with SessionLocal() as session:
             job = await session.get(Job, job_id)
             if job is None or job.worker_id != worker_id or job.status in job_service.TERMINAL_STATUSES:
@@ -662,9 +631,6 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 await canvas_agent_service.finalize_media_job(
                     session, job, persisted_result, "image"
                 )
-            elif job.job_type == "tts":
-                persisted_result = await canvas_service.finalize_audio_node_job(session, job, result)
-                await canvas_agent_service.finalize_media_job(session, job, persisted_result, "audio")
             elif job.job_type == JOB_TYPE_VIDEO:
                 video_bytes = result.get("video_bytes")
                 if not isinstance(video_bytes, bytes):

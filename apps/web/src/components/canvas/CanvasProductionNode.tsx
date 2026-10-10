@@ -8,6 +8,7 @@ import { bindCanvasEntity, editCanvasEntity, getCanvasEntityScopeImpact } from "
 import { toErrorMessage } from "@/api/client";
 import { listProviders } from "@/api/providers";
 import { mediaModels, choices, referenceRoles } from "./mediaCapabilities";
+import { audioAccountReady } from "./audioVerification";
 import { useCanvasStore, type CanvasNodePayload } from "@/stores/canvasStore";
 import type { CanvasSnapshot } from "@/types/api";
 import { CanvasNodeHeading } from "./CanvasNodeHeading";
@@ -64,7 +65,7 @@ function ProductionEditor({ id, data, close }: { id: string; data: CanvasNodePay
   const [updateScope, setUpdateScope] = useState<"" | "local" | "series">("");
   const [localTarget, setLocalTarget] = useState("");
   const providers = useQuery({queryKey: ["providers"], queryFn: listProviders});
-  const speechModels = mediaModels(providers.data ?? [], "audio").filter((m) => m.capabilities.includes("speech") && m.default_params.speech_verified === true);
+  const speechModels = mediaModels(providers.data ?? [], "audio").filter((m) => audioAccountReady(m) && m.capabilities.includes("speech") && m.default_params.speech_verified === true);
   const [reuse, setReuse] = useState(0), [confirmed, setConfirmed] = useState(false);
   const [mediaPage, setMediaPage] = useState(1), [mediaSearch, setMediaSearch] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
@@ -191,7 +192,7 @@ export function CanvasProductionNode({ id, data }: { id: string; data: CanvasNod
   const character = entityKind === "character";
   const Icon = config.icon;
   const profile = data.productionProfile;
-  const models = mediaModels(providers.data ?? [], config.kind).filter((item) => visual || item.capabilities.includes("speech") && item.default_params.speech_verified === true);
+  const models = mediaModels(providers.data ?? [], config.kind).filter((item) => visual || audioAccountReady(item) && item.capabilities.includes("speech") && item.default_params.speech_verified === true);
   const model = models.find((item) => item.id === data.providerModelId);
   const roles = visual ? referenceRoles(model, "image") : [];
   const voices = choices(model?.default_params.voices);

@@ -11,12 +11,13 @@ from app.providers.toapis import decode_image
 from app.providers.video import VideoGenerationHandle, VideoGenerationStatus
 
 
-async def download_stream(adapter, url, headers=None):
+async def download_stream(adapter, url, headers=None, *, content_types=None):
     try:
         async with outbound_client(timeout=adapter.timeout_seconds, proxy=adapter.proxy_url, follow_redirects=False) as client:
             async with client.stream("GET", url, headers=headers) as response:
                 adapter._raise_for_provider_error(response)
-                if response.headers.get("content-type", "").split(";")[0] not in {"video/mp4", "video/webm", "application/octet-stream"}:
+                accepted = content_types or {"video/mp4", "video/webm", "application/octet-stream"}
+                if response.headers.get("content-type", "").split(";")[0].strip().lower() not in accepted:
                     raise ProviderError("视频内容接口未返回视频文件")
                 chunks, total = [], 0
                 async for chunk in response.aiter_bytes():

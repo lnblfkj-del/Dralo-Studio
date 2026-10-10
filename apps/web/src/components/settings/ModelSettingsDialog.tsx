@@ -1,7 +1,7 @@
 import { TextGenerationIcon } from "@/components/ui/TextGenerationLoading";
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, LoaderCircle, Send, Trash2 } from "lucide-react";
+import { Check, LoaderCircle, Send, ShieldCheck, SlidersHorizontal, Trash2 } from "lucide-react";
 
 import { toErrorMessage } from "@/api/client";
 import * as providerApi from "@/api/providers";
@@ -9,6 +9,9 @@ import type { Provider, ProviderModel, ProviderModelType, ProviderProtocol } fro
 import { ModelBrandIcon } from "./BrandIcon";
 import { ModelPricingForm } from "./ModelPricingForm";
 import { PriceEstimate } from "./PriceEstimate";
+import { PlanningCapabilityDialog } from "./PlanningCapabilityDialog";
+import { VideoPromptCertificationDialog } from "./VideoPromptCertificationDialog";
+import { AudioVerificationDialog } from "./AudioVerificationDialog";
 import { Button, Dialog } from "@/components/ui";
 
 const TYPE_LABELS: Record<ProviderModelType, string> = {
@@ -24,6 +27,8 @@ const CAPABILITY_OPTIONS: Record<string, Array<[string, string]>> = {
   text: [["reasoning", "深度思考"]],
   image: [["text_to_image", "文生图"], ["reference_images", "参考图（需渠道支持图片编辑）"]],
   video: [["text_to_video", "文生视频"], ["image_to_video", "单图参考"], ["first_last_frame", "首尾帧"], ["multi_reference", "多图参考"], ["audio_reference", "音频参考"]],
+  tts: [["speech", "预设音色配音"]],
+  audio: [["music", "纯器乐生成"]],
 };
 
 const TEXT_POLICY_KEY = "_text_execution";
@@ -43,6 +48,12 @@ function editableDefaultParams(model: ProviderModel) {
   delete params.aspect_ratios;
   delete params.max_reference_images;
   delete params.supports_negative_prompt;
+  delete params.episode_planning_capability;
+  delete params._audio_verification;
+  if (model.model_type === "tts") {
+    for (const key of ["voices", "voice", "speech_verified", "max_input_chars"]) delete params[key];
+  }
+  if (model.model_type === "audio") delete params.music_verified;
   return params;
 }
 
@@ -67,6 +78,7 @@ export function ModelSettingsDialog({
   const protocols = useQuery({ queryKey: ["provider-protocols"], queryFn: providerApi.listProtocols });
   const [apiProtocol, setApiProtocol] = useState<ProviderProtocol | "">(model.api_protocol ?? "");
   const [apiBaseUrl, setApiBaseUrl] = useState(model.api_base_url ?? "");
+  const nativeAudio = ["stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music"].includes(apiProtocol || provider.protocol);
   const [paramsJson, setParamsJson] = useState(JSON.stringify(editableDefaultParams(model), null, 2));
   const [pricing, setPricing] = useState(model.pricing);
   const [confirmed, setConfirmed] = useState(false);
@@ -74,6 +86,12 @@ export function ModelSettingsDialog({
   const [modelIdentifier, setModelIdentifier] = useState(model.model_id);
   const [modelType, setModelType] = useState<ProviderModelType>(model.model_type);
   const [capabilities, setCapabilities] = useState<string[]>(model.capabilities);
+  const [voicesText, setVoicesText] = useState(() => Array.isArray(model.default_params.voices) ? model.default_params.voices.join("\n") : "");
+  const [speechVoice, setSpeechVoice] = useState(String(model.default_params.voice ?? ""));
+  const [speechVerified, setSpeechVerified] = useState(model.default_params.speech_verified === true);
+  const [musicVerified, setMusicVerified] = useState(model.default_params.music_verified === true);
+  const [speechLimit, setSpeechLimit] = useState(String(model.default_params.max_input_chars ?? ""));
+  const speechVoices = [...new Set(voicesText.split(/[\n,，]/).map((value) => value.trim()).filter(Boolean))];
   const [durations, setDurations] = useState(() => Array.isArray(model.default_params.durations) ? model.default_params.durations.join(", ") : "");
   const [resolutions, setResolutions] = useState(() => Array.isArray(model.default_params.resolutions) ? model.default_params.resolutions.join(", ") : "");
   const [aspectRatios, setAspectRatios] = useState(() => Array.isArray(model.default_params.aspect_ratios) ? model.default_params.aspect_ratios.join(", ") : "");
@@ -92,6 +110,9 @@ export function ModelSettingsDialog({
 
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([]);
   const [busy, setBusy] = useState(false);
+  const [planningOpen, setPlanningOpen] = useState(false);
+  const [certificationOpen, setCertificationOpen] = useState(false);
+  const [audioVerificationOpen, setAudioVerificationOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
 
@@ -115,6 +136,7 @@ export function ModelSettingsDialog({
       if (requestSeconds && idleSeconds && idleSeconds > requestSeconds) throw new Error("流式空闲超时不能超过单次调用总超时");
       const execution = Object.fromEntries(Object.entries({ max_output_tokens: outputCeiling, reasoning_effort: supportsReasoningSetting && reasoningEffort !== "auto" ? reasoningEffort : undefined, request_timeout_seconds: requestSeconds, first_byte_timeout_seconds: firstByteSeconds, stream_idle_timeout_seconds: idleSeconds }).filter(([, value]) => value !== undefined));
       const outputKey = supportsReasoningSetting ? "max_completion_tokens" : "max_tokens";
+      if (modelType === "tts" && speechVerified && (!capabilities.includes("speech") || !speechVoices.includes(speechVoice))) throw new Error("启用配音前请选择能力及已核验的默认音色");
       await providerApi.updateProviderModel(provider.id, model.id, {
         api_protocol: apiProtocol || null,
         api_base_url: apiBaseUrl.trim() || null,
@@ -124,6 +146,11 @@ export function ModelSettingsDialog({
         capabilities,
         default_params: {
           ...params,
+          ...(modelType === "audio" ? { music_verified: musicVerified } : {}),
+          ...(modelType === "tts" ? {
+            voices: speechVoices, ...(speechVoice ? { voice: speechVoice } : {}), speech_verified: speechVerified,
+            ...(speechLimit.trim() ? { max_input_chars: optionalNumber(speechLimit, "配音文本上限", 1, 100000) } : {}),
+          } : {}),
           ...(["image", "video"].includes(modelType) ? {
             aspect_ratios: aspectRatios.split(/[,，]/).map((item) => item.trim()).filter(Boolean),
             ...(maxReferences.trim() ? { max_reference_images: optionalNumber(maxReferences, "参考图数量", 0, 32) } : {}),
@@ -177,6 +204,12 @@ export function ModelSettingsDialog({
 
 
   const dialogTitle=<div className="model-dialog-title"><span><ModelBrandIcon modelId={model.model_id} providerName={provider.name} size={25} /></span><div><small>{mode === "test" ? "MODEL PLAYGROUND" : "MODEL SETTINGS"}</small><h2>{mode === "test" ? `${TYPE_LABELS[model.model_type]}${model.model_type === "text" ? "测试" : "生成验证"} · ${model.model_id}` : "编辑模型"}</h2></div></div>;
+  if (planningOpen) return <PlanningCapabilityDialog providerId={provider.id} modelId={model.id}
+    canManage={canManage} onClose={() => setPlanningOpen(false)} onSaved={onSaved} />;
+  if (certificationOpen) return <VideoPromptCertificationDialog providerId={provider.id} modelId={model.id}
+    canManage={canManage} onClose={() => setCertificationOpen(false)} onSaved={onSaved} />;
+  if (audioVerificationOpen) return <AudioVerificationDialog providerId={provider.id} modelId={model.id}
+    onClose={onClose} onSaved={onSaved} />;
   return <Dialog
     open
     className={`model-dialog ${mode === "test" ? model.model_type === "text" ? "model-test-dialog" : "model-media-guidance-dialog" : "model-edit-dialog"}`}
@@ -188,6 +221,16 @@ export function ModelSettingsDialog({
     footer={<>
       {mode === "edit" && onDelete && <Button variant="danger" className="model-dialog-delete" onClick={onDelete} icon={<Trash2 size={15} />}>删除模型</Button>}
       <span className="model-dialog-spacer" />
+      {mode === "edit" && ["tts", "audio"].includes(model.model_type) && <Button icon={<ShieldCheck size={15} />}
+        title="先保存配置，再核验当前账户；不会生成音频"
+        disabled={!canManage || busy || modelType !== model.model_type || modelIdentifier.trim() !== model.model_id || apiProtocol !== (model.api_protocol ?? "") || apiBaseUrl.trim() !== (model.api_base_url ?? "") || voicesText !== (Array.isArray(model.default_params.voices) ? model.default_params.voices.join("\n") : "") || speechVoice !== String(model.default_params.voice ?? "") || speechLimit !== String(model.default_params.max_input_chars ?? "") || JSON.stringify([...capabilities].sort()) !== JSON.stringify([...model.capabilities].sort()) || paramsJson !== JSON.stringify(editableDefaultParams(model), null, 2)}
+        onClick={() => setAudioVerificationOpen(true)}>核验音频账户</Button>}
+      {mode === "edit" && model.model_type === "video" && <Button icon={<ShieldCheck size={15} />}
+        title="管理当前已保存模型路由的提示词验收证据" disabled={!canManage || busy || modelType !== model.model_type || modelIdentifier.trim() !== model.model_id || apiProtocol !== (model.api_protocol ?? "") || apiBaseUrl.trim() !== (model.api_base_url ?? "")}
+        onClick={() => setCertificationOpen(true)}>提示词认证</Button>}
+      {mode === "edit" && model.model_type === "video" && <Button icon={<SlidersHorizontal size={15} />}
+        title="管理当前已保存模型路由的规划规格" disabled={!canManage || busy || modelType !== model.model_type || modelIdentifier.trim() !== model.model_id || apiProtocol !== (model.api_protocol ?? "") || apiBaseUrl.trim() !== (model.api_base_url ?? "")}
+        onClick={() => setPlanningOpen(true)}>规划规格</Button>}
       <Button onClick={onClose}>取消</Button>
       {mode === "edit" ? <Button variant="primary" disabled={!canManage || busy || !name.trim() || !modelIdentifier.trim() || !!protocols.data?.find((item) => item.id === (apiProtocol || provider.protocol) && !item.model_types.includes(modelType))} onClick={() => void save()} icon={busy ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}>保存</Button> : model.model_type === "text" ? <><Button disabled={!messages.length || busy} onClick={() => { setMessages([]); }}>清空对话</Button><Button variant="primary" disabled={!canManage || !provider.enabled || !model.enabled || !confirmed || busy || !prompt.trim()} onClick={() => void runTest()} icon={busy ? <TextGenerationIcon size={20} /> : <Send size={15} />}>发送</Button></> : null}
     </>}
@@ -196,15 +239,23 @@ export function ModelSettingsDialog({
       {mode === "edit" ? <div className="model-edit-form">
         <div className="model-basic-grid">
           <label><span>显示名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label>
-          <label><span>模型标识</span><input value={modelIdentifier} onChange={(event) => setModelIdentifier(event.target.value)} /></label>
+          <label><span>模型标识</span><input value={modelIdentifier} onChange={(event) => { setModelIdentifier(event.target.value); setSpeechVerified(false); setMusicVerified(false); }} /></label>
           <label><span>模型类型</span><select value={modelType} onChange={(event) => setModelType(event.target.value as ProviderModelType)}>{Object.entries(TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label><span>模型最大并发</span><input aria-label="模型最大并发" type="number" min={1} max={100} value={maxConcurrency} onChange={(event) => setMaxConcurrency(Math.max(1, Math.min(100, Number(event.target.value) || 1)))} /><small>当前有效并发 {model.effective_concurrency ?? model.max_concurrency ?? 8}；遇到 429 会自动降速，稳定后逐级恢复。</small></label>
         </div>
         {modelType === "text" && <fieldset><legend>文本输出与超时</legend><div className="model-parameter-pair"><label><span>默认输出预算（token）</span><input aria-label="默认输出预算" type="number" min={1} max={200000} value={defaultOutputTokens} onChange={(event) => setDefaultOutputTokens(event.target.value)} placeholder="留空继承渠道默认" /><small>Anthropic 文本生成必须配置；其他渠道遇输出截断时可在此调整。</small></label><label><span>单次最大输出预算（token）</span><input aria-label="单次最大输出预算" type="number" min={256} max={200000} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="留空不设模型级上限" /><small>业务请求不能突破此上限。</small></label></div><label><span>思考等级</span><select aria-label="思考等级" value={supportsReasoningSetting ? reasoningEffort : "auto"} disabled={!supportsReasoningSetting} onChange={(event) => setReasoningEffort(event.target.value)}><option value="auto">自动（由模型决定）</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select><small>{supportsReasoningSetting ? "仅在渠道支持时发送；自动模式不发送等级参数。" : "仅支持思考能力的 OpenAI 兼容文本模型可手动设置。"}</small></label><div className="model-parameter-pair"><label><span>单次调用总超时（秒）</span><input aria-label="单次调用总超时" type="number" min={5} max={3600} value={requestTimeout} onChange={(event) => setRequestTimeout(event.target.value)} placeholder={`继承渠道 ${provider.timeout_seconds} 秒`} /></label><label><span>首响应等待（秒）</span><input aria-label="首响应等待" type="number" min={5} max={600} value={firstByteTimeout} onChange={(event) => setFirstByteTimeout(event.target.value)} placeholder="继承执行管理" /></label></div><label><span>流式空闲超时（秒）</span><input aria-label="流式空闲超时" type="number" min={5} max={900} value={streamIdleTimeout} onChange={(event) => setStreamIdleTimeout(event.target.value)} placeholder="继承执行管理" /><small>仅文本流式响应生效；图片、视频和语音仍使用各自异步任务期限。</small></label></fieldset>}
         {model.rate_limit_until && <div className="settings-notice">模型正在冷却至 {new Date(model.rate_limit_until).toLocaleString("zh-CN")}，累计限流 {model.rate_limit_hits ?? 0} 次。</div>}
-        <label className="model-compact-select-field"><span>模型接口协议</span><select aria-label="模型接口协议" value={apiProtocol} onChange={(event) => setApiProtocol(event.target.value as ProviderProtocol | "")}><option value="">继承渠道默认协议</option>{protocols.data?.map((item) => <option key={item.id} value={item.id} disabled={!item.model_types.includes(modelType)}>{item.name}</option>)}</select><small>{protocols.data?.find((item) => item.id === (apiProtocol || provider.protocol))?.note}</small></label>
-        <label><span>模型 Base URL（可选）</span><input aria-label="模型 Base URL" value={apiBaseUrl} onChange={(event) => setApiBaseUrl(event.target.value)} placeholder={`留空继承 ${provider.base_url}`} /><small>适用于同一密钥下不同协议前缀，不填写具体生成端点。</small></label>
+        <label className="model-compact-select-field"><span>模型接口协议</span><select aria-label="模型接口协议" value={apiProtocol} onChange={(event) => { setApiProtocol(event.target.value as ProviderProtocol | ""); setSpeechVerified(false); setMusicVerified(false); }}><option value="">继承渠道默认协议</option>{protocols.data?.map((item) => <option key={item.id} value={item.id} disabled={!item.model_types.includes(modelType)}>{item.name}</option>)}</select><small>{protocols.data?.find((item) => item.id === (apiProtocol || provider.protocol))?.note}</small></label>
+        <label><span>模型 Base URL（可选）</span><input aria-label="模型 Base URL" value={apiBaseUrl} onChange={(event) => { setApiBaseUrl(event.target.value); setSpeechVerified(false); setMusicVerified(false); }} placeholder={`留空继承 ${provider.base_url}`} /><small>适用于同一密钥下不同协议前缀，不填写具体生成端点。</small></label>
+        {modelType === "audio" && <fieldset className="model-speech-fields"><legend>音乐权限</legend>{nativeAudio ? <p>保存配置后使用“核验音频账户”，不以手动勾选代替账户核验。</p> : <label className="model-speech-attestation"><input type="checkbox" aria-label="音乐接口已核验" checked={musicVerified} onChange={event => setMusicVerified(event.target.checked)} /><span>已核验纯器乐接口及账户权限</span></label>}</fieldset>}
         {!!CAPABILITY_OPTIONS[modelType]?.length && <fieldset><legend>{modelType === "video" ? "视频模式" : modelType === "image" ? "图像模式" : "模型能力"}</legend><div className="model-capability-grid">{CAPABILITY_OPTIONS[modelType].map(([value, label]) => <label key={value}><input type="checkbox" checked={capabilities.includes(value)} onChange={() => toggleCapability(value)} /><span>{label}</span></label>)}</div></fieldset>}
+        {modelType === "tts" && <fieldset className="model-speech-fields"><legend>配音音色</legend>
+          <label><span>音色 ID 清单</span><textarea aria-label="配音音色 ID" value={voicesText} onChange={(event) => { setVoicesText(event.target.value); setSpeechVerified(false); }} /></label>
+          <div className="model-parameter-pair"><label><span>默认音色</span><select aria-label="配音默认音色" value={speechVoices.includes(speechVoice) ? speechVoice : ""} onChange={(event) => { setSpeechVoice(event.target.value); setSpeechVerified(false); }}><option value="">请选择</option>{speechVoices.map((voice) => <option key={voice} value={voice}>{voice}</option>)}</select></label>
+          <label><span>配音文本上限（字符）</span><input aria-label="配音文本上限" type="number" min={1} max={100000} value={speechLimit} onChange={(event) => setSpeechLimit(event.target.value)} placeholder="继承协议上限" /></label></div>
+          {nativeAudio ? <p>保存配置后使用“核验音频账户”，核验结果绑定当前音色和模型。</p> : <label className="model-speech-attestation"><input type="checkbox" aria-label="配音音色已核验" checked={speechVerified} onChange={(event) => setSpeechVerified(event.target.checked)} /><span>已核验当前模型、接口及音色权限</span></label>}
+          <small>订阅额度与实际费用以渠道为准，未知价格不等于免费。</small>
+        </fieldset>}
         {modelType === "video" && <div className="model-parameter-pair"><label><span>支持时长（秒，逗号分隔）</span><input value={durations} onChange={(event) => setDurations(event.target.value)} placeholder="5, 10, 15" /></label><label><span>支持分辨率（逗号分隔）</span><input value={resolutions} onChange={(event) => setResolutions(event.target.value)} placeholder="720p, 1080p" /></label></div>}
         {modelType === "image" && <label><span>支持分辨率（逗号分隔）</span><input value={resolutions} onChange={(event) => setResolutions(event.target.value)} placeholder="1K, 2K, 4K" /></label>}
         {["image", "video"].includes(modelType) && <div className="model-parameter-pair"><label><span>支持画幅比例</span><input aria-label="支持画幅比例" value={aspectRatios} onChange={(event) => setAspectRatios(event.target.value)} placeholder="16:9, 9:16, 1:1" /></label><label><span>参考图数量上限</span><input aria-label="参考图数量上限" type="number" min={0} max={32} value={maxReferences} onChange={(event) => setMaxReferences(event.target.value)} placeholder="继承协议默认" /></label></div>}

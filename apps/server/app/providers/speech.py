@@ -7,7 +7,13 @@ from app.core.outbound_http import outbound_client
 from app.core.errors import ConflictError, GenerationFailedError
 
 
-def speech_parameters(model, parameters, prompt):
+def speech_parameters(model, parameters, prompt, *, protocol=None):
+    from app.providers.audio_contracts import AUDIO_PROTOCOLS, native_speech_parameters
+    protocol = protocol or getattr(model, "api_protocol", None) or "openai_compatible"
+    if protocol in AUDIO_PROTOCOLS:
+        if "tts" not in AUDIO_PROTOCOLS[protocol]["types"]:
+            raise ConflictError("纯音乐协议不能用于配音")
+        return native_speech_parameters(model, parameters, prompt, protocol)
     defaults = model.default_params
     if any(
         parameters.get(key) is not None
@@ -34,7 +40,10 @@ def speech_parameters(model, parameters, prompt):
 
 
 async def generate_speech(adapter, *, model, prompt, parameters):
-    """Only the explicitly verified OpenAI-compatible MP3 speech contract."""
+    """Dispatch an explicitly validated contract, never guess a vendor from its name."""
+    from app.providers.audio_contracts import AUDIO_PROTOCOLS
+    if getattr(adapter, "protocol", None) in AUDIO_PROTOCOLS:
+        return await adapter.generate_speech(model=model, prompt=prompt, parameters=parameters)
     try:
         async with (
             outbound_client(

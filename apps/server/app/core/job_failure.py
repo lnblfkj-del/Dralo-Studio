@@ -108,6 +108,10 @@ def failure_detail(job: Any) -> dict[str, Any] | None:
     if (payload.get("resolution") or {}).get("status") in {"superseded", "replacement_pending"}:
         action = "none"
         hint = "该任务已被后续任务替代，请查看最新结果。"
+    from app.core.retired_workflows import RETIRED_DIRECTOR_TARGETS, RETIRED_MESSAGE
+    if job.target_type in RETIRED_DIRECTOR_TARGETS:
+        category, title, action = "retired", "旧规划流程已停用", "none"
+        hint = RETIRED_MESSAGE
     return {
         "category": category, "title": title, "reason": str(reason)[:2000],
         "hint": hint, "action": action, "response_saved": saved,

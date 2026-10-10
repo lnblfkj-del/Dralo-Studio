@@ -3,9 +3,15 @@ import { DatabaseBackup, ShieldAlert } from "lucide-react";
 import { formatDate } from "@/components/tasks/taskCenterModel";
 import { JobFailureDetails } from "./JobFailurePanel";
 import type { Job } from "@/types/api";
+import { isContentPlanningJob } from "@/domain/directorJobRecovery";
+import { DirectorRecovery } from "./DirectorRecovery";
 
-export function TaskRecoveryPanels({ job }: { job: Job }) {
+export function TaskRecoveryPanels({ job, onRecovered, onBusyChange }: {
+  job: Job; onRecovered?: (job: Job) => void; onBusyChange?: (busy: boolean) => void;
+}) {
   return <>
+    {isContentPlanningJob(job) && ["failed", "cancelled"].includes(job.status)
+      && <DirectorRecovery key={job.id} job={job} onRecovered={onRecovered} onBusyChange={onBusyChange} />}
     {job.failure_detail && <JobFailureDetails job={job} />}
     {job.text_response_recovery && <section className="task-diagnostic task-recovery-card">
       <h3><DatabaseBackup size={16} />已保存模型响应</h3>

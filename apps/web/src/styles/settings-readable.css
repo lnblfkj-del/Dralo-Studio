@@ -47,6 +47,14 @@ html:has(.creator-app.settings-mode),body:has(.creator-app.settings-mode){max-wi
 .model-capability-grid label{display:flex;align-items:center;gap:7px;font-size:13px}
 .model-capability-grid input{width:16px;height:16px}
 .model-parameter-pair{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.model-edit-form .model-speech-fields{display:grid;min-width:0;gap:12px}
+.model-speech-fields>label:not(.model-speech-attestation){display:grid;min-width:0;gap:8px;font-size:13px}
+.model-speech-fields .model-parameter-pair{grid-template-columns:repeat(2,minmax(0,1fr))}
+.model-speech-fields :is(label,select,textarea){min-width:0;max-width:100%}
+.model-speech-fields textarea{box-sizing:border-box;width:100%;min-height:82px;padding:12px;border:1px solid var(--app-color-border);border-radius:6px;background:var(--app-color-surface);color:var(--app-color-text);font:13px/1.6 inherit;resize:vertical}
+.model-edit-form .model-speech-attestation{display:flex;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6}
+.model-edit-form .model-speech-attestation input{flex:0 0 16px;width:16px;height:16px;margin:2px 0 0;padding:0}
+.model-speech-fields>small{display:block;color:var(--app-color-text-muted);font-size:12px;line-height:1.6}
 .model-test-body{display:flex;flex:1;flex-direction:column;gap:16px}
 .model-chat-log{display:flex;flex:1;flex-direction:column;gap:12px;min-height:360px;overflow:auto;padding:20px;border:1px solid #ebe7ed;border-radius:9px;background:#fcfbfc}
 .model-test-empty{display:grid;flex:1;place-items:center;color:#aaa3ad;font-size:13px}

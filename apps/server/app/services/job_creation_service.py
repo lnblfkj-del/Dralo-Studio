@@ -602,6 +602,11 @@ async def preflight_episode_export(
         "pending_edit": pending_edit,
         "issues": issues,
     }
+    from app.services.audio_policy import for_episode
+    audio_policy = await for_episode(session, episode.project_id, episode.id)
+    fingerprint_payload["audio_policy"] = audio_policy
+    if audio_policy["background_music"] is False and settings.get("background_audio_media_id"):
+        issues.append({"code": "BACKGROUND_MUSIC_CONFLICT", "message": "本集关闭了背景音乐，但后期已选择配乐。素材已保留，请核对配乐设置后再导出。"})
     snapshot_fingerprint = sha256(
         json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     ).hexdigest()

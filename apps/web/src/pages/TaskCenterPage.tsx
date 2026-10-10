@@ -26,6 +26,7 @@ import * as jobApi from "@/api/jobs";
 import { useAuthStore } from "@/stores/authStore";
 import * as mediaApi from "@/api/media";
 import type { Job, JobStatus } from "@/types/api";
+import { canReprocessGenericResponse, isContentPlanningJob } from "@/domain/directorJobRecovery";
 import "@/styles/tasks.css";
 import { TaskMediaPreview } from "@/components/tasks/TaskMediaPreview";
 import { TaskRecoveryPanels } from "@/components/tasks/TaskRecoveryPanels";
@@ -58,6 +59,7 @@ import { JobStatusBadge, TypeIcon } from "@/components/tasks/TaskCenterBadges";
 import { Button, ConfirmDialog, Dialog, IconButton } from "@/components/ui";
 
 function canRetryJob(job: Job): boolean {
+  if (isContentPlanningJob(job) || job.error_code === "WORKFLOW_RETIRED") return false;
   if (!["failed", "cancelled"].includes(job.status) || job.retry_allowed === false) return false;
   if (job.failure_detail && job.job_type === "text") return job.failure_detail.action === "retry";
   return job.text_response_recovery?.status !== "available"
@@ -65,6 +67,7 @@ function canRetryJob(job: Job): boolean {
 }
 
 export function TaskCenterPage() {
+  const [contentRecoveryBusy, setContentRecoveryBusy] = useState(false);
   const canPurge = useAuthStore(state=>state.user?.role === "admin" || !!state.user?.permissions?.["tasks.purge"]);
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -125,13 +128,13 @@ export function TaskCenterPage() {
   }, [detailOpen, liveJob?.id, liveJob?.status, queryClient, recycled]);
 
   useEffect(() => {
-    if (!detailOpen) return;
+    if (!detailOpen || contentRecoveryBusy) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setDetailOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detailOpen]);
+  }, [detailOpen, contentRecoveryBusy]);
 
   useEffect(() => {
     if (!detailOpen || selectedMediaId === null) {
@@ -554,7 +557,7 @@ export function TaskCenterPage() {
                             {rowMediaId !== null && <IconButton controlSize="compact" variant="primary" label={`下载任务 #${job.id} 的生成结果`} tooltip="下载生成结果" icon={<Download size={15} />} loading={mediaActionPending === job.id} onClick={() => void downloadJobMedia(job)} />}
                             {!recycled && job.parent_job_id === null && ["video_batch", "episode_video_batch", "script_study_batch_group", "script_asset_breakdown_group"].includes(job.target_type ?? "") && ACTIVE.has(job.status) && <IconButton controlSize="compact" label={`${job.batch_paused_at ? "继续" : "暂停"}批次 #${job.id}`} tooltip={job.batch_paused_at ? "继续提交批次" : "暂停后续提交"} icon={job.batch_paused_at ? <Play size={15} /> : <Pause size={15} />} onClick={() => void toggleBatchPause(job)} />}
                             {!recycled && ACTIVE.has(job.status) && <IconButton controlSize="compact" variant="danger" label={`取消任务 #${job.id}`} tooltip="取消任务" icon={<Ban size={15} />} onClick={() => void runAction("cancel", job)} />}
-                            {!recycled && job.status === "failed" && job.text_response_recovery?.status === "available" && !job.text_response_recovery.regeneration_required && <IconButton controlSize="compact" variant="primary" label={`本地重新处理任务 #${job.id}`} tooltip="使用已保存响应，不调用模型" icon={<DatabaseBackup size={15} />} onClick={() => void runReprocess(job)} />}
+                            {!recycled && canReprocessGenericResponse(job) && <IconButton controlSize="compact" variant="primary" label={`本地重新处理任务 #${job.id}`} tooltip="使用已保存响应，不调用模型" icon={<DatabaseBackup size={15} />} onClick={() => void runReprocess(job)} />}
                             {!recycled && job.status === "failed" && job.paid_recall_allowed === true && <IconButton controlSize="compact" variant="primary" label={`确认恢复任务 #${job.id}`} tooltip="核对后仅重新调用失败范围" icon={<RefreshCw size={15} />} onClick={() => setConfirmation({ kind: "recall", job })} />}
                             {!recycled && job.error_code === "PROVIDER_OUTCOME_UNKNOWN" && job.job_type !== "text" && <span className="task-action-note" title="模型请求已提交，需先核对渠道记录"><ShieldAlert size={14} />结果待核对</span>}
                             {!recycled && canRetryJob(job) && <IconButton controlSize="compact" variant="primary" label={`重新执行任务 #${job.id}`} tooltip="重新执行" icon={<RefreshCw size={15} />} onClick={() => void runAction("retry", job)} />}
@@ -598,8 +601,8 @@ export function TaskCenterPage() {
               <JobStatusBadge status={liveJob.status} jobType={liveJob.job_type} />
             </div>}
         size="large"
-        busy={actionPending !== null || mediaActionPending === liveJob.id}
-        onClose={() => setDetailOpen(false)}
+        busy={actionPending !== null || mediaActionPending === liveJob.id || contentRecoveryBusy}
+        onClose={() => { if (!contentRecoveryBusy) setDetailOpen(false); }}
         footer={(recycled || selectedMediaId !== null || ACTIVE.has(liveJob.status) || (["succeeded", "failed", "cancelled"] as JobStatus[]).includes(liveJob.status)) ? <>
               {selectedMediaId !== null && <Button icon={<Download size={15} />} loading={mediaActionPending === liveJob.id} onClick={() => void downloadJobMedia(liveJob)}>
                   {mediaActionPending === liveJob.id ? "正在下载" : "下载文件"}
@@ -610,7 +613,7 @@ export function TaskCenterPage() {
               {!recycled && ACTIVE.has(liveJob.status) && <Button variant="danger" icon={<Ban size={15} />} loading={actionPending === "cancel"} onClick={() => void runAction("cancel", liveJob)}>
                   {actionPending === "cancel" ? "正在取消" : "取消任务"}
                 </Button>}
-              {!recycled && liveJob.status === "failed" && liveJob.text_response_recovery?.status === "available" && !liveJob.text_response_recovery.regeneration_required && <Button variant="primary" icon={<DatabaseBackup size={15} />} loading={actionPending === "reprocess"} onClick={() => void runReprocess(liveJob)} disabled={actionPending !== null} title="只重新处理已保存响应，不会调用模型或产生新费用">
+              {!recycled && canReprocessGenericResponse(liveJob) && <Button variant="primary" icon={<DatabaseBackup size={15} />} loading={actionPending === "reprocess"} onClick={() => void runReprocess(liveJob)} disabled={actionPending !== null} title="只重新处理已保存响应，不会调用模型或产生新费用">
                   {actionPending === "reprocess" ? "正在本地处理" : "本地重新处理"}
                 </Button>}
               {!recycled && liveJob.status === "failed" && liveJob.paid_recall_allowed === true && <Button variant="primary" icon={<RefreshCw size={15} />} onClick={() => setConfirmation({ kind: "recall", job: liveJob })} disabled={actionPending !== null} title="仅在核对渠道和本地响应后重新调用失败范围">确认后恢复失败范围</Button>}
@@ -646,7 +649,7 @@ export function TaskCenterPage() {
                 {liveJob.agent_execution?.skill_name && <div><dt>执行 Skill</dt><dd>{liveJob.agent_execution.skill_name} · {liveJob.agent_execution.skill_key}</dd></div>}
               </dl>
 
-              <TaskRecoveryPanels job={liveJob} />
+              <TaskRecoveryPanels job={liveJob} onBusyChange={setContentRecoveryBusy} onRecovered={setLiveJob} />
 
               <TaskSourcePanels job={liveJob} />
 

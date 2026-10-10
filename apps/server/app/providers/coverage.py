@@ -9,7 +9,11 @@ def model_coverage(provider, model):
     try:
         validate_model_protocol(provider, model)
         if model.model_type == "video":
-            if effective_protocol(provider, model) == "minimax_video_v2":
+            if effective_protocol(provider, model) == "meaicc_video_images":
+                status, scope = "partial", "MEAICC 图生／参考图：独立素材上传、任务查询下载已接入，待真实图生验收；参考音视频未开放"
+            elif effective_protocol(provider, model) == "meaicc_video":
+                scope = "MEAICC 独立 JSON /videos：仅文生视频、原任务查询和下载；参考图片／音视频尚未开放"
+            elif effective_protocol(provider, model) == "minimax_video_v2":
                 status, scope = "partial", "MiniMax H3 V2 已接入只读连通与任务通信层；视频提交、媒体地址、价格及正式提示词尚未开放"
             elif effective_protocol(provider, model).startswith("kling_video_"):
                 scope = "可灵独立文生／图生／多图视频合同：API Key 或 JWT、任务查询下载；具体模式需按模型配置；Omni 参考视频与编辑未开放"
@@ -41,6 +45,10 @@ def model_coverage(provider, model):
             scope = "文本请求协议已实现；工具调用、多模态和结构化输出需分别验收"
         elif model.model_type == "tts":
             scope = "语音合成接口；不等于音乐生成、语音识别或音色克隆已适配"
+            if effective_protocol(provider, model) in {"stepfun_tts", "minimax_audio_subscription", "elevenlabs_tts"}:
+                status, scope = "partial", "原生配音画布提交及持久结果保存恢复已接入，音色须核验；资产库入口、媒体探测及真实验收待完成"
+        elif model.model_type == "audio" and effective_protocol(provider, model) in {"stepfun_music", "elevenlabs_music"}:
+            status, scope = "partial", "纯器乐画布提交、持久查询和结果保存恢复已接入；资产库入口、媒体探测及真实验收待完成，不是 TTS 或环境音接口"
         elif model.model_type == "image":
             scope = "OpenAI 图片生成／编辑协议；不等于所有厂商异步图片协议已适配"
     except ConflictError as exc:
