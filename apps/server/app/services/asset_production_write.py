@@ -62,9 +62,12 @@ async def _update_production(
             data["field_trust_prompt_override"] = True
     if patch.profile is not None:
         profile = patch.profile
-        if profile.character_asset_id is not None:
+        character_ids = set(profile.linked_character_asset_ids)
+        character_ids.update(value for value in (profile.character_asset_id, profile.linked_character_asset_id)
+                             if value is not None)
+        for character_id in character_ids:
             character = await asset_service.get_asset(
-                session, project.id, profile.character_asset_id
+                session, project.id, character_id
             )
             if character.asset_type != "character" or character.id == asset.id:
                 raise ValidationError("造型/声音必须关联当前项目中独立的角色资产")

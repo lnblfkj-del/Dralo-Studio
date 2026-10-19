@@ -8,6 +8,9 @@ export interface AssetProfile {
   group_label?: string | null;
   group_size?: number | null;
   character_asset_id: number | null;
+  linked_character_asset_ids?: number[];
+  linked_character_asset_id?: number | null;
+  character_relation_status?: "linked" | "needs_review" | "not_applicable" | null;
   age: string | null;
   description: string | null;
   appearance: string | null;

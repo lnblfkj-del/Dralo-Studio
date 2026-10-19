@@ -1,6 +1,6 @@
 """R1 typed additive API; all times are finite seconds, unknown facts remain unknown."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -22,6 +22,9 @@ class AssetProfile(StrictContract):
     group_label: str | None = Field(default=None, max_length=200)
     group_size: int | None = Field(default=None, ge=2, le=100000)
     character_asset_id: int | None = Field(default=None, ge=1)
+    linked_character_asset_ids: list[Annotated[int, Field(ge=1)]] = Field(default_factory=list)
+    linked_character_asset_id: int | None = Field(default=None, ge=1)
+    character_relation_status: Literal["linked", "needs_review", "not_applicable"] | None = None
     age: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     appearance: str | None = Field(default=None, max_length=4000)
