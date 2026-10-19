@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Gamepad2 } from "lucide-react";
+import { ProductFooter } from "@/components/ProductFooter";
 import { useEntertainment } from "./entertainmentContext";
 import { listProjects } from "@/api/projects";
 import { CreationEntry, type EntryMode, type EntryDraft } from "./CreationEntry";
@@ -32,7 +33,7 @@ export function CreatorHome() {
         </div>
         {projects.data && (projects.data.total > 12 || page > 1) && <nav className="history-pagination" aria-label="创作历史分页"><button disabled={page === 1 || projects.isFetching} onClick={() => setPage(page - 1)}>上一页</button><span>第 {page} 页 · 共 {projects.data.total} 个项目</span><button disabled={page * 12 >= projects.data.total || projects.isFetching} onClick={() => setPage(page + 1)}>下一页</button></nav>}
       </section>
-      <footer className="creator-home-footer">Dralo Studio <span>故事在这里发生。</span></footer>
+      <ProductFooter className="creator-home-footer" />
     </div>
   </main>;
 }

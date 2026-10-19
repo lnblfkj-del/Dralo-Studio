@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuthStore } from "@/stores/authStore";
 import { Icon } from "@/components/creator/Icon";
+import { ProductFooter } from "@/components/ProductFooter";
 import "@/styles/creator.css";
 import "@/styles/login-refinement.css";
 
@@ -36,6 +37,6 @@ export function LoginPage() {
       <button className="creator-primary login-submit" disabled={loggingIn || !username.trim() || !password}>{loggingIn ? "正在登录…" : "进入创作空间"}<Icon name="arrow" size={17} /></button>
       <div className="login-help"><Icon name="lock" size={14} />仅限授权团队成员访问<br />忘记密码？请联系空间管理员。</div>
     </form></section>
-    <footer className="login-footer">Dralo Studio <span>故事在这里发生。</span></footer>
+    <ProductFooter className="login-footer" />
   </main>;
 }

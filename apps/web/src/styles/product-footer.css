@@ -1,0 +1,22 @@
+.creator-home-footer.product-footer,
+.login-footer.product-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  color: var(--app-color-text-muted, #817989);
+  font-size: 12px;
+  line-height: 1.7;
+  letter-spacing: 0;
+}
+
+.product-footer span { margin: 0; letter-spacing: 0; }
+.product-footer__brand { white-space: nowrap; }
+.product-footer__details { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px 20px; }
+.product-footer__details > span { overflow-wrap: anywhere; }
+.login-footer.product-footer { left: 24px; right: 24px; bottom: 20px; width: auto; justify-content: center; }
+
+@media (max-height: 820px) {
+  .creator-login { padding-bottom: 84px; }
+}
