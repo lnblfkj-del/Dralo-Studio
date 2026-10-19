@@ -2,6 +2,7 @@
 
 from app.services.asset_production_shared import *
 from app.services.asset_production_core import fingerprint, link_for, read_production
+from app.schemas.production_contract import AssetProfile
 
 async def update_production(
     session: AsyncSession, project: Project, asset_id: int, patch: AssetProductionPatch
@@ -57,6 +58,8 @@ async def _update_production(
     data = dict(link.production_data or {})
     if patch.prompt_anchor is not None:
         data["prompt_anchor"] = patch.prompt_anchor.strip()
+        if (asset.attributes or {}).get("field_trust") or (data.get("extraction_projection") or {}).get("field_trust"):
+            data["field_trust_prompt_override"] = True
     if patch.profile is not None:
         profile = patch.profile
         if profile.character_asset_id is not None:
@@ -70,6 +73,21 @@ async def _update_production(
         # A patch only replaces explicitly supplied profile fields; omitted fields survive.
         current = (await read_production(session, project, asset_id))["profile"]
         data["profile"] = {**current, **profile.model_dump(mode="json", exclude_unset=True)}
+        if (asset.attributes or {}).get("field_trust") or (data.get("extraction_projection") or {}).get("field_trust"):
+            data["field_trust_overrides"] = sorted(set(data.get("field_trust_overrides") or []) | profile.model_fields_set)
+        if "speech_preset" in profile.model_fields_set:
+            binding = data["profile"].get("speech_preset")
+            if binding and asset.asset_type not in {"character", "voice"}:
+                raise ValidationError("只有角色或声音资产能绑定配音音色")
+            if binding and (binding != current.get("speech_preset") or not binding.get("account_fingerprint")):
+                from app.services.asset_speech_binding import validate_binding
+                data["profile"]["speech_preset"] = await validate_binding(session, binding)
+        try:
+            AssetProfile.model_validate(data["profile"])
+        except ValueError as exc:
+            raise ValidationError("角色形式与群体人数不一致，请核对后保存") from exc
+        if asset.asset_type != "character" and data["profile"].get("character_form", "single") != "single":
+            raise ValidationError("只有角色资产能设置小组或人群形式")
     if patch.sources is not None:
         for source in patch.sources:
             episode = None
@@ -140,11 +158,17 @@ async def _update_production(
                     "media_file_id": media.id,
                     "kind": media.kind,
                     "origin": "explicit",
+                    **({"audio_purpose":media.purpose if media.purpose in {"voice_reference", "dialogue_audio", "music", "ambience", "sfx"} else "unclassified"} if media.kind == "audio" else {}),
                 }
             )
+            if media.kind == "audio":
+                from app.services.media_core_service import link_media_to_project
+                await link_media_to_project(session, media, project)
         data["adoptions"] = choices
     if patch.scope_override is not None:
         override = patch.scope_override
+        if "speech_preset" in override.profile:
+            raise ValidationError("配音音色属于共享设定，请在全剧共享资料中修改")
         if override.target_type == "scene":
             target = await session.get(Scene, override.target_id)
             episode = await session.get(Episode, target.episode_id) if target else None

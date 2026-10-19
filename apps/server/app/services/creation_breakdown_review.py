@@ -4,6 +4,7 @@
 """
 
 import json
+from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -53,10 +54,14 @@ BREAKDOWN_ACTIVE_STATUSES = {
 
 
 async def _asset_breakdown_for_review(
-    session: AsyncSession, item: CreationSession
+    session: AsyncSession, item: CreationSession, *, _locked: bool = False
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if item.project_id is None:
         raise ConflictError("当前创作会话尚未关联项目")
+    if not _locked and int((item.settings.get("asset_breakdown") or {}).get("asset_extraction_contract_version", 1)) in {2, 3}:
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        await lock_breakdown_session(session, item)
     settings = dict(item.settings)
     breakdown = dict(settings.get("asset_breakdown") or {})
     if breakdown.get("status") != "awaiting_confirmation":
@@ -100,8 +105,26 @@ async def _asset_breakdown_for_review(
         _normalize_asset_classification,
     )
 
+    if int(breakdown.get("asset_extraction_contract_version", 1)) == 3:
+        from app.services.asset_saved_organization import recover_saved_items
+
+        await recover_saved_items(session, item, breakdown)
     pending_candidates = [dict(candidate) for candidate in breakdown.get("candidates") or []]
     existing_assets = await asset_service.list_assets(session, item.project_id)
+    identity_changed = False
+    if int(breakdown.get("asset_extraction_contract_version", 1)) == 3:
+        from app.services.asset_character_identity import refresh_character_identities
+
+        identity_changed = await refresh_character_identities(
+            session, item.project_id, pending_candidates,
+            context=dict(breakdown.get("production_context") or {}), existing=existing_assets,
+            decisions=breakdown.get("character_identity_decisions"),
+        )
+        from app.services.asset_field_trust import organize_candidates
+
+        before_organization = deepcopy(pending_candidates)
+        organize_candidates(pending_candidates, dict(breakdown.get("production_context") or {}))
+        identity_changed = identity_changed or pending_candidates != before_organization
     existing_by_id = {int(asset["id"]): asset for asset in existing_assets}
     normalized_candidates: list[dict[str, Any]] = []
     for candidate in pending_candidates:
@@ -110,7 +133,7 @@ async def _asset_breakdown_for_review(
         matched = existing_by_id.get(int(candidate.get("matched_asset_id") or 0))
         if matched is not None and not candidate.get("episode_scope_reviewed"):
             preserve_matched_asset_scope(candidate, dict(matched.get("attributes") or {}))
-        candidate = _enrich_character_candidate_from_story_bible(
+        candidate = candidate if int(breakdown.get("asset_extraction_contract_version", 1)) in {2, 3} else _enrich_character_candidate_from_story_bible(
             str(candidate.get("requirement_type") or candidate.get("asset_type") or ""),
             candidate,
             dict(breakdown.get("production_context") or {}),
@@ -133,12 +156,14 @@ async def _asset_breakdown_for_review(
         candidate["normalized_aliases"] = sorted(_candidate_aliases(candidate))
         candidate["attributes"] = _apply_character_role_classification(
             requirement_type,
-            aliases,
+            [candidate["name"]] if int(breakdown.get("asset_extraction_contract_version", 1)) in {2, 3} else aliases,
             attributes,
             dict(breakdown.get("production_context") or {}),
         )
         attributes = candidate["attributes"]
         candidate["needs_review"] = _candidate_requires_review(candidate)
+        if int(breakdown.get("asset_extraction_contract_version", 1)) == 3:
+            _refresh_candidate_review_state(candidate)
         if (
             requirement_type != previous_requirement_type
             or asset_type != previous_asset_type
@@ -150,7 +175,7 @@ async def _asset_breakdown_for_review(
 
     normalized_candidates = _merge_candidate_list(normalized_candidates)
     changed = (
-        normalized_candidates != pending_candidates
+        identity_changed or normalized_candidates != pending_candidates
         or any(candidate.get("_classification_changed") for candidate in normalized_candidates)
     )
     if changed:
@@ -193,6 +218,10 @@ def _refresh_asset_candidate_counts(
     from app.services.creation_finalize_assets import _character_alias_issues, _character_coverage_issues
 
     candidates = list(breakdown.get("candidates") or [])
+    if int(breakdown.get("asset_extraction_contract_version", 1)) in {2, 3}:
+        from app.services.asset_extraction_review import apply_confirmation_receipts
+
+        apply_confirmation_receipts(breakdown, candidates)
     reconcile_dialogue_coverage(candidates, dict(breakdown.get("production_context") or {}))
     refresh_codes = {"asset_episode_scope_reduced", "dialogue_character_missing", "missing_core_character",
                      "core_character_without_episodes", "core_character_episode_gap"}
@@ -203,10 +232,13 @@ def _refresh_asset_candidate_counts(
     if existing_assets is not None:
         issues.extend(_character_alias_issues(candidates, existing_assets))
     if "character" in (breakdown.get("requirement_types") or []) or any(row.get("requirement_type") == "character" for row in candidates):
-        issues.extend(dialogue_coverage_issues(candidates, dict(breakdown.get("production_context") or {})))
+        from app.services.asset_necessity_service import coverage_context
+        issues.extend(dialogue_coverage_issues(candidates, coverage_context(
+            dict(breakdown.get("production_context") or {}), breakdown.get("asset_necessity_policy"))))
     issues.extend(_character_coverage_issues(
         candidates, dict(breakdown.get("production_context") or {}),
-        full_character_scope=("character" in (breakdown.get("requirement_types") or [])
+        full_character_scope=(int(breakdown.get("asset_extraction_contract_version", 1)) not in {2, 3}
+                              and "character" in (breakdown.get("requirement_types") or [])
                               and breakdown.get("scope_mode") != "partial"),
     ))
     breakdown["validation_issues"] = issues
@@ -304,6 +336,9 @@ async def acknowledge_formal_script_candidate_reviews(
     session: AsyncSession, item: CreationSession, user_id: int
 ) -> dict[str, int]:
     settings, breakdown = await _asset_breakdown_for_review(session, item)
+    if int(breakdown.get("asset_extraction_contract_version", 1)) in {2, 3}:
+        # A formal-script label does not resolve unmatched quotes or conflicting facts.
+        raise ConflictError("新资产契约不能批量跳过来源与事实冲突核对；候选和原始依据已保留")
     candidates = [dict(candidate) for candidate in breakdown.get("candidates") or []]
     acknowledged = 0
     now = datetime.now(timezone.utc).isoformat()
@@ -356,13 +391,19 @@ async def _sync_character_profile(
     link = await asset_service.get_project_link(session, project_id, asset.id)
     data = dict(link.production_data or {})
     profile = dict(data.get("profile") or {})
+    from app.services.asset_character_representation import GROUP_FIELDS
+    group_changed = False
+    for key in GROUP_FIELDS:
+        if key not in profile and key in attributes:
+            profile[key] = attributes[key]
+            group_changed = True
     current_role = str(profile.get("character_role") or "unclassified")
     inferred_role = str(attributes.get("character_role") or "unclassified")
     resolved_role = current_role if current_role in _CLASSIFIED_CHARACTER_ROLES else inferred_role
     if resolved_role not in _CLASSIFIED_CHARACTER_ROLES:
         resolved_role = "unclassified"
 
-    changed = profile.get("character_role") != resolved_role
+    changed = group_changed or profile.get("character_role") != resolved_role
     profile["character_role"] = resolved_role
     aliases = list(
         dict.fromkeys(
@@ -495,6 +536,23 @@ async def update_script_asset_candidate(
                 raise ConflictError("只能匹配相同声音用途的正式资产")
 
     candidate.update(data)
+    if (candidate.get("attributes") or {}).get("extraction_contract_version") == 3:
+        attributes = dict(candidate["attributes"])
+        if "prompt_anchor" in data:
+            attributes["generation_prompt_source"] = "user"
+        if "description" in data:
+            attributes["generation_description_source"] = "user"
+        candidate["attributes"] = attributes
+    if "aliases" in data and candidate.get("asset_type") == "character" and (
+        candidate.get("attributes") or {}
+    ).get("extraction_contract_version") == 3:
+        attributes = dict(candidate["attributes"])
+        attributes["confirmed_character_aliases"] = list(data["aliases"] or [])
+        attributes["character_alias_claims"] = []
+        candidate["attributes"] = attributes
+        decisions = dict(breakdown.get("character_identity_decisions") or {})
+        decisions[str(candidate["candidate_id"])] = {"aliases": list(data["aliases"] or [])}
+        breakdown["character_identity_decisions"] = decisions
     if "episode_numbers" in data:
         candidate["episode_scope_reviewed"] = True
         candidate["usage_records"] = [record for record in candidate.get("usage_records") or []
@@ -528,8 +586,22 @@ async def update_script_asset_candidate(
             }
         )
     breakdown["candidates"] = candidates
+    existing_assets = await asset_service.list_assets(session, item.project_id)
+    if int(breakdown.get("asset_extraction_contract_version", 1)) == 3:
+        from app.services.asset_character_identity import refresh_character_identities
+
+        await refresh_character_identities(
+            session, item.project_id, candidates,
+            context=dict(breakdown.get("production_context") or {}), existing=existing_assets,
+            decisions=breakdown.get("character_identity_decisions"),
+        )
+        from app.services.asset_field_trust import organize_candidates
+
+        organize_candidates(candidates, dict(breakdown.get("production_context") or {}))
+        for row in candidates:
+            _refresh_candidate_review_state(row)
     _refresh_asset_candidate_counts(
-        breakdown, existing_assets=await asset_service.list_assets(session, item.project_id)
+        breakdown, existing_assets=existing_assets
     )
     settings["asset_breakdown"] = breakdown
     item.settings = settings
@@ -560,10 +632,32 @@ async def merge_script_asset_candidate(
         raise NotFoundError("资产候选不存在")
     if source.get("merged_into_candidate_id") or target.get("merged_into_candidate_id"):
         raise ConflictError("已合并的资产候选不能再次合并")
+    if source.get("confirmed_in_current_scope") or target.get("confirmed_in_current_scope"):
+        raise ConflictError("已入库的候选不能在拆解页合并，请在资产库管理")
     if source.get("asset_type") != target.get("asset_type"):
         raise ConflictError("只有相同类型的资产候选可以合并")
     if source.get("requirement_type") != target.get("requirement_type"):
         raise ConflictError("不同制作需求不能合并")
+
+    from app.services.asset_identity_variants import compatible, descriptor
+
+    kind = str(target.get("requirement_type") or target.get("asset_type"))
+    if kind in {"prop", "scene", "costume"} and not compatible(
+        descriptor(kind, source)[1], descriptor(kind, target)[1]
+    ):
+        raise ConflictError("资产的归属、服装、昼夜或状态明确不同, 不能直接合并; 请先核对属性")
+
+    from app.services.asset_extraction_registry import merge_entries
+
+    target_attributes = dict(target.get("attributes") or {})
+    merged_attributes = merge_entries([source, target], kind=kind)["attributes"]
+    unattributed_review = any(
+        row.get("attributes", {}).get("needs_review") and not row.get("attributes", {}).get("review_reasons")
+        for row in (source, target)
+    )
+    for field in ("asset_key", "extraction_identity"):
+        if field in target_attributes:
+            merged_attributes[field] = target_attributes[field]
 
     target["aliases"] = list(
         dict.fromkeys(
@@ -584,10 +678,33 @@ async def merge_script_asset_candidate(
     target["episode_numbers"] = sorted(
         set((target.get("episode_numbers") or []) + (source.get("episode_numbers") or []))
     )
-    target["attributes"] = {
-        **dict(source.get("attributes") or {}),
-        **dict(target.get("attributes") or {}),
-    }
+    options = set(merged_attributes.get("identity_name_options") or [])
+    reasons = set(merged_attributes.get("review_reasons") or [])
+    resolved = False
+    variant_options = merged_attributes.get("identity_options") or []
+    target_dimensions = descriptor(kind, target)[1]
+    if variant_options and sum(option == target_dimensions for option in variant_options) == 1:
+        merged_attributes.pop("identity_options", None)
+        reasons.discard("identity_resolution")
+        resolved = True
+    if options and options <= {target["name"], *target["aliases"]}:
+        merged_attributes.pop("identity_name_options", None)
+        merged_attributes.pop("identity_name_status", None)
+        merged_attributes.pop("identity_name_reason", None)
+        reasons.discard("identity_name")
+        resolved = True
+    if resolved:
+        merged_attributes["review_reasons"] = sorted(reasons)
+        if "identity_resolution" not in reasons and not merged_attributes.get("identity_options"):
+            merged_attributes.pop("identity_match_status", None)
+            merged_attributes.pop("identity_match_reason", None)
+        merged_attributes["needs_review"] = bool(
+            unattributed_review or reasons or merged_attributes.get("identity_fact_conflicts")
+            or merged_attributes.get("fact_conflicts")
+            or merged_attributes.get("identity_match_status") == "needs_review"
+        )
+        merged_attributes["identity_resolution_by"] = "user_candidate_merge"
+    target["attributes"] = merged_attributes
     target["usage_records"] = [
         *(target.get("usage_records") or []),
         *(source.get("usage_records") or []),
@@ -607,6 +724,11 @@ async def merge_script_asset_candidate(
         target["prompt_anchor"] = source.get("prompt_anchor") or ""
     source["selected"] = False
     source["merged_into_candidate_id"] = target_candidate_id
+    if merged_attributes.get("field_trust"):
+        from app.services.asset_field_trust import organize_candidate
+
+        organize_candidate(target, breakdown.get("production_context") or {})
+    _refresh_candidate_review_state(target)
     breakdown["candidates"] = candidates
     _refresh_asset_candidate_counts(
         breakdown, existing_assets=await asset_service.list_assets(session, item.project_id)

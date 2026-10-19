@@ -197,7 +197,13 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
             if int(recovery_summary.get("local_reprocess_exhausted") or 0) > 0:
                 return "失败范围本地重新处理仍未通过，请确认后仅重新调用失败范围"
         text_submission = (self.payload or {}).get("text_submission", {})
+        if (self.target_type == "script_asset_breakdown_batch" and text_submission.get("status") == "submitted"
+                and not text_submission.get("response_received") and (self.failure_detail or {}).get("action") == "recall"):
+            return "原请求结果待核对，请确认渠道未生成后再明确确认重提"
         if text_submission.get("response_received"):
+            if (self.target_type == "script_asset_breakdown_batch"
+                    and (self.payload.get("parameters") or {}).get("asset_extraction_contract_version") in {2, 3}):
+                return "资产响应已保存，不能普通重发；请本地恢复或明确确认重新调用失败范围"
             if self.job_type == "text" and (self.failure_detail or {}).get("action") == "retry":
                 return None
             if self.asset_response_truncated:
@@ -218,6 +224,8 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
         if self.job_type == "tts" and (self.payload or {}).get("media_submission", {}).get("started"):
             return "配音提交结果不确定，需先核对渠道记录"
         submission = (self.payload or {}).get("video_submission", {})
+        if submission.get("terminal_status") in {"failed", "cancelled"}:
+            return "原视频任务已明确失败或取消，请确认费用后重新生成"
         if submission.get("started") and not remote_video_task_id(submission):
             return "视频提交结果不确定，需先核对渠道任务和账单"
         return None
@@ -244,6 +252,8 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
         submission = dict((self.payload or {}).get("text_submission") or {})
         if submission.get("response_received"):
             recovery = dict((self.payload or {}).get("response_recovery") or {})
+            if (self.failure_detail or {}).get("action") == "recall":
+                return True
             return self.asset_response_truncated or bool(recovery.get("last_reprocess_error_code"))
         return submission.get("status") == "submitted"
 
@@ -269,6 +279,13 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
             if value.get(key) is not None
         }
         recovery["regeneration_required"] = self.asset_response_truncated or (self.failure_detail or {}).get("action") in {"retry", "recall"}
+        if self.target_type == "script_asset_breakdown_batch" and dict((self.payload or {}).get("parameters") or {}).get("asset_extraction_contract_version", 1) == 1:
+            recovery["asset_link_review_required"] = self.status == JOB_STATUS_FAILED and bool(
+                (self.payload or {}).get("asset_link_review_history")
+                or any(str(field).startswith("usage_records.") and str(field).endswith(".asset_key")
+                       for field in (self.failure_detail or {}).get("invalid_fields") or [])
+                or "根对象" in (self.error_message or "")
+            )
         return recovery
 
     @property
@@ -424,6 +441,8 @@ class Job(IdMixin, TimestampMixin, WorkspaceScoped, Base):
             "phase": self.execution_phase,
             "started_at": submission.get("started_at"),
             "timeout_seconds": submission.get("timeout_seconds"),
+            **({"reference_audio_status": "submitted", "reference_audio_media_ids": submission["reference_audio_media_ids"]}
+               if remote_video_task_id(submission) and submission.get("reference_audio_status") == "submitted" else {}),
         }
 
     def __repr__(self) -> str:

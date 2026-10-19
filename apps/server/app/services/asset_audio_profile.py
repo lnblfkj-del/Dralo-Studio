@@ -10,6 +10,15 @@ AUDIO_TYPES = {"character_voice": "voice", "music": "music", "bgm": "music",
 
 def effective_profile(asset, data):
     profile = dict((data or {}).get("profile") or {})
+    if asset.asset_type in {"character", "voice"} and "speech_preset" not in profile:
+        preset = ((asset.attributes or {}).get("canvas_profile") or {}).get("speech_preset")
+        if preset:
+            profile["speech_preset"] = preset
+    if asset.asset_type == "character":
+        from app.services.asset_character_representation import character_profile
+        for key, value in character_profile(asset.attributes, data).items():
+            if key not in profile and value is not None:
+                profile[key] = value
     if asset.asset_type == "voice" and not profile.get("audio_usage"):
         requirement = ((data or {}).get("script_scope") or {}).get("requirement_type")
         requirement = requirement or (asset.attributes or {}).get("requirement_type")

@@ -66,6 +66,10 @@ def _safe_provider_diagnostic(details: dict[str, Any] | None) -> dict[str, Any]:
             diagnostic[key] = value
         elif isinstance(value, str) and value and len(value) <= 300:
             diagnostic[key] = value
+    from app.core.video_submission import failed_before_video_generation
+    if details.get("video_transport") == "configured.v1" and failed_before_video_generation(details):
+        diagnostic.update(video_transport="configured.v1", transport_stage=details["transport_stage"],
+                          video_generation_not_submitted=True)
     return diagnostic
 
 
@@ -110,7 +114,7 @@ def safe_output_diagnostic(details: dict[str, Any] | None) -> dict[str, Any]:
 
 async def _resolve_superseded_failures(session: AsyncSession, succeeded: Job) -> None:
     """Keep failed history, but remove failures already replaced by this success from attention."""
-    if succeeded.target_type is None or succeeded.target_id is None:
+    if succeeded.target_type is None or succeeded.target_id is None or succeeded.target_type == "model_audio_test":
         return
     previous = list(
         (
@@ -336,7 +340,8 @@ async def mark_failed(
     }
     manual_text_failure = job.job_type == "text" and submission.get("status") == "submitted"
     submitted_image = job.job_type == "image" and (job.payload or {}).get("media_submission", {}).get("started")
-    if non_retryable or manual_text_failure or submitted_image or job.attempts >= job.max_attempts or uncertain_video:
+    terminal_video = (job.payload.get("video_submission") or {}).get("terminal_status") in {"failed", "cancelled"}
+    if non_retryable or terminal_video or manual_text_failure or submitted_image or job.attempts >= job.max_attempts or uncertain_video:
         job.status = JOB_STATUS_FAILED
         job.finished_at = utcnow()
     else:
@@ -382,11 +387,24 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
     parent = await session.get(Job, child.parent_job_id)
     if parent is None or parent.target_type not in BATCH_PARENT_TARGETS:
         return None
+    is_v2_extraction = (parent.target_type == "script_asset_breakdown_group"
+                        and parent.payload.get("asset_extraction_contract_version") in {2, 3})
+    if is_v2_extraction:
+        from app.models import CreationSession
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        # Persist same-transaction supersession before refreshing cached job rows.
+        await session.flush()
+        item = await session.get(CreationSession, parent.target_id)
+        if item is not None:
+            await lock_breakdown_session(session, item)
+            await session.refresh(parent)
     if parent.target_type == "episode_content_planning":
         from app.services.episode_planning_workflow import aggregate_run
         return await aggregate_run(session, parent)
     all_children = list((await session.scalars(
         select(Job).where(Job.parent_job_id == parent.id)
+        .execution_options(populate_existing=is_v2_extraction)
     )).all())
     children = [
         item
@@ -420,7 +438,7 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
         if action == "retry":
             ordinary_retry_required += 1
         elif submission.get("response_received"):
-            if recovery.get("last_reprocess_error_code") or item.asset_response_truncated:
+            if recovery.get("last_reprocess_error_code") or item.asset_response_truncated or item.paid_recall_allowed:
                 local_reprocess_exhausted += 1
             else:
                 local_reprocess_pending += 1
@@ -557,6 +575,15 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
         parent.error_code = "BATCH_PARTIAL_FAILURE" if succeeded else "BATCH_FAILED"
         parent.error_message = (
             f"分集正文完成 {succeeded}/{total}：{blocking_reason}；后续分集尚未提交"
+        )
+        parent.finished_at = parent.finished_at or utcnow()
+    elif parent.target_type == "script_asset_breakdown_group" and parent.payload.get("pending_audio_error"):
+        parent.status = JOB_STATUS_FAILED
+        parent.error_code = "ASSET_AUDIO_PREPARATION_BLOCKED"
+        parent.error_message = (
+            f"已保存 {succeeded}/{total} 个批次；后续声音批次尚未提交："
+            + parent.payload["pending_audio_error"]["message"]
+            + "。已完成视觉结果保留，修正后可确认继续。"
         )
         parent.finished_at = parent.finished_at or utcnow()
     elif (

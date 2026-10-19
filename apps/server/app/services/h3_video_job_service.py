@@ -175,6 +175,8 @@ async def start_h3_segment_video(
     segment = await session.get(VideoSegment, segment_id)
     if segment is None or segment.plan_id != source["plan_id"]:
         raise ConflictError("当前活动计划的片段已变化，请重新预检")
+    from app.services.segment_video_recovery_service import require_resolved_generation
+    await require_resolved_generation(session, segment, project_id, owner_id)
     active = await session.scalar(select(Job.id).where(
         Job.target_type == "video_segment", Job.target_id == segment_id,
         Job.status.in_(["queued", "running", "processing", "downloading", "retrying"]),

@@ -1,6 +1,6 @@
 """系统设置中的 Skill 与视觉风格管理。"""
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
@@ -105,6 +105,13 @@ async def create_skill(session: AsyncSession, data: dict) -> AgentSkill:
 
 
 async def update_skill(session: AsyncSession, skill: AgentSkill, data: dict) -> AgentSkill:
+    expected_version = skill.version
+    locked = await session.execute(update(AgentSkill).where(
+        AgentSkill.id == skill.id, AgentSkill.version == expected_version,
+    ).values(version=AgentSkill.version))
+    if locked.rowcount != 1:
+        raise ConflictError("Skill 已更新，请刷新后重试")
+    await session.refresh(skill)
     from app.core.workspace_context import isolation_enabled
     if isolation_enabled() and skill.is_builtin:
         raise ConflictError("内置 Skill 为只读模板，请创建自定义版本")
@@ -121,6 +128,8 @@ async def update_skill(session: AsyncSession, skill: AgentSkill, data: dict) -> 
     if changed_behavior:
         session.add(AgentSkillVersion(skill_id=skill.id, version=skill.version, snapshot=_skill_snapshot(skill)))
         await session.flush()
+    from app.services.skill_retention_service import retain_latest
+    await retain_latest(session, [skill])
     return skill
 
 
@@ -139,9 +148,9 @@ async def delete_skill(session: AsyncSession, skill: AgentSkill) -> None:
 
 
 async def list_skill_versions(session: AsyncSession, skill_id: int) -> list[AgentSkillVersion]:
-    await get_skill(session, skill_id)
+    skill = await get_skill(session, skill_id)
     return list((await session.execute(
-        select(AgentSkillVersion).where(AgentSkillVersion.skill_id == skill_id).order_by(AgentSkillVersion.version.desc())
+        select(AgentSkillVersion).where(AgentSkillVersion.skill_id == skill_id, AgentSkillVersion.version == skill.version)
     )).scalars())
 
 

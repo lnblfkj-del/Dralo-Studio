@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
 import { Link } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { cancelJob, getJob, retryJob, subscribeToJob } from "@/api/jobs";
 import { getMediaBlobUrl, uploadMedia } from "@/api/media";
+import { deleteSelectedSegments } from "@/api/projectProduction";
+import { applyModelChange, checkModelChange, type ModelChangeApply } from "@/api/modelChange";
+import type { SegmentDeleteInput, SegmentLifecycleInput } from "@/types/api";
 import { adjustSegmentProductionPlan, changeSegmentLifecycle, checkSegmentPlanContinuity, createSegmentProductionPlan, getEpisodeEngineeringPackagePreflight, getEpisodeExportPreflight, getEpisodeJianyingDraftPreflight, getEpisodePremiereXmlPreflight, planSegmentFirstFrames, planSegmentVideoAttempt, selectSegmentVideoVersion, startEpisodeEngineeringPackage, startEpisodeExport, startEpisodeJianyingDraft, startEpisodePremiereXml, startSegmentFirstFrames, startSegmentVideoAttempt, updateEpisode, updateEpisodeProduction } from "@/api/projects";
 import { useDraftBlocker } from "@/components/DraftGuard";
 import { StoryboardVideoView } from "@/components/creator/StoryboardVideoView";
@@ -25,7 +28,7 @@ function episodeLabel(episode: Episode) { return `第${episode.number}集 · ${e
 export function useStoryboardVideoModel() {
   const {
     projectId, episodeId, navigate, client, studioRef, script, setScript,
-    videoModelId, setVideoModelId, videoModelManuallyChanged, setVideoModelManuallyChanged,
+    videoModelId: localVideoModelId, setVideoModelId, videoModelManuallyChanged, setVideoModelManuallyChanged,
     activeJobId, setActiveJobId, exportUrl, selectedExportMediaId, setSelectedExportMediaId, exportPreviewError, productionOpen, setProductionOpen,
     backgroundAudioId, setBackgroundAudioId, backgroundAudioVolume, setBackgroundAudioVolume, includeSubtitles, setIncludeSubtitles,
     outputResolution, setOutputResolution, dialogueCues, setDialogueCues, soundCues, setSoundCues,
@@ -38,7 +41,38 @@ export function useStoryboardVideoModel() {
     exportHistory, engineeringPackages, premiereXmlPackages, jianyingDraftPackages, jianyingDraftPreflight, scenes,
     aiSettings, videoModels, imageModels, plannerModels, activeJob,
   } = useStoryboardVideoWorkspace();
+  // An active plan owns the execution model; settings are only the no-plan default.
+  const videoModelId = segmentPlan.data?.provider_model_id
+    ?? (videoModelManuallyChanged ? localVideoModelId : production.data?.settings.video_model_id ?? localVideoModelId);
+  useEffect(() => {
+    if (videoModelId !== localVideoModelId) setVideoModelId(videoModelId);
+  }, [videoModelId, localVideoModelId, setVideoModelId]);
   const [firstFramePlan, setFirstFramePlan] = useState<SegmentFirstFramePlan | null>(null);
+  const modelChangeCapabilities = useQuery({
+    queryKey: ["model-change-capabilities", projectId, episodeId, videoModelId, segmentPlan.data?.id, production.data?.revision,
+      videoModels.find(item => item.id === videoModelId)?.default_params?.episode_planning_capability],
+    queryFn: () => checkModelChange(projectId, episodeId, { provider_model_id: videoModelId! }),
+    enabled: Boolean(segmentPlan.data && videoModelId && production.data && episode?.finalized_script_revision === episode?.script_revision),
+    retry: false, refetchOnWindowFocus: false,
+  });
+  const changeModel = useMutation({
+    mutationFn: (input: ModelChangeApply) => applyModelChange(projectId, episodeId, input),
+    onSuccess: async (saved) => {
+      setSegmentAttemptPlan(null);
+      setSegmentAttemptId(null);
+      setFirstFramePlan(null);
+      setExportPreflight(null);
+      planSingleSegment.reset();
+      startSingleSegment.reset();
+      setVideoModelManuallyChanged(false);
+      if (typeof saved.parameters?.resolution === "string") setOutputResolution(saved.parameters.resolution);
+      client.setQueryData(["segment-production-plan", projectId, episodeId], saved);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["episode-production", projectId, episodeId] }),
+        client.invalidateQueries({ queryKey: ["episode-productions", projectId] }),
+      ]);
+    },
+  });
   const saveScript = useMutation({
     mutationFn: () => updateEpisode(projectId, episodeId, { script, expected_script_revision: episode!.script_revision, version_note: "单集制作台保存" }),
     onSuccess: async (saved) => {
@@ -82,16 +116,31 @@ export function useStoryboardVideoModel() {
   const saveHeaderModel = useMutation({
     mutationFn: ({ id, resolution }: { id: number | null; resolution: string }) => {
       if (!production.data) throw new Error("制作设置尚未载入");
+      if (segmentPlan.isPending || segmentPlan.isError || segmentPlan.data) throw new Error("请通过模型调整检查切换视频模型");
       return updateEpisodeProduction(projectId, episodeId, {
         ...production.data.settings, video_model_id: id, resolution,
       }, production.data.revision);
+    },
+    onMutate: ({ id, resolution }) => {
+      const previous = { id: videoModelId, resolution: outputResolution, manuallyChanged: videoModelManuallyChanged };
+      setVideoModelManuallyChanged(true);
+      setVideoModelId(id);
+      setOutputResolution(resolution);
+      return previous;
     },
     onSuccess: (saved) => {
       setVideoModelManuallyChanged(false);
       setExportPreflight(null);
       client.setQueryData(["episode-production", projectId, episodeId], saved);
     },
-    onError: () => { void production.refetch(); },
+    onError: (_error, _variables, previous) => {
+      if (previous) {
+        setVideoModelId(previous.id);
+        setOutputResolution(previous.resolution);
+        setVideoModelManuallyChanged(previous.manuallyChanged);
+      }
+      void production.refetch();
+    },
   });
   const createEngineeringPackage = useMutation({
     mutationFn: async () => {
@@ -165,7 +214,7 @@ export function useStoryboardVideoModel() {
     },
   });
   const changeSegmentLifecycleMutation = useMutation({
-    mutationFn: (payload: { operation: "add" | "copy" | "archive" | "restore" | "insert_before" | "insert_after" | "delete"; segment_id: number; shot_ids?: number[]; title?: string | null }) => changeSegmentLifecycle(projectId, episodeId, {
+    mutationFn: (payload: Omit<SegmentLifecycleInput, "expected_production_revision" | "confirmed">) => changeSegmentLifecycle(projectId, episodeId, {
       ...payload,
       expected_production_revision: production.data!.revision,
       confirmed: true,
@@ -180,6 +229,18 @@ export function useStoryboardVideoModel() {
   });
   const continuityCheck = useMutation({
     mutationFn: () => checkSegmentPlanContinuity(projectId, episodeId),
+  });
+  const deleteSegmentsMutation = useMutation({
+    mutationFn: (payload: SegmentDeleteInput) => deleteSelectedSegments(projectId, episodeId, payload),
+    onSuccess: async (saved) => {
+      client.setQueryData(["segment-production-plan", projectId, episodeId], saved);
+      setSegmentAttemptPlan(null);
+      setSegmentAttemptId(null);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["episode-production", projectId, episodeId] }),
+        client.invalidateQueries({ queryKey: ["episode-productions", projectId] }),
+      ]);
+    },
   });
   const episodeBatchParameters = useMemo(() => {
     if (segmentPlan.data?.source_type === "content_frozen") return {};
@@ -381,7 +442,7 @@ export function useStoryboardVideoModel() {
     dialogueCuePreview.data?.items,
     production.data?.settings.dialogue_cues,
   );
-  const savedVideoModelId = production.data?.settings.video_model_id
+  const savedVideoModelId = segmentPlan.data?.provider_model_id ?? production.data?.settings.video_model_id
     ?? videoModels.find((model) => model.id === aiSettings.data?.default_video_model_id)?.id
     ?? null;
   const soundCueErrors = soundCues.flatMap((cue) => {
@@ -394,7 +455,7 @@ export function useStoryboardVideoModel() {
     backgroundAudioId !== production.data.settings.background_audio_media_id ? "配乐" : null,
     backgroundAudioVolume !== Math.round(production.data.settings.background_audio_volume * 100) ? "音量" : null,
     includeSubtitles !== production.data.settings.include_subtitles ? "字幕" : null,
-    outputResolution !== effectiveVideoResolution(production.data.settings.resolution, videoModels.find((item) => item.id === videoModelId)) ? "分辨率" : null,
+    outputResolution !== (segmentPlan.data ? String(segmentPlan.data.parameters?.resolution ?? production.data.settings.resolution) : effectiveVideoResolution(production.data.settings.resolution, videoModels.find((item) => item.id === videoModelId))) ? "分辨率" : null,
     videoModelManuallyChanged && videoModelId !== savedVideoModelId ? "视频模型" : null,
     [...selectedAssetIds].sort((a, b) => a - b).join(",") !== [...savedAssetIds].sort((a, b) => a - b).join(",") ? "资产绑定" : null,
     stableFingerprint(dialogueCues.map(dialogueCueSettings)) !== stableFingerprint(serverDialogueCues.map(dialogueCueSettings)) ? "对白字幕" : null,
@@ -403,7 +464,7 @@ export function useStoryboardVideoModel() {
   const productionSettingsDirty = productionSettingsDirtyReasons.length > 0;
   const contentUnsavedChanges = dirty || segmentDirty;
   const hasUnsavedChanges = contentUnsavedChanges || productionSettingsDirty;
-  const savePending = saveScript.isPending || saveProductionSettings.isPending || saveSegmentPlan.isPending || adjustSegments.isPending || saveHeaderModel.isPending;
+  const savePending = saveScript.isPending || saveProductionSettings.isPending || saveSegmentPlan.isPending || adjustSegments.isPending || saveHeaderModel.isPending || changeModel.isPending;
   const shouldBlockNavigation = useCallback(() => hasUnsavedChanges || savePending, [hasUnsavedChanges, savePending]);
   const blocker = useDraftBlocker(shouldBlockNavigation);
   const sourceStale = production.data?.script_dependency_status === "stale"
@@ -455,7 +516,7 @@ export function useStoryboardVideoModel() {
   const activeImageModel = imageModels.find(
     (model) => model.id === aiSettings.data?.default_image_model_id,
   ) ?? imageModels[0];
-  const segmentError = saveSegmentPlan.error || adjustSegments.error || changeSegmentLifecycleMutation.error || continuityCheck.error;
+  const segmentError = saveSegmentPlan.error || adjustSegments.error || changeSegmentLifecycleMutation.error || deleteSegmentsMutation.error || continuityCheck.error;
   const recoveredState = production.data?.active_job_id
     ? `已恢复任务 · ${production.data.active_job_status || "状态同步中"}${production.data.active_job_progress != null ? ` ${production.data.active_job_progress}%` : ""}`
     : segmentPlan.data
@@ -466,7 +527,7 @@ export function useStoryboardVideoModel() {
   ) ?? null;
 
   return {
-    projectId, episodeId, studioRef, script, setScript,
+    projectId, episodeId, studioRef, script, setScript, episodeBatchParameters, setActiveJobId,
     videoModelId, setVideoModelId, setVideoModelManuallyChanged, exportUrl, selectedExportMediaId,
     setSelectedExportMediaId, exportPreviewError, productionOpen, setProductionOpen, backgroundAudioId, setBackgroundAudioId, backgroundAudioVolume, setBackgroundAudioVolume,
     includeSubtitles, setIncludeSubtitles, outputResolution, setOutputResolution,
@@ -479,8 +540,8 @@ export function useStoryboardVideoModel() {
     episode, production, segmentPlan, dialogueCuePreview, episodeAssetReadiness, assets,
     audioMedia, exportHistory, engineeringPackages, premiereXmlPackages, jianyingDraftPackages, jianyingDraftPreflight, scenes,
     videoModels, imageModels, plannerModels, activeJob, saveScript,
-    saveProductionSettings, saveHeaderModel, createEngineeringPackage, createPremiereXmlPackage, createJianyingDraftPackage,
-    saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck,
+    saveProductionSettings, saveHeaderModel, changeModel, modelChangeCapabilities, createEngineeringPackage, createPremiereXmlPackage, createJianyingDraftPackage,
+    saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, deleteSegmentsMutation, continuityCheck,
     planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan,
     chooseSegmentVersion, preflightExport, exportEpisode, cancelActiveJob, retryActiveJob, uploadAudio, downloadMedia,
     characterAssets, voiceAssets, updateDialogueCue, episodeTimelineDuration, addSoundCue, updateSoundCue, removeSoundCue, dialogueReadiness,

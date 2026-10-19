@@ -1534,6 +1534,258 @@
       ]
     ]
   },
+  "video_adapter_releases": {
+    "columns": [
+      {
+        "name": "adapter_key",
+        "type": "VARCHAR(80)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "version",
+        "type": "VARCHAR(40)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "fingerprint",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "package",
+        "type": "JSON",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "enabled",
+        "type": "BOOLEAN",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_video_adapter_releases_workspace_id",
+        false,
+        [
+          "video_adapter_releases.workspace_id"
+        ]
+      ],
+      [
+        "uq_video_adapter_local_release",
+        true,
+        [
+          "video_adapter_releases.adapter_key",
+          "video_adapter_releases.version"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ],
+      [
+        "UniqueConstraint",
+        "uq_video_adapter_release",
+        [
+          "workspace_id",
+          "adapter_key",
+          "version"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
+  "video_configuration_presets": {
+    "columns": [
+      {
+        "name": "release_key",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "name",
+        "type": "VARCHAR(80)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "version",
+        "type": "VARCHAR(40)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "VARCHAR(200)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "model_ids",
+        "type": "JSON",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "package",
+        "type": "JSON",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "fingerprint",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_video_configuration_presets_workspace_id",
+        false,
+        [
+          "video_configuration_presets.workspace_id"
+        ]
+      ],
+      [
+        "uq_video_configuration_presets_local_release_key",
+        true,
+        [
+          "video_configuration_presets.release_key"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ],
+      [
+        "UniqueConstraint",
+        "uq_video_preset_release",
+        [
+          "workspace_id",
+          "release_key"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
   "workspace_invitations": {
     "columns": [
       {
@@ -3483,6 +3735,13 @@
         "default": null
       },
       {
+        "name": "video_config",
+        "type": "JSON",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      },
+      {
         "name": "video_prompt_certifications",
         "type": "JSON",
         "nullable": false,
@@ -3665,6 +3924,129 @@
         "provider_id",
         "providers.id",
         "CASCADE",
+        "None"
+      ],
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
+  "video_accounts": {
+    "columns": [
+      {
+        "name": "provider_id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "current",
+        "type": "BOOLEAN",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "key_ciphertext",
+        "type": "TEXT",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "key_hint",
+        "type": "VARCHAR(8)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_video_accounts_provider_id",
+        false,
+        [
+          "video_accounts.provider_id"
+        ]
+      ],
+      [
+        "ix_video_accounts_workspace_id",
+        false,
+        [
+          "video_accounts.workspace_id"
+        ]
+      ],
+      [
+        "uq_video_account_current",
+        true,
+        [
+          "video_accounts.provider_id"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "provider_id"
+        ],
+        ""
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "provider_id",
+        "providers.id",
+        "RESTRICT",
         "None"
       ],
       [
@@ -8491,6 +8873,152 @@
         "reference_media_id",
         "media_files.id",
         "SET NULL",
+        "None"
+      ],
+      [
+        "workspace_id",
+        "workspaces.id",
+        "RESTRICT",
+        "None"
+      ]
+    ]
+  },
+  "video_execution_versions": {
+    "columns": [
+      {
+        "name": "model_id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "account_id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "fingerprint",
+        "type": "VARCHAR(64)",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "snapshot",
+        "type": "JSON",
+        "nullable": false,
+        "primary_key": false,
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "INTEGER",
+        "nullable": false,
+        "primary_key": true,
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "DATETIME",
+        "nullable": false,
+        "primary_key": false,
+        "default": "now()"
+      },
+      {
+        "name": "workspace_id",
+        "type": "VARCHAR(32)",
+        "nullable": true,
+        "primary_key": false,
+        "default": null
+      }
+    ],
+    "indexes": [
+      [
+        "ix_video_execution_versions_account_id",
+        false,
+        [
+          "video_execution_versions.account_id"
+        ]
+      ],
+      [
+        "ix_video_execution_versions_model_id",
+        false,
+        [
+          "video_execution_versions.model_id"
+        ]
+      ],
+      [
+        "ix_video_execution_versions_workspace_id",
+        false,
+        [
+          "video_execution_versions.workspace_id"
+        ]
+      ]
+    ],
+    "constraints": [
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "account_id"
+        ],
+        ""
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "model_id"
+        ],
+        ""
+      ],
+      [
+        "ForeignKeyConstraint",
+        "None",
+        [
+          "workspace_id"
+        ],
+        ""
+      ],
+      [
+        "PrimaryKeyConstraint",
+        "None",
+        [
+          "id"
+        ],
+        ""
+      ],
+      [
+        "UniqueConstraint",
+        "uq_video_execution_version",
+        [
+          "model_id",
+          "fingerprint"
+        ],
+        ""
+      ]
+    ],
+    "foreign_keys": [
+      [
+        "account_id",
+        "video_accounts.id",
+        "RESTRICT",
+        "None"
+      ],
+      [
+        "model_id",
+        "provider_models.id",
+        "RESTRICT",
         "None"
       ],
       [

@@ -74,6 +74,8 @@ async def create_segment_video_job(
     shot_ids: list[int],
 ) -> Job:
     """Create one paid-capable video job for exactly one VideoSegment."""
+    from app.services.segment_video_recovery_service import require_resolved_generation
+    await require_resolved_generation(session, segment, project_id, owner_id)
     if segment.status == "archived":
         raise ConflictError("片段已归档，请先恢复")
     if segment.status == "generating":
@@ -96,6 +98,15 @@ async def create_segment_video_job(
     from app.services.production_snapshot_service import capture_script
     script_snapshot = await capture_script(session, segment)
     refs = script_snapshot.content.get("refs") or {}
+    project = await session.get(Project, project_id)
+    if project is None:
+        raise NotFoundError("项目不存在")
+    from app.services.segment_asset_references import (
+        material_guidance,
+        material_snapshot,
+        resolve_materials,
+    )
+    refs = await resolve_materials(session, project, refs, segment=segment)
     effective = {
         **plan_parameters,
         **(segment.parameters or {}),
@@ -112,9 +123,6 @@ async def create_segment_video_job(
         if first_frame_media_id not in (None, continuity_frame_id):
             raise ConflictError("连续帧依赖不能与手工首帧同时使用")
         first_frame_media_id = continuity_frame_id
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise NotFoundError("项目不存在")
     project_ratio = (project.creation_settings or {}).get("aspect_ratio")
     if project_ratio and project_ratio not in {"default", "project"}:
         effective["aspect_ratio"] = project_ratio
@@ -129,7 +137,7 @@ async def create_segment_video_job(
     voice_guidance = await compile_segment_voice_guidance(
         session, project, segment, refs, policy=effective["audio_policy"]
     )
-    base_prompt, omitted = apply_prompt(segment.prompt, (segment.parameters or {}).get("structured_script"), effective["audio_policy"])
+    base_prompt, omitted = apply_prompt(segment.prompt, (segment.parameters or {}).get("structured_script"), effective["audio_policy"], refs)
     effective_prompt = append_voice_guidance(base_prompt, voice_guidance)
     job = await _job_creation_service.create_video_job(
         session,
@@ -161,12 +169,18 @@ async def create_segment_video_job(
         "effective_parameters": job.payload["parameters"],
     }
     script = (script_snapshot.content.get("parameters") or {}).get("structured_script")
+    from app.services.video_voice_reference_service import prepare, append_mapping
+    voice_guidance = await prepare(session, project, refs, voice_guidance, provider, model, frozen_input)
     prompt, negative, selection = select_segment_video_prompt(
         provider, model, script=script, input_contract=frozen_input,
         existing_prompt=job.payload["prompt"],
         existing_negative_prompt=job.payload.get("negative_prompt"),
         source_negative_prompt=segment.negative_prompt, voice_guidance=voice_guidance,
     )
+    prompt = append_mapping(prompt, voice_guidance)
+    guidance = material_guidance({**refs, "reference_media_ids": frozen_input["reference_media_ids"]})
+    if guidance:
+        prompt += "\n\n" + guidance
     styled_prompt, style_snapshot = await frozen_video_style_prompt(
         session, project_id, owner_id, prompt
     )
@@ -175,16 +189,20 @@ async def create_segment_video_job(
         "style_snapshot": style_snapshot,
     }
     attach_pricing(job, model)
+    material = await material_snapshot(session, refs, [item["media_id"] for item in frozen_input["effective_references"]])
     prompt_freeze = build_video_prompt_freeze(
         provider, model, script=script, input_contract=frozen_input,
         active_prompt=job.payload["prompt"], voice_guidance=voice_guidance,
         style_snapshot=style_snapshot, selection=selection,
+        asset_material_snapshot=material,
+        voice_reference=voice_guidance["audio_reference"],
     )
     job.target_type = "video_segment"
     job.target_id = segment.id
     job.payload = {
         **job.payload,
         "asset_bindings": bindings,
+        "asset_material_snapshot": material,
         "script_snapshot_id": script_snapshot.id,
         "script_fingerprint": script_snapshot.fingerprint,
         "script_snapshot": script_snapshot.content,

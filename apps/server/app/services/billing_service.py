@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from app.services.team_access import owner_scope, same_team
 
 from app.core.database import SessionLocal
+from app.core.local_write_session import local_write_session
 from app.core.errors import ConflictError, NotFoundError
 from app.models import BillingCall, BillingReceipt, Job
 from app.services.pricing_service import estimate, number
@@ -86,7 +87,7 @@ def usage_meter(result):
 
 
 async def begin(job_id, worker_id, key):
-    async with SessionLocal() as session:
+    async with local_write_session() as session:
         locked = await session.execute(update(Job).where(Job.id == job_id, Job.worker_id == worker_id,
             Job.status.in_(["processing", "downloading", "running"])).values(progress=Job.progress))
         if not locked.rowcount:
@@ -121,7 +122,7 @@ async def observe(call_id, meter=None, session=None):
     if call_id is None:
         return
     if session is None:
-        async with SessionLocal() as owned:
+        async with local_write_session() as owned:
             await observe(call_id, meter, owned)
             await owned.commit()
         return
@@ -157,7 +158,7 @@ async def mark_not_submitted(call_id, reason: str) -> None:
     """Record a proven pre-submit failure without treating it as provider usage."""
     if call_id is None:
         return
-    async with SessionLocal() as session:
+    async with local_write_session() as session:
         row = await session.get(BillingCall, call_id)
         if row is None:
             return

@@ -15,6 +15,7 @@ from app.core.errors import ConflictError, ValidationError
 from app.models import (
     AssetVersion,
     Episode,
+    EpisodeProduction,
     MediaFile,
     ProjectMediaLink,
     SegmentVideoVersion,
@@ -31,12 +32,14 @@ async def list_project_video_sources(session: AsyncSession, *, project_id: int, 
             select(SegmentVideoVersion, VideoSegment, Episode, MediaFile)
             .join(VideoSegment, VideoSegment.id == SegmentVideoVersion.segment_id)
             .join(Episode, Episode.id == VideoSegment.episode_id)
+            .join(EpisodeProduction, EpisodeProduction.episode_id == Episode.id)
             .join(MediaFile, MediaFile.id == SegmentVideoVersion.media_file_id)
             .where(
                 Episode.project_id == project_id,
                 SegmentVideoVersion.is_final.is_(True),
                 MediaFile.kind == "video",
                 VideoSegment.status != "archived",
+                VideoSegment.plan_id == EpisodeProduction.active_plan_id,
             )
             .order_by(Episode.number, VideoSegment.order, SegmentVideoVersion.id)
         )
@@ -110,16 +113,25 @@ async def verify_project_sources(
                 )
             )
             if link is None:
-                raise ValidationError("素材未加入当前项目")
+                from app.services.project_audio_library import has_audio_asset_reference, is_adopted
+                adopted = kind == "audio" and await is_adopted(session, project_id, media_id)
+                # Legacy editors may have fixed evidence without a direct media link.
+                # Archiving its asset must not revoke that already-verified source.
+                historical = kind == "audio" and str(media_id) in (expected_evidence or {}) and await has_audio_asset_reference(session, project_id, media_id)
+                if not adopted and not historical:
+                    raise ValidationError("素材未加入当前项目")
         if kind == "audio" and str(media_id) not in (expected_evidence or {}):
+            if "voice-design" in Path(media.file_path).parts:
+                raise ValidationError("音色设计试听不能作为新增配音素材，请先采用音色并生成正式配音")
+            from app.services.audio_purpose import require_production_audio
+            require_production_audio(media)
             versions = (
                 await session.scalars(
                     select(AssetVersion).where(AssetVersion.media_file_id == media_id)
                 )
             ).all()
-            if versions and not any(
-                version.is_final and version.review_status != "archived" for version in versions
-            ):
+            from app.services.project_audio_library import is_adopted
+            if versions and not await is_adopted(session, project_id, media_id):
                 raise ValidationError("新增声音素材尚未采用或已归档")
         path = (root / Path(media.file_path)).resolve()
         if not path.is_relative_to(root) or not path.is_file():

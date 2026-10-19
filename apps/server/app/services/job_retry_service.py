@@ -38,6 +38,8 @@ async def _prepare_video_segment_retry(session: AsyncSession, job: Job) -> None:
     if active is not None:
         raise ConflictError("该片段已有进行中的视频任务")
     submission = dict((job.payload or {}).get("video_submission") or {})
+    if submission.get("terminal_status") in {"failed", "cancelled"}:
+        raise ConflictError("原视频任务已明确失败或取消，请确认费用后重新生成")
     if not _remote_video_task_id(submission):
         production = await session.scalar(
             select(EpisodeProduction).where(
@@ -81,6 +83,20 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
     if job.job_type == "video":
         from app.core.video_submission import normalize_rejected_video_submission
         job.payload = normalize_rejected_video_submission(job.payload or {})
+        if (job.payload.get("video_submission") or {}).get("terminal_status") in {"failed", "cancelled"}:
+            raise ConflictError("原视频任务已明确失败或取消，请确认费用后重新生成")
+        if job.payload.get("video_execution_version"):
+            from app.services.video_version_service import resolve
+            from app.services.video_adapter_installation import require_installed
+            model = await session.get(ProviderModel, job.payload["provider_model_id"])
+            provider = await session.get(Provider, job.provider_id)
+            if provider is None or model is None:
+                raise ConflictError("原视频模型或账号配置不存在")
+            provider, model = await resolve(session, job, provider, model)
+            resuming = bool(_remote_video_task_id(job.payload.get("video_submission") or {}))
+            if not resuming and (not provider.enabled or not model.enabled):
+                raise ConflictError("原模型或渠道已停止接收新任务；只有已提交的视频可继续恢复")
+            await require_installed(session, model, submitting=not resuming)
     if (job.resolution or {}).get("status") == "superseded":
         raise ConflictError(job.retry_block_reason or "任务已由后续成功结果替代")
     if job.retry_block_reason:
@@ -158,6 +174,15 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
         "script_asset_breakdown_batch",
         "script_asset_breakdown_group",
     }:
+        from app.models import CreationSession
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+        item = await session.get(CreationSession, job.target_id)
+        if item is None:
+            raise ConflictError("资产拆解会话不存在，不能重试")
+        await lock_breakdown_session(session, item)
+        await session.refresh(job)
+        if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
+            raise ConflictError("该拆解任务已被重试或结束，请刷新状态")
         from app.services.creation_breakdown_service import (
             validate_script_asset_breakdown_job_sources,
         )
@@ -191,8 +216,12 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
             await canvas_processing_service.preflight(session, job, retry=True)
         else:
             saved_audio = job.job_type in {"tts", "audio"} and (job.payload.get("audio_submission", {}).get("result_received") or job.error_code == "AUDIO_SAVE_FAILED")
-            if not saved_audio:
-                await canvas_generation_service.validate_model(session, job.payload["provider_model_id"], "audio" if job.job_type in {"tts", "audio"} else job.job_type, job.payload.get("parameters", {}))
+            if not saved_audio and not (job.job_type == "video" and job.payload.get("video_execution_version")):
+                if job.target_type == "model_audio_test":
+                    from app.services.audio_trial_service import validate_model as validate_trial
+                    await validate_trial(session, job.payload["provider_model_id"], job.payload.get("parameters", {}))
+                else:
+                    await canvas_generation_service.validate_model(session, job.payload["provider_model_id"], "audio" if job.job_type in {"tts", "audio"} else job.job_type, job.payload.get("parameters", {}))
             from app.services import canvas_advanced_service
             await canvas_advanced_service.preflight(session, job)
         if job.target_type == "canvas_agent":
@@ -225,6 +254,31 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
     await session.refresh(job)
     if job.target_type == "video_segment" and job.target_id is not None:
         await _prepare_video_segment_retry(session, job)
+    if job.target_type == "script_asset_breakdown_group" and job.payload.get("pending_audio_error"):
+        from app.models import CreationSession
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+        from app.services.creation_breakdown_jobs import queue_pending_audio_breakdown_jobs
+        item = await session.get(CreationSession, job.target_id)
+        await lock_breakdown_session(session, item)
+        await session.refresh(job)
+        progress = dict(item.settings.get("asset_breakdown") or {})
+        batches = progress.get("batches") or {}
+        children = await queue_pending_audio_breakdown_jobs(
+            session, item, job, [batches[key] for key in job.payload.get("visual_scope_keys") or [] if key in batches],
+        )
+        if job.payload.get("pending_audio_error"):
+            raise ConflictError(job.payload["pending_audio_error"]["message"])
+        if not children:
+            raise ConflictError("没有可继续提交的声音批次，请先恢复失败的视觉范围")
+        item.settings = {**item.settings, "asset_breakdown": {
+            **progress, "status": "running", "audio_queued": bool(job.payload.get("audio_queued")),
+        }}
+        job.status = JOB_STATUS_PROCESSING
+        job.finished_at = None
+        job.error_code = None
+        job.error_message = None
+        await session.flush()
+        return job
     if job.target_type in BATCH_PARENT_TARGETS:
         batch_result = dict(job.result or {})
         children = list((await session.scalars(
@@ -326,6 +380,11 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
     job.result = None
     job.started_at = None
     job.finished_at = None
+    if job.target_type == "video_segment" and job.parent_job_id:
+        parent = await job_state_service.aggregate_parent_job(session, job.id)
+        if parent is not None and parent.status == JOB_STATUS_PROCESSING:
+            parent.error_code = None
+            parent.error_message = None
     if job.target_type in BATCH_PARENT_TARGETS:
         job.result = batch_result
         if children:
@@ -369,6 +428,10 @@ async def _refresh_text_model_defaults(session: AsyncSession, job: Job) -> None:
     model, provider = pair
     if not model.enabled or not provider.enabled:
         raise ConflictError("原文本模型或渠道已停用，不能重试")
+    if job.target_type in {"script_asset_breakdown", "script_asset_breakdown_batch"}:
+        from app.services.asset_extraction_execution import validate_retry
+        await validate_retry(session, job)
+        return
     from app.services import text_model_policy_service
 
     snapshot = dict(job.execution_policy_snapshot or {})

@@ -70,7 +70,7 @@ def inspect(connection):
     if tables != set(expected) | {"standalone_alembic_version"}:
         raise RuntimeError("Source table set does not match its standalone revision")
     for table, columns in expected.items():
-        if [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')] != columns:
+        if {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')} != set(columns):
             raise RuntimeError("Source columns do not match its standalone revision")
     if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
         raise RuntimeError("Source database integrity check failed")

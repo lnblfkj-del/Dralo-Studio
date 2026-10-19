@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
@@ -43,6 +43,16 @@ class BusinessExecutorDefinition:
 
 
 BUSINESS_EXECUTORS = (
+    BusinessExecutorDefinition(
+        key="asset_extractor",
+        name="资产拆解器",
+        description="从定稿剧本提取可追溯的视觉与声音资产，使用独立文本模型路由。",
+        model_type="text",
+        skill_keys=("outline.asset_extract",),
+        tool_keys=("asset_candidates.propose",),
+        execution_surfaces=("asset_breakdown",),
+        billing_behavior="text_generation",
+    ),
     BusinessExecutorDefinition(
         key="episode_director",
         name="分集导演",
@@ -160,13 +170,16 @@ async def ensure_executor_skills(session: AsyncSession) -> list[AgentSkill]:
         )
     await session.flush()
     keys = [key for definition in BUSINESS_EXECUTORS for key in definition.skill_keys]
-    return list(
+    skills = list(
         (
             await session.scalars(
                 select(AgentSkill).where(AgentSkill.key.in_(keys)).order_by(AgentSkill.key)
             )
         ).all()
     )
+    from app.services.skill_retention_service import retain_latest
+    await retain_latest(session, skills)
+    return skills
 
 
 async def ensure_executor_settings(session: AsyncSession) -> list[BusinessExecutorSetting]:
@@ -184,12 +197,20 @@ async def ensure_executor_settings(session: AsyncSession) -> list[BusinessExecut
             for key in definition.skill_keys
         ]
         if definition.key in existing:
-            # Catalog upgrades advance reviewed bindings; initialization preserves user pins.
             continue
+        initial_model_id = None
+        if definition.key == "asset_extractor":
+            from app.services import provider_service
+            try:
+                model, _source = await provider_service.resolve_agent_model(session, "outline")
+                initial_model_id = model.id
+            except ConflictError:
+                # Initialization without a usable route stays unconfigured, never falls back later.
+                pass
         setting = BusinessExecutorSetting(
             key=definition.key,
             enabled=definition.default_enabled,
-            model_id=None,
+            model_id=initial_model_id,
             skill_versions=selections,
             approval_policy="explicit_confirmation",
             parameters={},
@@ -259,12 +280,14 @@ async def _skill_details(
             (
                 await session.scalars(
                     select(AgentSkillVersion)
-                    .where(AgentSkillVersion.skill_id == skill.id)
+                    .where(AgentSkillVersion.skill_id == skill.id, AgentSkillVersion.version == skill.version)
                     .order_by(AgentSkillVersion.version.desc())
                 )
             ).all()
         )
         chosen = selected.get(skill.id, skill.version)
+        if chosen != skill.version:
+            errors.append(f"{skill.name} 只允许使用最新 V{skill.version}")
         selected_version = next((item for item in versions if item.version == chosen), None)
         if selected_version is None:
             errors.append(f"{skill.name} 的 V{chosen} 不存在")
@@ -354,6 +377,8 @@ async def update_executor(
     if approval_policy is not None:
         setting.approval_policy = approval_policy
     if parameters is not None:
+        if key == "asset_extractor":
+            validate_extractor_parameters(parameters)
         setting.parameters = parameters
     if setting.approval_policy != "explicit_confirmation":
         raise ConflictError("当前只允许明确确认策略，不能绕过审批")
@@ -361,7 +386,18 @@ async def update_executor(
         _model, error = await _model_status(session, definition, setting.model_id)
         if error:
             raise ConflictError(error)
-    setting.revision += 1
+        if key == "asset_extractor":
+            from app.services.asset_extraction_routing import validate_reasoning
+            model_row = await session.get(ProviderModel, setting.model_id)
+            provider = await session.get(Provider, model_row.provider_id)
+            validate_reasoning(model_row, provider, setting.parameters)
+    result = await session.execute(update(BusinessExecutorSetting).where(
+        BusinessExecutorSetting.id == setting.id,
+        BusinessExecutorSetting.revision == expected_revision,
+    ).values(revision=expected_revision + 1).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        raise ConflictError("业务执行器配置已被修改，请刷新后重试")
+    setting.revision = expected_revision + 1
     await session.flush()
     return await to_output(session, setting)
 
@@ -398,3 +434,11 @@ async def resolve_execution(
         "billing_behavior": definition.billing_behavior,
         "parameters": dict(setting.parameters or {}),
     }
+
+
+def validate_extractor_parameters(parameters: dict[str, Any]) -> None:
+    if set(parameters) - {"reasoning_effort"}:
+        raise ConflictError("资产拆解器只允许配置思考等级，其他参数请在模型管理中设置")
+    effort = parameters.get("reasoning_effort", "inherit")
+    if not isinstance(effort, str) or effort not in {"inherit", "low", "medium", "high"}:
+        raise ConflictError("资产拆解思考等级必须为继承、低、中或高")

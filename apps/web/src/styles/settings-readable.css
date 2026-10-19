@@ -28,7 +28,6 @@ html:has(.creator-app.settings-mode),body:has(.creator-app.settings-mode){max-wi
 .model-definition-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px;padding-right:78px}
 .model-definition-actions button{display:inline-flex;align-items:center;gap:5px;min-height:34px;padding:6px 9px;border:0;border-radius:7px;color:#4e4852;font-size:11px}
 .model-definition-actions button.danger{color:#bb5058}
-.model-dialog.ui-dialog :is(.ant-modal-container,.ant-modal-content){display:flex;flex-direction:column}.model-dialog.ui-dialog .ant-modal-body{display:flex;min-height:0;overflow:hidden}.model-dialog.ui-dialog .ui-dialog__body{display:flex;min-height:0;flex:1;flex-direction:column;overflow:auto}.model-test-dialog.ui-dialog :is(.ant-modal-container,.ant-modal-content){height:min(720px,calc(100dvh - 48px))}
 .model-dialog-title{display:flex;align-items:center;gap:12px}
 .model-dialog-title>span{display:grid;place-items:center;width:40px;height:40px;border-radius:8px;background:#f0eef2}
 .model-dialog-title small{color:#9272ab;font-size:11px;font-weight:650;letter-spacing:1.4px}
@@ -90,7 +89,7 @@ html:has(.creator-app.settings-mode),body:has(.creator-app.settings-mode){max-wi
 .model-chat-composer,.model-test-consent{flex-shrink:0}
 .model-test-dialog .model-test-body{flex:1;min-height:120px}
 .model-test-dialog .model-chat-log{min-height:0}
-.model-media-guidance-dialog{width:min(760px,calc(100vw - 40px));min-height:0}
+.model-media-guidance-dialog{min-height:0}
 .model-media-guidance-dialog .model-test-body{flex:none}
 .model-pricing-form p{font-size:12px;line-height:1.6;color:#837989}
 .model-pricing-form .pricing-rule{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) auto;gap:8px;align-items:end;margin-bottom:12px}

@@ -1,0 +1,67 @@
+.video-model-edit-dialog .model-edit-form { gap: 14px; padding: 0; overflow: visible; flex: none; }
+.video-model-edit-dialog .model-edit-form :is(input, select):not([type="checkbox"]) { height: 36px; }
+.video-model-edit-dialog .model-edit-form textarea { height: auto; min-height: 140px; padding: 10px; resize: vertical; }
+.video-model-edit-dialog .model-dialog-error { margin: 16px 0 0; }
+.video-model-edit-dialog .model-basic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.video-model-edit-dialog :is(input, select, textarea) { color: #18181b; border-color: #c4c4cc; border-radius: 6px; width: 100%; max-width: 100%; box-sizing: border-box; }
+.video-model-edit-dialog input[type="checkbox"] { accent-color: #18181b; width: 16px; height: 16px; flex: 0 0 16px; }
+.video-model-edit-dialog :is(h3, legend) { margin: 0; padding: 0; color: #18181b; font-size: 14px; font-weight: 600; }
+.video-model-edit-dialog .model-protocol-details { margin: 0; padding: 0; border: 0; border-top: 1px solid #e4e4e7; border-radius: 0; background: none; }
+.video-model-edit-dialog :is(summary, label) { color: #27272a; font-size: 13px; }
+.video-model-edit-dialog details > summary { cursor: pointer; padding: 10px 0; font-weight: 500; }
+.video-model-edit-dialog small { color: #71717a; font-weight: 400; }
+.video-simple-connection { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 16px; border-block: 1px solid #e4e4e7; }
+.video-simple-connection > div:first-child { display: grid; gap: 6px; min-width: 0; }
+.video-simple-connection span { font-size: 13px; overflow-wrap: anywhere; }
+.video-spec-summary h3 { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.video-spec-summary h3 small { font-size: 12px; }
+.video-spec-summary dl { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 28px; margin: 18px 0 4px; }
+.video-spec-summary dl > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 10px; align-items: baseline; font-size: 13px; }
+.video-spec-summary dt { color: #71717a; }
+.video-spec-summary dd { margin: 0; color: #18181b; overflow-wrap: anywhere; }
+.video-spec-summary p { font-size: 13px; color: #71717a; }
+.video-spec-editor > summary { color: #18181b; }
+.video-spec-editor[open] > summary { margin-bottom: 14px; }
+.video-settings-fields { display: grid; gap: 18px; min-width: 0; }
+.video-settings-fields fieldset, .video-model-edit-dialog .video-settings-fields fieldset { min-width: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; }
+.video-settings-fields label { display: grid; min-width: 0; gap: 6px; font-size: 13px; }
+.video-settings-fields input, .video-settings-fields select { width: 100%; max-width: 100%; min-width: 0; padding: 7px 10px; min-height: 34px; border: 1px solid #c4c4cc; border-radius: 6px; background: white; color: #18181b; font: inherit; box-sizing: border-box; }
+.video-support-switches { display: flex; flex-wrap: wrap; gap: 12px 20px; }
+.video-settings-fields .video-support-switches label, .video-settings-fields .video-inline-checkbox { display: flex; align-items: center; gap: 8px; }
+.video-settings-fields input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; accent-color: #18181b; flex: 0 0 16px; }
+.video-generation-options legend { margin-bottom: 12px; }
+.video-rule-scope { display: grid; gap: 5px; padding: 14px 0; border-block: 1px solid #e4e4e7; }
+.video-rule-scope select { text-overflow: ellipsis; }
+.video-mode-edit-fields, .video-reference-fields { display: grid; min-width: 0; gap: 12px; }
+.video-mode-edit-fields h3:not(:first-child) { margin-top: 10px; padding-top: 18px; border-top: 1px solid #e4e4e7; }
+.video-support-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.video-reference-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.video-reference-edit strong { grid-column: 1 / -1; font-size: 12px; font-weight: 500; }
+.video-duration-options { display: grid; gap: 8px; min-width: 0; }
+.video-option-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.video-option-chips :is(button, span) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 29px; padding: 3px 9px; border: 1px solid #c4c4cc; border-radius: 5px; background: #f8f8fa; color: #18181b; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
+.video-option-chips button { cursor: pointer; }
+.video-option-chips button:hover { background: #ececf0; border-color: #52525b; }
+.video-duration-add { display: flex; gap: 6px; align-items: center; }
+.video-duration-add input { max-width: 108px; }
+.video-duration-add button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #c4c4cc; border-radius: 5px; background: white; color: #18181b; cursor: pointer; }
+.video-duration-add button:disabled { opacity: .4; cursor: default; }
+.video-special-rules, .video-planning-preference { border-top: 1px solid #e4e4e7; padding-top: 4px; }
+.video-rule-list { display: grid; margin: 10px 0; }
+.video-rule-list > div { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid #e4e4e7; }
+.video-rule-list strong { font-size: 13px; font-weight: 500; }
+.video-support-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.video-new-rule { display: grid; gap: 14px; border-block: 1px solid #d4d4d8; padding-block: 18px; }
+.video-inline-confirm { padding: 12px; border-left: 2px solid #b42318; background: #fff7f5; }
+.video-inline-confirm .ui-button { margin-right: 8px; }
+.video-support-error { color: #b42318; margin: 0; }
+.video-planning-preference label { max-width: 300px; margin-bottom: 8px; }
+.video-model-edit-dialog .video-connection-tools { border: 0; padding: 0; }
+.video-model-edit-dialog .video-connection-tools > legend { display: none; }
+.video-model-edit-dialog .video-tools-actions { gap: 8px; }
+.video-model-edit-dialog .video-import-preview { max-height: none; overflow: visible; }
+@media (max-width: 600px) {
+  .video-simple-connection { align-items: flex-start; flex-direction: column; }
+  .video-spec-summary dl { grid-template-columns: minmax(0, 1fr); }
+  .video-model-edit-dialog .model-basic-grid, .video-support-grid { grid-template-columns: minmax(0, 1fr); }
+}

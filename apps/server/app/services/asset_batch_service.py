@@ -21,9 +21,11 @@ from app.models import (
     ProviderModel,
 )
 from app.services import asset_service, job_service
+from app.services.asset_character_representation import GROUP_CONTRACT, character_profile, is_group
+from app.services.costume_generation_service import resolve_mode
+from app.services.costume_generation_service import views as costume_views
 from app.services.job_concurrency_service import TERMINAL_STATUSES
 from app.services.job_pricing_service import _aggregate_video_pricing
-from app.services.costume_generation_service import resolve_mode, views as costume_views
 
 ASSET_IMAGE_BATCH_CONTRACT = "asset-image-batch.v5"
 CHARACTER_REFERENCE_NEGATIVE_PROMPT = (
@@ -190,6 +192,8 @@ async def create(
     }
 
     eligible: list[tuple[Asset, str]] = []
+    groups = {asset_id: character_profile(asset.attributes, link.production_data)
+              for asset_id, (asset, link) in by_id.items()}
     skipped: list[dict[str, Any]] = []
     for asset_id in ordered_ids:
         asset, link = by_id[asset_id]
@@ -208,9 +212,9 @@ async def create(
             code, reason = "shared_asset_requires_local_variant", "公共素材需先建立项目变体"
         elif link.production_archived:
             code, reason = "archived", "资产已归档，请先恢复"
-        elif generation_mode == "missing" and asset.asset_type == "character" and asset.id in complete_character_sheets:
+        elif generation_mode == "missing" and asset.asset_type == "character" and not is_group(groups[asset.id]) and asset.id in complete_character_sheets:
             code, reason = "already_ready", "已有角色设定图"
-        elif generation_mode == "missing" and asset.asset_type != "character" and ((link.production_data or {}).get("adoptions") or asset.id in final_asset_ids):
+        elif generation_mode == "missing" and (asset.asset_type != "character" or is_group(groups[asset.id])) and ((link.production_data or {}).get("adoptions") or asset.id in final_asset_ids):
             code, reason = "already_ready", "已有采用素材或最终版"
         elif not isinstance(prompt, str) or not prompt.strip():
             code, reason = "missing_prompt", "缺少资产一致性提示词"
@@ -280,7 +284,7 @@ async def create(
         ]
         character_view = (
             asset_service.character_reference_sheet_views()[0]
-            if asset.asset_type == "character" else None
+            if asset.asset_type == "character" and not is_group(groups[asset.id]) else None
         )
         view_type, view_label = (
             (str(character_view["view_type"]), str(character_view["view_label"]))
@@ -289,6 +293,8 @@ async def create(
             )
         )
         generation_contract = asset_service.asset_generation_contract(asset.asset_type)
+        if asset.asset_type == "character" and is_group(groups[asset.id]):
+            generation_contract = GROUP_CONTRACT
         if costume_mode == "garment_only":
             generation_contract = "costume-garment.v1"
         reference_negative = (
@@ -303,7 +309,7 @@ async def create(
             provider_model_id=provider_model_id,
             prompt=(
                 asset_service.character_reference_prompt(prompt, str(character_view["key"]))
-                if character_view else asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=costume_mode)
+                if character_view else asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=costume_mode, character_profile=groups[asset.id])
             ),
             negative_prompt="\n".join(filter(None, [negative_prompt, reference_negative])) or None,
             reference_media_ids=reference_media_ids,

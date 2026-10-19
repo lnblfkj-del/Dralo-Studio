@@ -1,0 +1,74 @@
+:root { --app-dialog-width:1200px; --app-dialog-height:860px; --app-dialog-inset-x:32px; --app-dialog-inset-y:48px; }
+
+/* Size belongs to the shared shell, never to an individual feature dialog. */
+.ui-dialog.site-dialog.ant-modal {
+  box-sizing:border-box;
+  width:var(--app-dialog-width) !important;
+  max-width:calc(100vw - var(--app-dialog-inset-x)) !important;
+  min-width:0 !important;
+}
+.ui-dialog.site-dialog.ant-modal :is(.ant-modal-container,.ant-modal-content) {
+  height:min(var(--app-dialog-height),calc(100dvh - var(--app-dialog-inset-y))) !important;
+  max-height:min(var(--app-dialog-height),calc(100dvh - var(--app-dialog-inset-y))) !important;
+  min-height:0 !important;
+}
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal { width:480px !important; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal :is(.ant-modal-container,.ant-modal-content) {
+  height:auto !important;
+  max-height:calc(100dvh - var(--app-dialog-inset-y)) !important;
+}
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ant-modal-header {
+  min-height:64px; padding:18px 56px 14px 24px;
+}
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ant-modal-close { top:14px; right:16px; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ant-modal-body { flex:0 1 auto; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ui-dialog__body { padding:16px 24px 20px; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ui-dialog__body > p { margin:0; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ui-dialog__body > p + p { margin-top:12px; }
+.ui-dialog.site-dialog.site-dialog--confirmation.ant-modal .ui-dialog__footer { min-height:60px; padding:12px 24px; }
+.ui-dialog.site-dialog .ui-button--primary.ant-btn:not(:disabled) {
+  color:#fff; background:var(--app-color-accent); border-color:var(--app-color-accent);
+}
+.ui-dialog.site-dialog .ui-button--primary.ant-btn:not(:disabled):hover {
+  background:var(--app-color-accent-hover); border-color:var(--app-color-accent-hover);
+}
+.ui-dialog.site-dialog :is(button.primary,button.creator-primary,button.studio-primary):not(:disabled),
+.production-overlay .production-panel button.studio-primary:not(:disabled) {
+  background:var(--app-color-accent); border-color:var(--app-color-accent); color:#fff;
+}
+.ui-dialog.site-dialog :is(button.primary,button.creator-primary,button.studio-primary):not(:disabled):hover,
+.production-overlay .production-panel button.studio-primary:not(:disabled):hover {
+  background:var(--app-color-accent-hover); border-color:var(--app-color-accent-hover); color:#fff;
+}
+
+/* Native dialogs and modal workspaces use the same viewport-bounded frame. */
+dialog.production-editor,
+.production-overlay > [role="dialog"], .canvas-lightbox[aria-modal="true"], .upstream-director-editor[aria-modal="true"] {
+  box-sizing:border-box;
+  width:min(var(--app-dialog-width),calc(100vw - var(--app-dialog-inset-x))) !important;
+  max-width:calc(100vw - var(--app-dialog-inset-x)) !important;
+  height:min(var(--app-dialog-height),calc(100dvh - var(--app-dialog-inset-y))) !important;
+  max-height:min(var(--app-dialog-height),calc(100dvh - var(--app-dialog-inset-y))) !important;
+  min-width:0;
+  min-height:0;
+}
+.production-overlay { display:flex !important; box-sizing:border-box; align-items:center; justify-content:center; padding:calc(var(--app-dialog-inset-y) / 2) calc(var(--app-dialog-inset-x) / 2) !important; }
+.production-overlay > [role="dialog"] { margin:auto; }
+.canvas-lightbox[aria-modal="true"], .upstream-director-editor[aria-modal="true"] {
+  inset:0; margin:auto; border-radius:var(--app-radius-surface); box-shadow:0 0 0 100vmax #0008;
+}
+dialog.project-delete-dialog {
+  width:min(480px,calc(100vw - var(--app-dialog-inset-x))) !important;
+  height:fit-content !important;
+  max-height:calc(100dvh - var(--app-dialog-inset-y)) !important;
+}
+dialog.project-delete-dialog[open] { display:flex; flex-direction:column; overflow:hidden; }
+dialog.project-delete-dialog > header, dialog.project-delete-dialog > footer { flex:none; }
+dialog.project-delete-dialog > .project-delete-body { flex:0 1 auto; min-height:0; overflow:auto; }
+dialog.production-editor > footer button:last-child:not(:disabled) { background:var(--app-color-accent); border-color:var(--app-color-accent); color:#fff; }
+@media (max-height:760px), (max-width:680px) {
+  :root { --app-dialog-inset-y:24px; }
+}
+@media (max-width:680px) {
+  :root { --app-dialog-inset-x:24px; }
+}

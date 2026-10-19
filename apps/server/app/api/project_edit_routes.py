@@ -3,7 +3,7 @@
 from uuid import NAMESPACE_URL, uuid5
 
 from fastapi import APIRouter, Query
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError
 
 from app.api.deps import CurrentUser, PageDep, ProjectDep, SessionDep
@@ -134,23 +134,35 @@ async def open_episode_document(
         .order_by(EditProject.id.asc())
     )
     if existing is not None:
-        return await get_edit_project(
+        current = await get_edit_project(
             session, project_id=project.id, edit_project_id=existing.id, owner_id=user.id
         )
+        if current.revision != 0 or current.clip_count:
+            return current
+        # Serialize initialization with concurrent saves, then recheck the row.
+        await session.execute(update(EditProject).where(EditProject.id == existing.id)
+                              .values(fingerprint=EditProject.fingerprint))
+        await session.refresh(existing)
+        current = project_output(existing)
+        if current.revision != 0 or current.clip_count:
+            return current
+        row = existing
+        result = current
     # Unlike export, opening the editor must not require every segment to be generated.
-    result = await create_edit_project(
-        session,
-        project_id=project.id,
-        owner_id=user.id,
-        payload=EditProjectCreate(
-            request_id=str(uuid5(NAMESPACE_URL, f"episode-edit:{project.id}:{episode_id}")),
-            title="整集剪辑",
-            mode="empty",
-            frame_rate=24,
-        ),
-    )
-    row = await session.get(EditProject, result.id)
-    if row.source_episode_id is None:
+    else:
+        result = await create_edit_project(
+            session,
+            project_id=project.id,
+            owner_id=user.id,
+            payload=EditProjectCreate(
+                request_id=str(uuid5(NAMESPACE_URL, f"episode-edit:{project.id}:{episode_id}")),
+                title="整集剪辑",
+                mode="empty",
+                frame_rate=24,
+            ),
+        )
+        row = await session.get(EditProject, result.id)
+    if row.revision == 0 and not result.clip_count:
         sources = await list_project_video_sources(session, project_id=project.id, owner_id=user.id)
         clips = []
         start = 0

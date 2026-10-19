@@ -1,6 +1,6 @@
 import { TextGenerationIcon, TextGenerationQuip } from "@/components/ui/TextGenerationLoading";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, BookOpenText, Check, FileStack, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpenText, FileStack, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 
 import * as creationApi from "@/api/creation";
@@ -54,7 +54,7 @@ function OptionalExtractionCard({
 }
 
 export function ProductionPreparationWorkspace({
-  projectId, session, readiness, sourceMode, activeJob, onJob, onOpenStory,
+  projectId, session, readiness, activeJob, onJob, onOpenStory,
 }: {
   projectId: number;
   session: CreationSession;
@@ -71,9 +71,7 @@ export function ProductionPreparationWorkspace({
   const storyState = extractionState(session, "story_bible");
   const outlineState = extractionState(session, "episode_outline");
   const episodeCount = readiness?.total_episodes ?? 0;
-  const totalDuration = readiness?.episodes.reduce((sum, item) => sum + Number(item.duration_estimate || 0), 0) ?? 0;
   const confirmed = readiness?.status === "confirmed";
-  const sourceLabel = sourceMode === "original" ? "原创剧本" : sourceMode === "upload_outline" ? "上传大纲派生剧本" : "上传完整剧本";
   const refresh = async () => {
     await Promise.all([
       client.invalidateQueries({ queryKey: ["project-creation-session", projectId] }),
@@ -95,12 +93,7 @@ export function ProductionPreparationWorkspace({
   const mutationError = outlineExtraction.error || storyExtraction.error;
 
   return <section className="production-preparation-workspace">
-    <section className="workspace-stage-heading"><span>制作准备</span><h2>以正式剧本为唯一生产基线</h2><p>可选提取用于补充策划资料，不是资产拆解的门槛；失败也不会影响正式剧本。</p></section>
-    <section className={`prep-script-baseline ${confirmed ? "confirmed" : "blocked"}`} aria-label="正式剧本基线">
-      <span><ShieldCheck size={22} /></span>
-      <div><small>FORMAL SCRIPT</small><h3>{confirmed ? "正式剧本版本已锁定" : "正式剧本尚未确认"}</h3><p>{sourceLabel} · {episodeCount} 集 · 总目标时长 {totalDuration} 秒</p></div>
-      <strong>{confirmed ? <><Check size={14} />版本一致</> : "返回正文完成确认"}</strong>
-    </section>
+    {!confirmed && <div className="prep-source-gate" role="alert"><AlertTriangle size={18} /><div><strong>正式剧本尚未确认</strong><span>请返回剧本正文确认定稿后继续。</span></div></div>}
 
     <section className="prep-optional-section" aria-label="可选提取">
       <header><div><small>OPTIONAL</small><h3>策划资料提取</h3></div><p>所有结果记录正式剧本 revision、覆盖集数和输入指纹。</p></header>

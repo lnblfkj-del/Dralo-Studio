@@ -20,7 +20,7 @@ from app.models import (
     VideoSegment,
     VideoSegmentShot,
 )
-from app.services.asset_binding_service import binding_role, resolve_asset_binding
+from app.services.asset_binding_service import binding_role
 from app.services.asset_production_service import fingerprint, read_production
 from app.services.team_access import same_team
 
@@ -163,34 +163,24 @@ async def build_script_snapshot_content(
         if type(asset_id) is not int or type(version_id) is not int:
             raise ValidationError("资产引用需要稳定资产ID和版本ID")
         role = binding_role(binding)
-        canonical = await resolve_asset_binding(
-            session,
-            project,
-            asset_id=asset_id,
-            adoption_key=binding.get("adoption_key"),
-            asset_version_id=version_id,
-            media_file_id=binding.get("media_file_id"),
-            role=role,
-        )
+        from app.services.segment_asset_references import pinned_binding
+        canonical = await pinned_binding(session, project, {**binding, "role": role})
         canonical_bindings.append({**binding, **canonical})
         asset = await asset_service.get_asset(session, project.id, asset_id)
+        production = await read_production(session, project, asset.id, segment_id=segment.id,
+                                           scene_ids=scene_ids, include_archive_impact=False)
+        # A pinned image remains the same input when another image is adopted.
+        production = {key: value for key, value in production.items() if key not in {"adoptions", "revision"}}
         assets.append(
             {
                 "id": asset.id,
                 "name": asset.name,
-                "adoption_key": canonical["adoption_key"],
+                "adoption_key": canonical.get("adoption_key"),
                 "version_id": canonical["asset_version_id"],
                 "media_file_id": canonical["media_file_id"],
                 "media_kind": canonical["media_kind"],
-                "resolved_revision": canonical["resolved_revision"],
-                "production": await read_production(
-                    session,
-                    project,
-                    asset.id,
-                    segment_id=segment.id,
-                    scene_ids=scene_ids,
-                    include_archive_impact=False,
-                ),
+                "resolved_revision": canonical.get("resolved_revision"),
+                "production": production,
             }
         )
     content["refs"]["asset_bindings"] = canonical_bindings

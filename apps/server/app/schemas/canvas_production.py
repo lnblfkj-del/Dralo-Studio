@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.canvas_director import DirectorState
-from app.schemas.production_contract import AssetProfile, AssetScopeOverride
+from app.schemas.production_contract import AssetProfile, AssetScopeOverride, SpeechBinding
 
 
 class ProductionView(BaseModel):
@@ -12,10 +12,8 @@ class ProductionView(BaseModel):
     label: str = Field(default="主视图", min_length=1, max_length=80)
 
 
-class SpeechPreset(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    provider_model_id: int = Field(gt=0)
-    voice: str = Field(min_length=1, max_length=100)
+class SpeechPreset(SpeechBinding):
+    pass
 
 
 class ProductionScopeTarget(BaseModel):

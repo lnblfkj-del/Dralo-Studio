@@ -1,5 +1,7 @@
 """模型渠道与模型定义接口。"""
 
+from typing import Literal
+
 from fastapi import APIRouter, status
 from pydantic import BaseModel, Field
 
@@ -24,6 +26,14 @@ from app.services import provider_service
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
+from app.api.provider_video_tools import router as video_tools_router
+
+router.include_router(video_tools_router)
+
+from app.api.provider_audio_trials import router as audio_trials_router
+
+router.include_router(audio_trials_router)
+
 
 @router.get("/{provider_id}/models/{model_id}/audio-verification")
 async def read_audio_verification(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
@@ -33,18 +43,27 @@ async def read_audio_verification(provider_id: int, model_id: int, session: Sess
     return read_state(provider, model)
 
 
+@router.get("/{provider_id}/models/{model_id}/voices")
+async def read_audio_voices(provider_id: int, model_id: int, session: SessionDep, _user: CurrentUser):
+    from app.services.audio_voice_catalog import read
+    provider = await provider_service.get_provider(session, provider_id)
+    model = await provider_service.get_model(session, provider_id, model_id)
+    return read(provider, model)
+
+
+@router.post("/{provider_id}/models/{model_id}/voices/sync")
+async def sync_audio_voices(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
+    from app.services.audio_voice_catalog import synchronize
+    result = await synchronize(session, provider_id, model_id)
+    await session.commit()
+    return result
+
+
 @router.post("/{provider_id}/models/{model_id}/audio-verification")
-async def verify_audio_account(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser):
-    from app.core.errors import ConflictError
-    from app.services.audio_verification_service import KEY, verify
-    try:
-        result = await verify(session, provider_id, model_id)
-    except ConflictError as exc:
-        if exc.details.get("audio_account_check_failed"):
-            model = await provider_service.get_model(session, provider_id, model_id)
-            model.default_params = {k: v for k, v in model.default_params.items() if k != KEY}
-            await session.commit()
-        raise
+async def verify_audio_account(provider_id: int, model_id: int, session: SessionDep, _admin: AdminUser,
+                               check: Literal["connection", "voices"] = "connection"):
+    from app.services.audio_verification_service import verify
+    result = await verify(session, provider_id, model_id, check)
     await session.commit()
     return result
 

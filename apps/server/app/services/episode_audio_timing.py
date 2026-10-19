@@ -18,6 +18,8 @@ def speech_fingerprint(text):
 
 
 async def resolve_speech_timing(session, media, source):
+    from app.services.audio_purpose import require_production_audio
+    require_production_audio(media)
     if source.kind not in {"dialogue", "narration"} or not source.spoken_text:
         raise ConflictError("实测估时只能绑定一条完整对白或旁白，不能使用音乐或动作说明")
     duration = media.duration

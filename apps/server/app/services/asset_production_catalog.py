@@ -314,6 +314,8 @@ async def version_page(
                 "review_status": version.review_status,
                 "tags": version.tags,
                 "is_final": version.is_final,
+                "audio_purpose": media.purpose if media.kind == "audio" and media.purpose in {"voice_reference", "dialogue_audio", "music", "ambience", "sfx"} else "unclassified" if media.kind == "audio" else None,
+                "voice_description": (version.parameters or {}).get("voice_description"),
                 "needs_split": version.view_type == asset_service.LAYOUT_SHEET_VIEW_TYPE,
                 "media": {
                     "id": media.id,

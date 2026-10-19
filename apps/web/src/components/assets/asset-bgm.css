@@ -1,0 +1,9 @@
+.asset-bgm-layout { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:32px; }
+.asset-bgm-layout section { min-width:0; }
+.asset-bgm-layout h3 { margin:0 0 18px; font-size:16px; overflow-wrap:anywhere; }
+.asset-bgm-layout label { display:grid; gap:10px; margin-bottom:24px; font-size:14px; max-width:360px; }
+.asset-bgm-layout select { box-sizing:border-box; width:100%; min-width:0; height:36px; padding:0 10px; border:1px solid var(--app-color-border); border-radius:6px; background:var(--app-color-bg-surface); color:var(--app-color-text); }
+.asset-bgm-layout input[type=range] { width:100%; accent-color:var(--app-color-accent); }
+.asset-bgm-layout audio { width:100%; min-width:0; }
+.asset-bgm-layout p { font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+@media(max-width:900px) { .asset-bgm-layout { gap:20px; } }

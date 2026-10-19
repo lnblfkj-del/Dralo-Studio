@@ -309,6 +309,8 @@ def detail_prompt(plan: FrozenEpisodePlan, segment_key: str, analysis: ContentAn
         "只填充已冻结镜头的摄影、动作演绎及入场/出场状态，返回 SegmentDetail JSON。"
         "不得新增镜头、片段或改变时长；不要重新输出或改写对白和声音，系统从原文装配。"
         "不得新增剧情、说话人或资产；动作与原文一致，保留衔接。"
+        "资产参考仅用于锁定身份与外观，不是内容白名单；原文中的物件、动作与声音即使没有独立资产卡也必须保留。"
+        "已有参考不得换成其他角色、服装或场景；不得自行虚构参考素材编号。"
         f"计划指纹：{fingerprint(plan)}\n"
         f"冻结片段：{segment.model_dump_json()}\n"
         f"表演时间与并行关系：{json.dumps(performance, ensure_ascii=False)}\n"

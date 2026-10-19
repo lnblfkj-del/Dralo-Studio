@@ -1,0 +1,5 @@
+.speech-binding-fields { display:grid; grid-template-columns:repeat(2,minmax(0,360px)); align-items:start; gap:12px 20px; grid-column:1 / -1; min-width:0; }
+.speech-binding-fields > label { display:grid; gap:6px; min-width:0; }
+.speech-binding-fields select { box-sizing:border-box; width:100%; min-width:0; height:36px; border:1px solid var(--app-color-border); border-radius:6px; padding:0 10px; background:var(--app-color-surface); color:var(--app-color-text); font:inherit; }
+.speech-binding-fields p { grid-column:1 / -1; margin:0; }
+@media(max-width:680px) { .speech-binding-fields { grid-template-columns:minmax(0,1fr); } }

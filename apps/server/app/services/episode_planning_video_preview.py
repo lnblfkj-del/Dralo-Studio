@@ -54,17 +54,22 @@ def _semantics(segment):
                 if event else {}
             )
             if kind in {"dialogue", "narration"}:
+                from app.services.screenplay_voice_sources import guidance
+                voice_tone = guidance(source.get("voice_source") or {})
                 script["dialogue"].append(
                     {
                         "shot_id": index,
                         "speaker": source["speaker"] or "旁白",
                         "text": source["spoken_text"] or source["text"],
-                        "tone": "旁白，不作为画面人物台词" if kind == "narration" else "",
+                        "speaker_source": "source", "source_text": source["text"],
+                        **({"voice_source": source["voice_source"]} if source.get("voice_source") else {}),
+                        "tone": voice_tone or ("旁白，不作为画面人物台词" if kind == "narration" else ""),
                         **timing,
                     }
                 )
             elif kind in {"music", "sound"}:
-                category = "music" if kind == "music" else "sound_effects"
+                category = "music" if kind == "music" or source.get("audio_kind") == "diegetic_music" else (
+                    "ambience" if source.get("audio_kind") == "ambience" else "sound_effects")
                 script["audio"][category].append({"shot_id": index, "text": source["text"], **timing})
             elif kind == "scene":
                 script["scene"]["description"] = (
@@ -110,6 +115,7 @@ def adapter_view(model):
                 "video_prompt_certifications",
                 "enabled",
                 "model_type",
+                "video_config",
             )
         },
         default_params={
@@ -121,13 +127,15 @@ def adapter_view(model):
 
 
 def compile_preview(
-    plan, analysis, stored, *, provider, model, current_capability, include_contract=False
+    plan, analysis, stored, *, provider, model, current_capability, include_contract=False,
+    material_references=None,
 ):
     """No DB writes, HTTP, task creation, plan edits, or implicit shot splitting."""
     assembly = read_assembly(plan, analysis, stored)
     cap = plan.capability
+    from app.services.episode_planning_capability import same_specification
     if (
-        fingerprint(cap) != fingerprint(current_capability)
+        not same_specification(cap, current_capability)
         or model.id != cap.provider_model_id
         or model.provider_id != provider.id
         or model.model_id != cap.model_id
@@ -146,6 +154,34 @@ def compile_preview(
     for segment in assembly["segments"]:
         mode = modes[segment["mode_key"]]
         blockers = []
+        if material_references is not None:
+            from collections import Counter
+            references = list({(item["media_id"], item["role"]): item for item in [
+                *segment["references"], *material_references.get(segment["key"], []),
+            ]}.values())
+            segment = {**segment, "references": references}
+            counts = Counter(item["role"] for item in references)
+            input_mode = ("first_last_frame" if counts["last_frame"] else "first_frame" if counts["first_frame"]
+                          else "multi_reference" if counts["image"] > 1 else "single_image" if counts["image"] == 1 else "text")
+            candidates = []
+            for candidate in cap.modes:
+                limits = {limit.role: limit for limit in candidate.reference_limits}
+                if ((candidate.aspect_ratio, candidate.resolution) != (mode.aspect_ratio, mode.resolution)
+                        or not candidate.durations.allows(segment["requested_duration_ms"])
+                        or len(segment["shots"]) > candidate.max_shots
+                        or (candidate.input_mode != input_mode and not (input_mode == "single_image" and candidate.input_mode == "multi_reference"))
+                        or set(counts) - set(limits)
+                        or len(references) > candidate.max_total_references
+                        or any(not limit.minimum <= counts[role] <= limit.maximum for role, limit in limits.items())
+                        or (segment["requires_native_dialogue"] and not candidate.native_dialogue)
+                        or (segment["requires_native_audio"] and not candidate.native_audio)
+                        or (segment["background_music"] and candidate.bgm_control == "unsupported")):
+                    continue
+                candidates.append(candidate)
+            if candidates:
+                mode = min(candidates, key=lambda candidate: (candidate.input_mode != input_mode, candidate.key))
+            else:
+                blockers.append(f"当前视频模型无法承接本片段的 {len(references)} 个参考素材及既定时长，请调整引用或选择支持的模型")
         prompt = None
         manifest = []
         contract = script = None
@@ -165,7 +201,7 @@ def compile_preview(
         }
         if unsupported:
             blockers.append("音视频参考尚未接入本编译链路，不能降级为普通参考图")
-        if cap.verification != "channel_verified":
+        if current_capability.verification != "channel_verified":
             blockers.append("当前规划能力尚未完成真实渠道验证")
         if cap.protocol not in VIDEO_CONTRACTS and not is_toapis_model(provider, model):
             blockers.append("当前视频协议没有已登记的参数适配器")

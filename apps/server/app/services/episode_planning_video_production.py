@@ -13,6 +13,7 @@ from app.models import (
     EpisodeProduction,
     EpisodeProductionPlan,
     Job,
+    Project,
     Provider,
     ProviderModel,
     SegmentVideoVersion,
@@ -29,11 +30,12 @@ from app.services.episode_planning_projection import read_projection
 from app.services.episode_planning_storage import read_content_analysis, read_plan
 from app.services.episode_planning_video_preview import adapter_view, compile_preview
 from app.services.job_concurrency_service import TERMINAL_STATUSES
+from app.services.job_video_batch_helpers import _sound_input_summary
 from app.services.job_pricing_service import _aggregate_video_pricing
 from app.services.pricing_service import attach as attach_pricing
 from app.services.pricing_service import estimate
 from app.services.production_snapshot_service import build_script_snapshot_content, capture_script
-from app.services.style_generation_service import frozen_video_style_prompt
+from app.services.style_generation_service import frozen_video_style_prompt, project_style_media
 from app.services.video_prompt_freeze_service import build_video_prompt_freeze
 
 
@@ -73,7 +75,7 @@ def probe_image(media, protocol=None):
     return len(data)
 
 
-async def context(session, plan):
+async def context(session, plan, *, resolve_assets=True, selected_segment_ids=None, execution=None):
     if plan is None or plan.source_type != "content_frozen":
         raise ConflictError("冻结计划不存在，请刷新制作台")
     parent = await session.get(Job, plan.parameters.get("planning_run_id"))
@@ -96,21 +98,58 @@ async def context(session, plan):
     record = await session.get(EpisodePlanningRecord, plan.parameters["planning_record_id"])
     frozen = read_plan(record)
     await verify_shots(session, plan, parent.result["assembly"])
-    model = await session.get(ProviderModel, frozen.capability.provider_model_id)
-    provider = await session.get(Provider, model.provider_id)
+    if execution is None:
+        model = await session.get(ProviderModel, frozen.capability.provider_model_id)
+        provider = await session.get(Provider, model.provider_id)
+        current_capability = await workflow.load_capability(session, model.id)
+    else:
+        provider, model = execution
+        from app.services.episode_planning_capability import capability_for
+        current_capability = capability_for(provider, model)
+    material_references = None
+    materials = {}
+    if resolve_assets:
+        from app.services.segment_asset_references import catalog, resolve_materials
+        project = await session.get(Project, parent.project_id)
+        assets = await catalog(session, project.id)
+        segments = (await session.scalars(select(VideoSegment).where(VideoSegment.plan_id == plan.id))).all()
+        for segment in segments:
+            if selected_segment_ids is not None and segment.id not in selected_segment_ids:
+                continue
+            materials[segment.lineage_key] = await resolve_materials(session, project, segment.refs, strict=False, assets=assets)
+        material_references = {key: [
+            {"media_id": binding["media_file_id"], "role": "image" if binding["role"] == "reference_image" else binding["role"]}
+            for binding in refs.get("asset_bindings", []) if binding["media_kind"] == "image"
+        ] for key, refs in materials.items()}
+        style_media_id = await project_style_media(session, project.id, plan.owner_id, "video")
+        for references in material_references.values():
+            if style_media_id and references and not any(item["media_id"] == style_media_id for item in references):
+                references.append({"media_id": style_media_id, "role": "image"})
     preview = compile_preview(
         frozen,
         read_content_analysis(record),
         parent.result["assembly"],
         provider=provider,
         model=model,
-        current_capability=frozen.capability,
+        current_capability=current_capability,
         include_contract=True,
+        material_references=material_references,
     )
+    for compiled in preview["segments"]:
+        compiled["asset_materials"] = materials.get(compiled["segment_key"], {})
     return parent, model, provider, preview
 
 
 async def prepare_segment(session, plan, segment, parent, model, provider, compiled):
+    from app.services.segment_material_preflight import require_segment_materials
+    await require_segment_materials(session, plan, parent, compiled["segment_key"])
+    from app.services.segment_asset_references import (
+        material_guidance,
+        material_snapshot,
+        resolve_materials,
+    )
+    project = await session.get(Project, parent.project_id)
+    resolved = await resolve_materials(session, project, segment.refs, segment=segment)
     if compiled["blockers"]:
         raise ConflictError("；".join(compiled["blockers"]))
     if compiled["input_contract"] is None or compiled["prompt"] is None:
@@ -118,10 +157,13 @@ async def prepare_segment(session, plan, segment, parent, model, provider, compi
     if compiled["input_contract"]["protocol"] == "minimax_video_v2":
         raise ConflictError("该模式需专用媒体上传及请求审核，目前尚未完成冻结计划接线")
     contract = compiled["input_contract"]
-    ids = {ref["media_id"] for ref in contract["effective_references"]}
+    ids = list(dict.fromkeys(ref["media_id"] for ref in contract["effective_references"]))
+    snapshot = await material_snapshot(session, resolved, ids)
     snapshots = {
         item["media"]["id"]: item["media"] for item in parent.payload["reference_snapshot"]
     }
+    snapshots.update({item["id"]: item for item in snapshot["media"]})
+    snapshot["media"] = [snapshots[media_id] for media_id in dict.fromkeys([*ids, *(item["id"] for item in snapshot["media"])])]
     total = 0
     for media_id in ids:
         if media_id not in snapshots:
@@ -129,22 +171,38 @@ async def prepare_segment(session, plan, segment, parent, model, provider, compi
         total += await asyncio.to_thread(probe_image, snapshots[media_id], contract["protocol"])
     if total > 20 * 1024 * 1024:
         raise ConflictError("本片段参考图片总大小超过 20 MB")
-    prompt, style = await frozen_video_style_prompt(
-        session, parent.project_id, plan.owner_id, compiled["prompt"]
+    from app.services.audio_policy import for_episode
+    from app.services.segment_voice_guidance_service import (
+        append_voice_guidance,
+        compile_segment_voice_guidance,
     )
-    if style and style["media_id"] and style["media_id"] not in contract["reference_media_ids"]:
-        raise ConflictError("项目风格图不在冻结参考素材中，请显式绑定后重新规划")
+    policy = await for_episode(session, project.id, segment.episode_id)
+    policy["capability"] = compiled["audio"]
+    voice_guidance = await compile_segment_voice_guidance(session, project, segment, resolved, policy=policy)
+    from app.services.video_voice_reference_service import prepare, append_mapping
+    voice_guidance = await prepare(session, project, resolved, voice_guidance, provider, model,
+                                   {**contract, "effective_parameters": {**contract["effective_parameters"], "audio_policy": policy}})
+    prompt = append_voice_guidance(compiled["prompt"], voice_guidance)
+    prompt = append_mapping(prompt, voice_guidance)
+    guidance = material_guidance({**resolved, "reference_media_ids": contract["reference_media_ids"]})
+    if guidance:
+        prompt += "\n\n" + guidance
+    prompt, style = await frozen_video_style_prompt(session, parent.project_id, plan.owner_id, prompt)
+    if style and style["media_id"] and contract["reference_media_ids"] and style["media_id"] not in contract["reference_media_ids"]:
+        raise ConflictError("项目风格图未进入本次参考素材，请重新检查模型的图片数量限制")
     from app.services.video_input_compiler import prepare_video_prompt
 
     prompt, negative = prepare_video_prompt(provider, adapter_view(model), prompt, None)
     freeze = build_video_prompt_freeze(
         provider,
-        adapter_view(model),
+        model,
         script=compiled["structured_script"],
         input_contract=contract,
         active_prompt=prompt,
         style_snapshot=style,
         selection="model_compiler",
+        asset_material_snapshot=snapshot,
+        voice_reference=voice_guidance["audio_reference"],
     )
     content = await build_script_snapshot_content(session, segment)
     return {
@@ -155,6 +213,10 @@ async def prepare_segment(session, plan, segment, parent, model, provider, compi
         "video_prompt_freeze": freeze,
         "script_fingerprint": fingerprint(content),
         "quote": estimate(model, prompt, contract["effective_parameters"]),
+        "asset_material_snapshot": snapshot,
+        "asset_bindings": resolved["asset_bindings"],
+        "sound_input": _sound_input_summary(
+            resolved["asset_bindings"], {**contract["effective_parameters"], "audio_policy": policy}, voice_guidance),
     }
 
 
@@ -166,10 +228,10 @@ def validate_parameters(parameters, compiled):
         raise ConflictError("生成设置与冻结计划不同，请在整集规划中检查模型规格")
 
 
-async def build_plan(session, episode, plan, model_id, parameters, regenerate, business_executor):
+async def build_plan(session, episode, plan, model_id, parameters, regenerate, business_executor, *, selected_segment_ids=None):
     if model_id != plan.provider_model_id:
         raise ConflictError("当前冻结计划属于其他模型，请先检查兼容性并切换规划")
-    parent, model, provider, preview = await context(session, plan)
+    parent, model, provider, preview = await context(session, plan, selected_segment_ids=selected_segment_ids)
     segments = list(
         (
             await session.scalars(
@@ -179,6 +241,11 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
             )
         ).all()
     )
+    if selected_segment_ids is not None:
+        if not selected_segment_ids or not set(selected_segment_ids).issubset({s.id for s in segments}):
+            raise ConflictError("所选片段不属于当前制作稿，请重新选择")
+        segments = [s for s in segments if s.id in selected_segment_ids]
+    compiled_by_key = {item["segment_key"]: item for item in preview["segments"]}
     final_ids = set(
         (
             await session.scalars(
@@ -201,7 +268,8 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
         ).all()
     )
     eligible, skipped, blocked, quotes, inputs, all_shots = [], [], [], [], [], []
-    for segment, compiled in zip(segments, preview["segments"], strict=True):
+    for segment in segments:
+        compiled = compiled_by_key[segment.lineage_key]
         shots = list(
             (
                 await session.scalars(
@@ -218,6 +286,8 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
             skipped.append(segment.id)
             continue
         try:
+            from app.services.segment_video_recovery_service import require_resolved_generation
+            await require_resolved_generation(session, segment, episode.project_id, episode.owner_id)
             if segment.id in active_ids or segment.status == "generating":
                 raise ConflictError("该片段已有进行中的视频任务")
             if segment.status == "archived" or any(s.is_locked for s in shots):
@@ -232,6 +302,8 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
                     "segment_id": segment.id,
                     "order": segment.order,
                     "shot_ids": shot_ids,
+                    "shot_id": shots[0].id,
+                    "scene_id": shots[0].scene_id,
                     "reason": exc.message,
                 }
             )
@@ -251,10 +323,15 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
                 "fingerprint": prepared["contract"]["fingerprint"],
                 "video_prompt_freeze": prepared["video_prompt_freeze"],
                 "continuity_dependency": None,
-                "sound_input": {},
+                "sound_input": prepared["sound_input"],
                 "script_fingerprint": prepared["script_fingerprint"],
                 "input_mode": prepared["contract"]["input_mode"],
                 "protocol": prepared["contract"]["protocol"],
+                "protocol_version": prepared["contract"]["protocol_version"],
+                "first_frame_media_id": prepared["contract"]["first_frame_media_id"],
+                "last_frame_media_id": prepared["contract"]["last_frame_media_id"],
+                "reference_media_ids": prepared["contract"]["reference_media_ids"],
+                "actions": prepared["contract"]["actions"],
             }
         )
         eligible.append(segment.id)
@@ -290,7 +367,14 @@ async def create_job(
     session, owner_id, segment, *, project_id, provider_model_id, parameters, shot_ids
 ):
     plan = await session.get(EpisodeProductionPlan, segment.plan_id)
-    parent, model, provider, preview = await context(session, plan)
+    from app.services.planning_capability_admin import lock_catalog
+    locked_model = await session.get(ProviderModel, provider_model_id)
+    if locked_model is None:
+        raise ConflictError("视频模型不存在")
+    await lock_catalog(session, locked_model.provider_id, locked_model.id)
+    from app.services.video_adapter_installation import require_installed
+    await require_installed(session, locked_model, submitting=True)
+    parent, model, provider, preview = await context(session, plan, selected_segment_ids=[segment.id])
     if await session.scalar(
         select(Job.id)
         .where(
@@ -370,10 +454,14 @@ async def create_job(
             "shot_ids": shot_ids,
             "generation_duration": segment.generation_duration,
             "continuity_dependency": None,
-            "sound_input": {},
+            "sound_input": prepared["sound_input"],
             "content_planning_run_id": parent.id,
+            "asset_bindings": prepared["asset_bindings"],
+            "asset_material_snapshot": prepared["asset_material_snapshot"],
         },
     )
+    from app.services.video_version_service import bind
+    await bind(session, job, provider, model)
     attach_pricing(job, model)
     from app.services.segment_video_candidate_service import attach_input_evidence
 
@@ -391,12 +479,23 @@ async def validate_execution(session, job):
     if segment is None:
         raise ConflictError("冻结视频片段已删除")
     plan = await session.get(EpisodeProductionPlan, segment.plan_id)
-    parent, model, provider, preview = await context(session, plan)
-    compiled = next(s for s in preview["segments"] if s["segment_key"] == segment.lineage_key)
-    prepared = await prepare_segment(session, plan, segment, parent, model, provider, compiled)
-    if (
-        prepared["video_prompt_freeze"]["fingerprint"]
-        != job.payload["video_prompt_freeze"]["fingerprint"]
-        or prepared["script_fingerprint"] != job.payload["script_fingerprint"]
-    ):
+    if job.payload.get("video_execution_version"):
+        from app.models import Provider
+        from app.services.video_version_service import resolve
+        model = await session.get(ProviderModel, job.payload["provider_model_id"])
+        provider = await session.get(Provider, job.provider_id)
+        provider, model = await resolve(session, job, provider, model)
+        await context(session, plan, resolve_assets=False, execution=(provider, model))
+    else:
+        _, model, provider, _ = await context(session, plan, resolve_assets=False)
+    from app.services.video_prompt_freeze_service import assert_frozen_video_prompt
+    assert_frozen_video_prompt(job.payload, provider, model)
+    content = await build_script_snapshot_content(session, segment)
+    if fingerprint(content) != job.payload["script_fingerprint"]:
         raise ConflictError("视频来源在排队后发生变化，已停止收费提交")
+    snapshot = job.payload.get("asset_material_snapshot")
+    if not isinstance(snapshot, dict):
+        raise ConflictError("视频任务缺少已锁定的素材版本")
+    protocol = job.payload["video_input_contract"]["protocol"]
+    from app.services.segment_asset_references import validate_material_snapshot
+    await validate_material_snapshot(session, snapshot, protocol)

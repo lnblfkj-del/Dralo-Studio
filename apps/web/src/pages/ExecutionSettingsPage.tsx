@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toErrorMessage } from "@/api/client";
 import * as executionApi from "@/api/execution";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
+import { ModelTimeoutExceptions } from "@/components/settings/ModelTimeoutExceptions";
 import { Button } from "@/components/ui";
 import "@/styles/settings.css";
 import "@/styles/settings-readable.css";
@@ -124,6 +125,7 @@ export function ExecutionSettingsPage() {
           <label>任务总期限（秒）<input type="number" min={60} max={86400} value={draft.policy.timeouts.task_deadline_seconds} onChange={event => updatePolicy({timeouts: {...draft.policy.timeouts, task_deadline_seconds: Number(event.target.value)}})}/></label>
           <label>模型响应保留（天）<input type="number" min={1} max={30} value={draft.policy.text_response_retention_days} onChange={event => updatePolicy({text_response_retention_days: Number(event.target.value)})}/></label>
         </div></section>
+        <ModelTimeoutExceptions firstByte={query.data!.policy.timeouts.first_byte_seconds} streamIdle={query.data!.policy.timeouts.stream_idle_seconds} />
         <footer className="control-config-actions"><span>设置仅影响保存后创建的新任务；并发变更需重启 Worker 生效。</span><Button variant="primary" icon={<Save size={16}/>} loading={save.isPending} onClick={() => save.mutate()}>保存执行设置</Button></footer>
       </>}
     </section>

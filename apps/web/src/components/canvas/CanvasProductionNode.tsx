@@ -8,7 +8,9 @@ import { bindCanvasEntity, editCanvasEntity, getCanvasEntityScopeImpact } from "
 import { toErrorMessage } from "@/api/client";
 import { listProviders } from "@/api/providers";
 import { mediaModels, choices, referenceRoles } from "./mediaCapabilities";
-import { audioAccountReady } from "./audioVerification";
+import { audioAccountReady, audioVoiceReady } from "./audioVerification";
+import {VoiceSelect} from '@/components/audio/VoiceSelect';
+import {SpeechBindingFields} from '@/components/audio/SpeechBindingFields';
 import { useCanvasStore, type CanvasNodePayload } from "@/stores/canvasStore";
 import type { CanvasSnapshot } from "@/types/api";
 import { CanvasNodeHeading } from "./CanvasNodeHeading";
@@ -61,11 +63,9 @@ function ProductionEditor({ id, data, close }: { id: string; data: CanvasNodePay
   const [views, setViews] = useState(data.productionProfile?.views ?? []);
   const [primary, setPrimary] = useState(data.productionProfile?.primary_media_id ?? null);
   const [voice, setVoice] = useState(data.productionProfile?.voice_media_id ?? null);
-  const [speech, setSpeech] = useState(data.productionProfile?.speech_preset ?? null);
+  const [speech, setSpeech] = useState(data.productionProfile?.asset_profile?.speech_preset ?? data.productionProfile?.speech_preset ?? null);
   const [updateScope, setUpdateScope] = useState<"" | "local" | "series">("");
   const [localTarget, setLocalTarget] = useState("");
-  const providers = useQuery({queryKey: ["providers"], queryFn: listProviders});
-  const speechModels = mediaModels(providers.data ?? [], "audio").filter((m) => audioAccountReady(m) && m.capabilities.includes("speech") && m.default_params.speech_verified === true);
   const [reuse, setReuse] = useState(0), [confirmed, setConfirmed] = useState(false);
   const [mediaPage, setMediaPage] = useState(1), [mediaSearch, setMediaSearch] = useState("");
   const dialog = useRef<HTMLDialogElement>(null);
@@ -154,7 +154,7 @@ function ProductionEditor({ id, data, close }: { id: string; data: CanvasNodePay
         </> : <>
           <label>声音用途<select value={assetProfile.audio_usage} onChange={(event) => setAssetProfile({ ...assetProfile, audio_usage: event.target.value as AssetProfile["audio_usage"] })}><option value="voice">角色声音 / 配音</option><option value="music">配乐</option><option value="ambience">环境声</option><option value="sfx">音效</option><option value="unclassified">未分类</option></select></label>
           <label>关联角色 ID<input inputMode="numeric" value={assetProfile.character_asset_id ?? ""} onChange={(event) => setAssetProfile({ ...assetProfile, character_asset_id: Number(event.target.value) || null })} /></label>
-          {profileField("language", "语言")}{profileField("pitch", "音高")}{profileField("texture", "质感")}{profileField("pace", "语速 / 节奏")}{profileField("accent", "口音")}{profileField("voice", "声音描述", true)}{profileField("voice_id", "实际音色配置")}
+          {profileField("language", "语言")}{profileField("pitch", "音高")}{profileField("texture", "质感")}{profileField("pace", "语速 / 节奏")}{profileField("accent", "口音")}{profileField("voice", "声音描述", true)}{assetProfile?.voice_id && !speech && <p>旧音色 ID：{assetProfile.voice_id}</p>}
         </>}
       </section>}
       <fieldset disabled={sharedFieldsDisabled} className="production-shared-media"><legend>{visual ? `${config.media}版本` : "音频版本"}</legend>
@@ -164,7 +164,7 @@ function ProductionEditor({ id, data, close }: { id: string; data: CanvasNodePay
         <label>绑定已有{visual ? "图片" : "音频"}<select value="" disabled={views.length >= 12} onChange={(e) => { const mediaId = Number(e.target.value); if (!mediaId) return; setViews([...views, { media_id: mediaId, label: `${config.media} ${views.length + 1}` }]); setPrimary(primary ?? mediaId); }}><option value="">选择{visual ? "图片" : "音频"}…</option>{media.data?.items.filter((m) => m.kind === config.kind && !views.some((v) => v.media_id === m.id)).map((m) => <option key={m.id} value={m.id}>{m.original_name || `#${m.id}`}</option>)}</select></label>
         {data.kind === "character" && <label>音色参考<select value={voice ?? ""} onChange={(e) => setVoice(Number(e.target.value) || null)}><option value="">未关联</option>{media.data?.items.filter((m) => m.kind === "audio").map((m) => <option key={m.id} value={m.id}>{m.original_name || `#${m.id}`}</option>)}</select></label>}
         <label>上传素材<input type="file" disabled={views.length >= 12} accept={entityKind === "character" ? "image/*,audio/*" : visual ? "image/*" : "audio/*"} onChange={(e) => { if (e.target.files?.[0]) upload.mutate(e.target.files[0]); e.target.value = ""; }} /></label>
-        {data.kind === "character" && <><label>TTS 配音模型<select value={speech?.provider_model_id ?? ""} onChange={(e) => setSpeech(e.target.value ? {provider_model_id: Number(e.target.value), voice: ""} : null)}><option value="">未关联配音预设</option>{speech && !speechModels.some((m) => m.id === speech.provider_model_id) && <option value={speech.provider_model_id}>原模型不可用</option>}{speechModels.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>{speech && <label>TTS 预设音色<select value={speech.voice} onChange={(e) => setSpeech({...speech, voice: e.target.value})}><option value="">请选择</option>{choices(speechModels.find((m) => m.id === speech.provider_model_id)?.default_params.voices).map((v) => <option key={v}>{v}</option>)}</select></label>}</>}
+        {(data.kind === "character" || data.kind === 'voice') && <SpeechBindingFields value={speech} onChange={setSpeech} disabled={sharedFieldsDisabled}/>}
       </fieldset>
       <small>参考录音与 TTS 预设音色独立；参考录音不会触发音色克隆。多视角图片不代表全景。</small>
     </fieldset>
@@ -192,10 +192,9 @@ export function CanvasProductionNode({ id, data }: { id: string; data: CanvasNod
   const character = entityKind === "character";
   const Icon = config.icon;
   const profile = data.productionProfile;
-  const models = mediaModels(providers.data ?? [], config.kind).filter((item) => visual || audioAccountReady(item) && item.capabilities.includes("speech") && item.default_params.speech_verified === true);
+  const models = mediaModels(providers.data ?? [], config.kind).filter((item) => visual || audioAccountReady(item) && item.capabilities.includes("speech"));
   const model = models.find((item) => item.id === data.providerModelId);
   const roles = visual ? referenceRoles(model, "image") : [];
-  const voices = choices(model?.default_params.voices);
   const declaredRatios = choices(model?.default_params.aspect_ratios);
   const projectRatio = visual && projectAspectRatio && !["default", "模型默认"].includes(projectAspectRatio) ? projectAspectRatio : "";
   const ratioSupported = !projectRatio || !declaredRatios.length || declaredRatios.includes(projectRatio);
@@ -203,7 +202,7 @@ export function CanvasProductionNode({ id, data }: { id: string; data: CanvasNod
   const busy = GENERATING_STATUSES.has(data.generationStatus ?? "");
   useCanvasStore(state => state.edges);
   useCanvasStore(state => state.nodes);
-  const canGenerate = !data.locked && !dirty && !busy && !!data.productionAssetId && !data.productionReadonly && !!model && hasCanvasPrompt(id, data.content) && ratioSupported && (visual || !voices.length || !!data.voice);
+  const canGenerate = !data.locked && !dirty && !busy && !!data.productionAssetId && !data.productionReadonly && !!model && hasCanvasPrompt(id, data.content) && ratioSupported && (visual || audioVoiceReady(model, data.voice ?? ""));
   const previewMediaId = data.pendingMediaId ?? data.mediaId ?? profile?.primary_media_id ?? null;
   const createAudio = () => {
     const state = useCanvasStore.getState(), source = state.nodes.find((n) => n.id === id);
@@ -224,7 +223,7 @@ export function CanvasProductionNode({ id, data }: { id: string; data: CanvasNod
       <CanvasPromptInput nodeId={id} aria-label="生成描述" value={data.content} readOnly={data.locked || busy || data.productionReadonly} onValue={content => update(id, {content})} />
       <fieldset disabled={data.locked || busy || data.productionReadonly}>
         <label>生成模型<select aria-label={`${config.label}生成模型`} value={data.providerModelId ?? ""} onChange={(event) => update(id, {providerModelId: Number(event.target.value) || undefined, resolution: undefined, voice: undefined})}><option value="">请选择模型</option>{data.providerModelId && !model && <option value={data.providerModelId}>原模型不可用，请重新选择</option>}{models.map((item) => <option key={item.id} value={item.id}>{item.providerName} · {item.name}</option>)}</select></label>
-        {visual ? <div className="canvas-media-fields"><label>项目比例<select aria-label="项目比例" value={projectRatio || "default"} disabled><option value={projectRatio || "default"}>{projectRatio ? `${projectRatio} · 跟随项目` : "模型默认"}</option></select></label>{resolutions.length > 0 && <label>分辨率<select aria-label="分辨率" value={data.resolution ?? ""} onChange={(event) => update(id, {resolution: event.target.value || undefined})}><option value="">模型默认</option>{resolutions.map((value) => <option key={value}>{value}</option>)}</select></label>}</div> : voices.length > 0 && <label>音色<select aria-label="声音生成音色" value={data.voice ?? ""} onChange={(event) => update(id, {voice: event.target.value || undefined})}><option value="">请选择音色</option>{voices.map((value) => <option key={value}>{value}</option>)}</select></label>}
+        {visual ? <div className="canvas-media-fields"><label>项目比例<select aria-label="项目比例" value={projectRatio || "default"} disabled><option value={projectRatio || "default"}>{projectRatio ? `${projectRatio} · 跟随项目` : "模型默认"}</option></select></label>{resolutions.length > 0 && <label>分辨率<select aria-label="分辨率" value={data.resolution ?? ""} onChange={(event) => update(id, {resolution: event.target.value || undefined})}><option value="">模型默认</option>{resolutions.map((value) => <option key={value}>{value}</option>)}</select></label>}</div> : <VoiceSelect model={model} value={data.voice ?? ''} label="声音生成音色" onChange={voice=>update(id,{voice:voice || undefined})}/>}
       </fieldset>
       {!ratioSupported && <small role="alert">当前模型不支持项目画幅 {projectRatio}，请更换模型。</small>}
       <div className="canvas-media-actions">{model && <PriceEstimate providerId={model.provider_id} modelId={model.id} prompt={data.content} parameters={{...(projectRatio ? {aspect_ratio: projectRatio} : {}), ...(data.resolution ? {resolution: data.resolution} : {}), ...(!visual && data.voice ? {voice: data.voice} : {})}} />}<button disabled={!canGenerate} onClick={() => setConfirm(true)}>生成{config.media}</button></div>

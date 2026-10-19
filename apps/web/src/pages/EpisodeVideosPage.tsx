@@ -42,7 +42,7 @@ function EpisodeCard({ projectId, item, assetReadiness }: { projectId: number; i
     <div className="episode-video-content">
       <div className="episode-card-state"><span className={`episode-status ${meta.tone}`}>{statusLabel}</span><span className="episode-number-tag">EP {String(episode.number).padStart(2, "0")}</span></div>
       <h2>第{episode.number}集：{episode.title || "未命名分集"}</h2>
-      <p className="episode-metrics">资产 {item.asset_count} · 场景 {item.scene_count} · 片段 {segmentCount || "待规划"}{segmentCount ? ` · 已完成 ${readySegmentCount}/${segmentCount}` : ""}</p>
+      <p className="episode-metrics">角色 {item.character_count ?? 0} · 场景 {item.scene_asset_count ?? 0} · 片段 {segmentCount || "待规划"}{segmentCount ? ` · 已完成 ${readySegmentCount}/${segmentCount}` : ""}</p>
       <button className="episode-primary" onClick={(event) => { event.stopPropagation(); enterStudio(); }}>
         {episode.script?.trim() ? <Film size={14} /> : <Sparkles size={14} />}{actionLabel}
       </button>

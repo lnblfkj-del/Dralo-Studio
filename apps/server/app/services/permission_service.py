@@ -69,9 +69,20 @@ def enforce_request(user, path, method):
     permission=settings_permission(path,method)
     if permission and not allowed(user,permission):
         raise PermissionDeniedError("无权限执行此设置操作，请联系管理员授权")
-    read_action = method=="POST" and (path.endswith("/playback-url") or path.endswith("/estimate"))
+    read_action = method=="POST" and (path.endswith("/playback-url") or path.endswith("/estimate") or _model_change_action(path) == "check" or _segment_options_read(path))
     if scoped_role=="viewer" and method not in {"GET","HEAD","OPTIONS"} and path not in {"/api/auth/profile", "/api/auth/change-password", "/api/auth/refresh", "/api/auth/logout-all", "/api/auth/logout", "/api/workspaces/invitations/accept"} and not read_action:
         raise PermissionDeniedError("只读账号不能执行写入或生成操作")
+
+
+def _model_change_action(path):
+    import re
+    match = re.fullmatch(r"/api/projects/\d+/episodes/\d+/production/model-change/(check|apply)", path)
+    return match.group(1) if match else None
+
+
+def _segment_options_read(path):
+    import re
+    return bool(re.fullmatch(r"/api/projects/\d+/episodes/\d+/production/segment-video-options", path))
 
 
 def project_permissions(path, method):
@@ -85,8 +96,14 @@ def project_permissions(path, method):
         return []
     if path == "/api/projects" and method == "POST":
         return ["projects.create"]
+    if method == "POST" and _model_change_action(path):
+        return ["projects.view"] if _model_change_action(path) == "check" else ["projects.view", "projects.edit"]
+    if method == "POST" and _segment_options_read(path):
+        return ["projects.view"]
     if method == "POST":
         import re
+        if re.fullmatch(r"/api/projects/\d+/episodes/\d+/production/segments/\d+/video-recovery/resume", path):
+            return ["projects.view", "tasks.retry"]
         if re.fullmatch(r"/api/creation/sessions/\d+/artifacts/\d+/(story-bible/version|confirm)", path) or re.fullmatch(r"/api/projects/\d+/creation-session/artifacts/\d+/restore", path):
             return ["projects.view", "projects.edit"]
     if path.startswith("/api/creation/import-sessions") and method == "POST":
@@ -102,7 +119,7 @@ def project_permissions(path, method):
         if path.endswith("/bulk-actions"):
             return required  # payload action is checked in the route
         action = path.rsplit("/",1)[-1]
-        permission = {"retry":"tasks.retry", "reprocess-response":"tasks.retry", "cancel":"tasks.cancel", "pause":"tasks.cancel", "resume":"tasks.generate", "restore":"tasks.restore", "purge":"tasks.purge"}.get(action)
+        permission = {"retry":"tasks.retry", "reprocess-response":"tasks.retry", "reprocess-asset-links":"tasks.retry", "cancel":"tasks.cancel", "pause":"tasks.cancel", "resume":"tasks.generate", "restore":"tasks.restore", "purge":"tasks.purge"}.get(action)
         return required + [permission or ("tasks.delete" if method=="DELETE" else "tasks.generate")]
     required.append("projects.delete" if method=="DELETE" else "projects.edit")
     if method=="POST" and not path.endswith(("/upload", "/link", "/final")):

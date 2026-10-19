@@ -1,8 +1,12 @@
 /** R1 additive contracts. IDs are identities; names are display labels only. */
+export interface SpeechBinding { provider_model_id: number; voice: string; account_fingerprint?: string | null }
 export interface AssetProfile {
   costume_mode?: "garment_only" | "worn" | null;
   aliases: string[];
   character_role: "lead" | "supporting" | "extra" | "unclassified";
+  character_form?: "single" | "fixed_group" | "crowd";
+  group_label?: string | null;
+  group_size?: number | null;
   character_asset_id: number | null;
   age: string | null;
   description: string | null;
@@ -16,6 +20,7 @@ export interface AssetProfile {
   audio_usage: "voice" | "music" | "ambience" | "sfx" | "unclassified";
   language: string | null;
   voice_id: string | null;
+  speech_preset?: SpeechBinding | null;
   location: string | null;
   time_of_day: string | null;
   weather: string | null;
@@ -75,6 +80,7 @@ export interface AssetProduction {
     media_file_id: number;
     kind: string;
     origin: "explicit" | "legacy_final";
+    audio_purpose?: 'voice_reference'|'dialogue_audio'|'music'|'ambience'|'sfx'|'unclassified'|null;
   }[];
   archive_impact: {
     usage_count: number;
@@ -131,6 +137,8 @@ export interface AssetMediaSummary {
   review_status: string;
   tags: string[];
   is_final: boolean;
+  audio_purpose?: 'voice_reference'|'dialogue_audio'|'music'|'ambience'|'sfx'|'unclassified'|null;
+  voice_description?:string|null;
   needs_split: boolean;
   media: {
     id: number; kind: string; mime_type: string; width: number | null;

@@ -1,23 +1,9 @@
 """Shared video contract registry for provider templates and job creation."""
 from app.core.errors import ConflictError
+from app.providers.video_integrations import VIDEO_INTEGRATIONS
 
-VIDEO_CONTRACTS = {
-    "meaicc_video_images": "meaicc.images.v1",
-    "meaicc_video": "meaicc.text.v1",
-    "minimax_video_v2": "minimax.h3.video.v2.registration-only",
-    "kling_video_t2v": "kling.text2video.v1",
-    "kling_video_i2v": "kling.image2video.v1",
-    "kling_video_multi_image": "kling.multi-image2video.v1",
-    "jimeng_video_first_last": "jimeng.first_last.v30.720p.v1",
-    "jimeng_video_t2v": "jimeng.t2v.v30.720p.v1",
-    "jimeng_video_pro": "jimeng.ti2v.v30.pro.1080p.v1",
-    "ark_video_t2v": "ark.t2v.v1",
-    "ark_video_images": "ark.images.v1",
-    "newapi": "generic.v1",
-    "sora_compatible": "sora.multipart.v1",
-    "dashscope_video_t2v": "dashscope.t2v.v1",
-    "dashscope_video_i2v": "dashscope.i2v.v1",
-}
+VIDEO_CONTRACTS = {key: item.version for key, item in VIDEO_INTEGRATIONS.items()
+                   if item.validator not in {"legacy", "fake"}}
 
 VIDEO_PROTOCOL_TEMPLATES = {
     "meaicc_video_images": {
@@ -161,27 +147,8 @@ def supplier_video_templates(supplier_id):
 
 
 def validate_video_parameters(protocol, parameters, *, first=False, last=False, references=0, negative_prompt=None):
-    if protocol in {"meaicc_video", "meaicc_video_images"}:
-        from app.providers.meaicc_video import video_parameters
-        return video_parameters(parameters, first=first, last=last, references=references,
-                                negative_prompt=negative_prompt, image_mode=protocol == "meaicc_video_images")
-    if protocol == "minimax_video_v2":
-        raise ConflictError("MiniMax H3 生产提交尚未开放；已验证密钥连通，但不得据此提交收费视频任务")
-    if protocol.startswith("kling_video_"):
-        from app.providers.kling_video import video_parameters
-        return video_parameters(protocol, parameters, first=first, last=last, references=references, negative_prompt=negative_prompt)
-    if protocol.startswith("jimeng_video_"):
-        from app.providers.jimeng_video import video_parameters
-        return video_parameters(parameters, first=first, last=last, references=references, negative_prompt=negative_prompt, protocol=protocol)
-    if protocol in {"ark_video_t2v", "ark_video_images"}:
-        from app.providers.ark_video import video_parameters
-        return video_parameters(parameters, first=first, last=last, references=references, negative_prompt=negative_prompt, image_mode=protocol == "ark_video_images")
-    if protocol.startswith("dashscope_video_"):
-        from app.providers.dashscope_video import video_parameters
-        return video_parameters(parameters, image_mode=protocol == "dashscope_video_i2v", first=first, last=last, references=references)
     if protocol not in VIDEO_CONTRACTS:
         raise ConflictError("视频协议没有注册校验器")
-    if protocol == "sora_compatible" and negative_prompt:
-        raise ConflictError("Sora 兼容视频请将负面提示词合并到生成要求中")
-    from app.providers.newapi import video_parameters
-    return video_parameters(parameters, sora=protocol == "sora_compatible", first=first, last=last, references=references)
+    return VIDEO_INTEGRATIONS[protocol].validate_parameters(
+        None, parameters, first=first, last=last, references=references, negative_prompt=negative_prompt,
+    )

@@ -1,0 +1,17 @@
+.script-source-review { margin: 16px 0; border-left: 3px solid #d49b2b; padding: 8px 12px; font-size: 13px; color: #333; }
+.script-source-issue { display: flex; align-items: center; gap: 12px; padding: 6px 0; flex-wrap: wrap; }
+.script-source-issue > span { flex: 1; min-width: 180px; }
+.script-source-issue.error { color: #a32b36; }
+.script-source-locate { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+.script-source-review button { cursor: pointer; background: transparent; border: 1px solid #d9dce2; border-radius: 6px; padding: 6px 10px; color: inherit; }
+.script-source-review button:disabled { opacity: .5; cursor: default; }
+.script-source-review p { color: #687079; margin: 8px 0 0; }
+.script-source-form { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.script-source-form blockquote { flex-basis: 100%; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.script-source-form label { display: flex; align-items: center; gap: 8px; }
+.script-source-form label > span { white-space: nowrap; flex-shrink: 0; }
+.script-source-form select { border: 1px solid #d9dce2; border-radius: 6px; padding: 6px; background: #fff; }
+.script-source-form > div { display: flex; gap: 8px; align-items: center; }
+.script-source-form p { flex-basis: 100%; }
+.script-source-highlight { background: #fff0bb; color: #332b19; outline: 1px solid #d49b2b; overflow-wrap: anywhere; scroll-margin-block: 160px; }
+.script-source-error { color: #a32b36; }

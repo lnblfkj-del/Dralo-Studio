@@ -5,7 +5,6 @@ from app.services.creation_breakdown_confirm import (
     reject_script_asset_breakdown,
 )
 from app.services.creation_breakdown_jobs import (
-    _asset_breakdown_prompt,
     create_batched_script_study_job,
     create_script_asset_breakdown_job,
     create_uploaded_script_optimization_job,
@@ -31,7 +30,6 @@ from app.services.creation_breakdown_sources import (
 __all__ = [
     "_artifact_source",
     "_asset_breakdown_for_review",
-    "_asset_breakdown_prompt",
     "_backfill_completed_character_roles",
     "_refresh_asset_candidate_counts",
     "_sync_character_profile",

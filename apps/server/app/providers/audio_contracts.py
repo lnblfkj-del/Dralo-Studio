@@ -5,7 +5,10 @@ import math
 
 from app.core.errors import ConflictError
 
+AUDIO_METADATA_KEYS = {"_audio_checks", "_audio_voice_catalog", "_audio_voice_names"}
+
 AUDIO_PROTOCOLS = {
+    "stepfun_gen": {"types": ["tts"], "version": "stepfun-gen-mp3-2026-10-19"},
     "stepfun_tts": {"types": ["tts"], "version": "stepfun-tts-mp3-2026-10-10"},
     "stepfun_music": {"types": ["audio"], "version": "stepfun-instrumental-2026-10-10"},
     "minimax_audio_subscription": {"types": ["tts"], "version": "minimax-t2a-v2-mp3-2026-10-10"},
@@ -26,6 +29,7 @@ ELEVENLABS_TTS_LIMITS = {
 
 def validate_audio_model(protocol, model_id):
     allowed = {
+        "stepfun_gen": {"stepaudio-3-gen-preview"},
         "stepfun_tts": STEPFUN_TTS_MODELS,
         "minimax_audio_subscription": MINIMAX_TTS_MODELS,
         "elevenlabs_tts": ELEVENLABS_TTS_LIMITS,
@@ -43,15 +47,30 @@ def _number(value, minimum, maximum, field):
     return value
 
 
-def native_speech_parameters(model, parameters, prompt, protocol):
+def native_speech_parameters(model, parameters, prompt, protocol, *, provider=None):
     validate_audio_model(protocol, model.model_id)
     defaults = model.default_params or {}
-    if "speech" not in model.capabilities or defaults.get("speech_verified") is not True:
-        raise ConflictError("请先核验此模型及预设音色，未提交收费任务")
+    if model.model_type != "tts" or "speech" not in model.capabilities:
+        raise ConflictError("请先设置模型的配音能力")
+    if protocol == "stepfun_gen":
+        description = parameters.get("voice_description")
+        if not isinstance(description, str) or not 1 <= len(description.strip()) <= 498:
+            raise ConflictError("请填写参考声线描述，最多 498 字符")
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 1000:
+            raise ConflictError("试听文本需为 1–1000 字符")
+        for field in ("voice", "voice_id", "voice_label", "reference_audio", "timestamp", "roles", "scripts", "task", "return_url", "stream_format", "instruction", "instructions"):
+            if parameters.get(field) is not None or defaults.get(field) is not None:
+                raise ConflictError(f"参考声线生成不接受 {field}，请使用声线描述与试听文本")
+        if parameters.get("response_format", defaults.get("response_format", "mp3")) != "mp3":
+            raise ConflictError("参考声线输出只支持 MP3")
+        return {"voice_description": description.strip(), "response_format": "mp3"}
     voice = parameters.get("voice", defaults.get("voice"))
     voices = defaults.get("voices", [])
+    if provider is not None and isinstance(voices, list):
+        from app.services.audio_voice_catalog import selectable
+        voices = [*voices, *(row["id"] for row in selectable(provider, model))]
     if not isinstance(voices, list) or not isinstance(voice, str) or not voice.strip() or voice not in voices or len(voice) > 255:
-        raise ConflictError("请选择此模型已核验的音色 ID")
+        raise ConflictError("请选择此模型已登记的音色 ID")
     hard_limit = {"stepfun_tts": 1000, "minimax_audio_subscription": 9999}.get(
         protocol, ELEVENLABS_TTS_LIMITS.get(model.model_id, 4096))
     limit = defaults.get("max_input_chars", hard_limit)
@@ -99,28 +118,49 @@ def native_speech_parameters(model, parameters, prompt, protocol):
 def music_parameters(model, parameters, prompt, protocol):
     validate_audio_model(protocol, model.model_id)
     defaults = model.default_params or {}
-    if protocol not in {"stepfun_music", "elevenlabs_music"} or model.model_type != "audio" or "music" not in model.capabilities or defaults.get("music_verified") is not True:
-        raise ConflictError("音乐模型及纯器乐接口尚未核验，未提交收费请求")
+    if protocol == "stepfun_gen":
+        if model.model_type != "tts" or "speech" not in model.capabilities or parameters.get("audio_usage") not in {"ambience", "sfx"}:
+            raise ConflictError("请选择环境声或音效用途")
+        if not isinstance(prompt, str) or not 1 <= len(prompt.strip()) <= 998:
+            raise ConflictError("环境声或音效描述需为 1–998 字符")
+        if parameters.get("response_format", defaults.get("response_format", "mp3")) != "mp3":
+            raise ConflictError("环境声或音效输出只支持 MP3")
+        for field in ("voice", "voice_description", "instruction", "lyrics", "duration", "roles", "scripts", "return_url", "stream_format"):
+            if parameters.get(field) is not None or defaults.get(field) is not None:
+                raise ConflictError(f"环境声或音效生成不接受 {field}")
+        return {"audio_usage": parameters["audio_usage"], "response_format": "mp3"}
+    if protocol not in {"stepfun_music", "elevenlabs_music"} or model.model_type != "audio" or "music" not in model.capabilities:
+        raise ConflictError("请先选择已接入的音乐协议并设置音乐能力")
     limit = defaults.get("max_input_chars", 4096)
     if type(limit) is not int or limit < 1 or not prompt.strip() or len(prompt) > min(limit, 4096):
         raise ConflictError("音乐描述为空或过长")
-    for field in ("lyrics", "composition_plan", "seed", "song_audio", "vocal_audio", "reference_audio", "finetune_id", "task", "max_tokens", "temperature", "top_k", "top_p", "repetition_penalty"):
+    for field in ("composition_plan", "seed", "song_audio", "vocal_audio", "reference_audio", "finetune_id", "task", "max_tokens", "temperature", "top_k", "top_p", "repetition_penalty"):
         if parameters.get(field) is not None or defaults.get(field) is not None:
-            raise ConflictError(f"纯器乐协议未开放 {field}")
-    for field in ("instrumental", "force_instrumental"):
-        if parameters.get(field, defaults.get(field, True)) is not True:
-            raise ConflictError("本期音乐生成仅支持纯器乐")
+            raise ConflictError(f"当前音乐协议未开放 {field}")
+    instrumental = parameters.get("instrumental", defaults.get("instrumental", True))
+    if type(instrumental) is not bool:
+        raise ConflictError("instrumental 必须为布尔值")
+    if parameters.get("force_instrumental", defaults.get("force_instrumental", True)) is not True:
+        raise ConflictError("当前协议不接受 force_instrumental=false，请使用已接入的歌曲模式")
+    lyrics = parameters.get("lyrics", defaults.get("lyrics"))
+    if lyrics is not None and (not isinstance(lyrics, str) or len(lyrics) > 4096):
+        raise ConflictError("歌词必须为文本，且不超过 4096 字符")
+    if instrumental and lyrics is not None:
+        raise ConflictError("纯音乐不接受歌词，请切换为歌曲")
     if parameters.get("response_format", defaults.get("response_format", "mp3")) != "mp3":
         raise ConflictError("音乐输出只支持 MP3")
     duration = parameters.get("duration", defaults.get("duration"))
     if protocol == "stepfun_music":
         if duration is not None or parameters.get("music_length_ms") is not None or defaults.get("music_length_ms") is not None:
             raise ConflictError("StepFun 音乐无法指定精确时长，不会发送无效时长参数")
-        return {"instrumental": True, "response_format": "mp3"}
+        return {"instrumental": instrumental, "response_format": "mp3", **({"lyrics": lyrics.strip()} if lyrics and lyrics.strip() else {})}
     if parameters.get("music_length_ms") is not None or defaults.get("music_length_ms") is not None:
         raise ConflictError("请使用 duration（秒），避免两套时长单位冲突")
     seconds = _number(duration, 3, 600, "duration")
     milliseconds = seconds * 1000
     if milliseconds != int(milliseconds):
         raise ConflictError("音乐时长最多精确到毫秒")
-    return {"force_instrumental": True, "music_length_ms": int(milliseconds)}
+    song_prompt = prompt if instrumental else "Generate a song with sung vocals. " + prompt + ("\nLyrics:\n" + lyrics if lyrics else "")
+    if len(song_prompt) > 4100:
+        raise ConflictError("音乐描述与歌词合计超过渠道限制，请缩短后再提交")
+    return {"force_instrumental": instrumental, "music_length_ms": int(milliseconds), "music_prompt": song_prompt}

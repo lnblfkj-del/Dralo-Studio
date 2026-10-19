@@ -134,6 +134,8 @@ class EpisodeProductionOut(BaseModel):
     script_dependency_status: Literal["unconfirmed", "current", "stale"] = "unconfirmed"
     script_stale_reason: str | None = None
     scene_count: int = 0
+    character_count: int = 0
+    scene_asset_count: int = 0
     shot_count: int = 0
     ready_shot_count: int = 0
     failed_shot_count: int = 0

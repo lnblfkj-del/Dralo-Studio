@@ -26,6 +26,8 @@ from app.schemas.asset import (
     PromptExpandRequest,
 )
 from app.schemas.job import JobOut
+from app.schemas.asset_bgm import ApplyAssetBgm
+from app.schemas.voice_design import VoiceDesignAdopt, VoiceDesignRequest
 from app.schemas.production_contract import AssetProductionOut, AssetProductionPatch
 from app.services import (
     asset_batch_service,
@@ -42,6 +44,20 @@ library_router = APIRouter(prefix="/assets", tags=["asset-library"])
 
 
 # R1 additive endpoints. The original list response remains a list for existing clients.
+
+
+@router.get("/audio-library")
+async def project_audio_library(project: ProjectDep, session: SessionDep):
+    from app.services.project_audio_library import library
+    return await library(session, project)
+
+
+@router.post("/{asset_id}/apply-bgm")
+async def apply_asset_bgm(asset_id: int, payload: ApplyAssetBgm, project: ProjectDep, session: SessionDep):
+    from app.services.asset_bgm_service import apply
+    result = await apply(session, project, asset_id, payload)
+    await session.commit()
+    return result
 
 
 @router.get("/catalog")
@@ -266,7 +282,7 @@ async def generate_global_asset_image(
         project_id=None,
         asset_id=asset.id,
         provider_model_id=payload.provider_model_id,
-        prompt=asset_service.asset_image_prompt(asset.asset_type, payload.prompt, view_type, costume_mode=costume_mode),
+        prompt=asset_service.asset_image_prompt(asset.asset_type, payload.prompt, view_type, costume_mode=costume_mode, character_profile=asset.attributes),
         negative_prompt=payload.negative_prompt,
         reference_media_ids=reference_media_ids,
         parameters=payload.parameters,
@@ -441,6 +457,29 @@ async def expand_prompt(
     return PromptExpandOut(prompt=prompt, references=references)
 
 
+@router.get("/{asset_id}/voice-design", response_model=JobOut | None)
+async def get_voice_design(asset_id: int, project: ProjectDep, session: SessionDep):
+    from app.services import voice_design_service
+    job = await voice_design_service.latest(session, project, asset_id)
+    return JobOut.model_validate(job) if job else None
+
+
+@router.post("/{asset_id}/voice-design", response_model=JobOut, status_code=201)
+async def create_voice_design(asset_id: int, payload: VoiceDesignRequest, project: ProjectDep, session: SessionDep):
+    from app.services import voice_design_service
+    job = await voice_design_service.submit(session, project, asset_id, payload)
+    await session.commit()
+    return JobOut.model_validate(job)
+
+
+@router.post("/{asset_id}/voice-design/{job_id}/adopt")
+async def adopt_voice_design(asset_id: int, job_id: int, payload: VoiceDesignAdopt, project: ProjectDep, session: SessionDep):
+    from app.services import voice_design_service
+    result = await voice_design_service.adopt(session, project, asset_id, job_id, payload)
+    await session.commit()
+    return result
+
+
 @router.get("/{asset_id}/audio-task", response_model=JobOut | None)
 async def get_asset_audio_task(asset_id: int, project: ProjectDep, session: SessionDep):
     from app.services import asset_audio_generation
@@ -473,13 +512,16 @@ async def generate_asset_image(
     view_type, view_label = asset_service.normalize_asset_view(
         asset.asset_type, payload.view_type, payload.view_label, source_text=payload.prompt
     )
+    from app.services.asset_character_representation import character_profile
+    link = await asset_service.get_project_link(session, project.id, asset.id)
+    effective_character_profile = character_profile(asset.attributes, link.production_data)
     job = await job_service.create_image_job(
         session,
         project.owner_id,
         project_id=project.id,
         asset_id=asset_id,
         provider_model_id=payload.provider_model_id,
-        prompt=asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=await resolve_costume_mode(session, project.id, asset, payload.parameters)),
+        prompt=asset_service.asset_image_prompt(asset.asset_type, prompt, view_type, costume_mode=await resolve_costume_mode(session, project.id, asset, payload.parameters), character_profile=effective_character_profile),
         negative_prompt=payload.negative_prompt,
         reference_media_ids=reference_media_ids,
         parameters=payload.parameters,

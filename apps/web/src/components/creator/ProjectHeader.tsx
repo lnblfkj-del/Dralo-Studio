@@ -9,6 +9,7 @@ import { TaskMonitorButton } from "@/components/tasks/TaskMonitorButton";
 import { EntertainmentButton } from "./EntertainmentDock";
 import { styleName } from "./styleLibrary";
 import "@/styles/project-header.css";
+import "@/styles/workspace-sidebar.css";
 
 function projectStyleName(settings: Partial<CreationSettings> | undefined, presets: Array<{ id: number; name: string }>) {
   const styleId = settings?.style_id;

@@ -6,11 +6,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError
-from app.models import CreationSession, Job, JobTextResponse, utcnow
+from app.models import Job, JobTextResponse, utcnow
 from app.services import project_service
 from app.services.creation_breakdown_jobs import _create_asset_breakdown_child
 from app.services.creation_breakdown_planning import (
-    VISUAL_REQUIREMENT_TYPES,
     breakdown_scope_key,
     build_breakdown_work_units,
     restore_work_unit,
@@ -68,6 +67,12 @@ async def _failed_children(session: AsyncSession, job: Job) -> tuple[Job, list[J
         raise ConflictError("当前仅支持恢复资产拆解失败范围")
     if parent is None or parent.target_type != ASSET_GROUP:
         raise ConflictError("资产拆解父任务不存在")
+    if (parent.payload or {}).get("asset_extraction_contract_version") != 3:
+        raise ConflictError("资产拆解仅支持 V3 来源单元格式，请重新创建拆解任务")
+    if parent.status not in {"failed", "processing"}:
+        raise ConflictError("资产拆解批次已取消或结束，不能重提旧结果")
+    children = [child for child in children if child.status in TERMINAL_FAILURES
+                and (child.resolution or {}).get("status") not in {"superseded", "replacement_pending"}]
     if not children:
         raise ConflictError("没有需要恢复的资产拆解范围")
     return parent, children
@@ -82,8 +87,15 @@ async def _assert_paid_recall_allowed(
     submission = dict((child.payload or {}).get("text_submission") or {})
     if submission.get("response_received"):
         stored = await _latest_response(session, child.id)
+        from app.core.job_failure import OUTPUT_ERRORS
+        known_invalid_output = (
+            (child.payload.get("parameters") or {}).get("asset_extraction_contract_version") == 3
+            and (child.failure_detail or {}).get("error_code") in OUTPUT_ERRORS
+        )
         if (stored is not None and stored.status == "available"
-                and stored.processing_attempts < 1 and not child.asset_response_truncated):
+                and stored.expires_at.replace(tzinfo=None) > utcnow().replace(tzinfo=None)
+                and stored.processing_attempts < 1 and not child.asset_response_truncated
+                and not known_invalid_output):
             raise ConflictError(
                 f"子任务 #{child.id} 已保存模型响应，请先执行一次无费用的本地重新处理"
             )
@@ -123,6 +135,20 @@ async def confirm_asset_breakdown_recall(
     item = await validate_script_asset_breakdown_job_sources(
         session, parent, require_parent_active=False
     )
+    from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+    await lock_breakdown_session(session, item)
+    await session.refresh(parent)
+    if job is not parent:
+        await session.refresh(job)
+    parent, failed_children = await _failed_children(session, job)
+    for child in failed_children:
+        await session.refresh(child)
+    if any(child.status not in TERMINAL_FAILURES or (child.resolution or {}).get("status")
+           in {"superseded", "replacement_pending"} for child in failed_children):
+        raise ConflictError("失败范围已经安排恢复，请等待现有任务")
+    if ((item.settings or {}).get("asset_breakdown") or {}).get("parent_job_id") != parent.id:
+        raise ConflictError("该拆解批次不是当前版本，请刷新后查看")
     from app.services.team_access import same_team
     if not await same_team(session, item.owner_id, actor_id):
         raise ConflictError("无权恢复该资产拆解任务")
@@ -156,12 +182,27 @@ async def confirm_asset_breakdown_recall(
             raise ConflictError(f"子任务 #{child.id} 的分集范围已经失效")
         requirement_types = list(parameters.get("requirement_types") or [])
         group = str(parameters.get("requirement_group") or "visual")
-        if parameters.get("source_ranges"):
+        from app.services.asset_targeted_repair import freeze_repair
+        item_repair = None
+        if (parameters.get("asset_necessity_policy") or {}).get("item_recovery"):
+            item_repair = freeze_repair(
+                (progress.get("partial_batches") or {}).get(parameters.get("scope_key")),
+                child.payload.get("asset_extraction_diagnostics") or {},
+            )
+            if item_repair is None and not child.payload.get("asset_extraction_diagnostics"):
+                item_repair = parameters.get("item_repair")
+        # Recover the exact frozen types, including combined visual/audio batches.
+        if item_repair:
+            units = [restore_work_unit(child_episodes, requirement_types, group, parameters.get("source_ranges"))]
+        elif parameters.get("source_ranges"):
             units = [restore_work_unit(child_episodes, requirement_types, group, parameters["source_ranges"])]
         else:
-            visual_units, audio_units = build_breakdown_work_units(child_episodes, requirement_types)
+            visual_units, audio_units = build_breakdown_work_units(
+                child_episodes, requirement_types,
+                combine_necessary_assets=bool(parameters.get("asset_necessity_policy")),
+            )
             units = visual_units if group == "visual" else audio_units
-        if _original_error_code(child) == "MODEL_OUTPUT_TRUNCATED":
+        if _original_error_code(child) == "MODEL_OUTPUT_TRUNCATED" and not item_repair:
             original = restore_work_unit(child_episodes, requirement_types, group, parameters.get("source_ranges"))
             # A new long-script plan may already divide an old, unsplit job.
             if len(units) == 1 or len(numbers) > 1:
@@ -180,6 +221,7 @@ async def confirm_asset_breakdown_recall(
                 skill_key=execution.get("skill_key"),
                 skill_version=execution.get("skill_version"),
                 source_ranges=unit.source_ranges,
+                contract_version=3,
             )
             for unit in units
         ]
@@ -193,8 +235,17 @@ async def confirm_asset_breakdown_recall(
             context: dict[str, Any] = {
                 "production_context": dict(progress.get("production_context") or {}),
                 "existing_assets": list(payload.get("existing_assets") or []),
+                "candidate_reference": list(payload.get("candidate_reference") or []),
             }
             if unit.group == "audio":
+                from app.services.asset_extraction_registry import project_registry
+                from app.services.creation_breakdown_planning import REQUIREMENT_RESULT_KEYS
+
+                visual_breakdowns = [project_registry(
+                    {key: [entry for batch in visual_breakdowns for entry in batch.get(key, [])]
+                     for key in REQUIREMENT_RESULT_KEYS.values()},
+                    context=context["production_context"], existing=context["existing_assets"],
+                )]
                 context["visual_asset_keys"] = visual_asset_key_context(
                     visual_breakdowns, episode_numbers=unit.episode_numbers
                 )
@@ -212,8 +263,6 @@ async def confirm_asset_breakdown_recall(
                 batch_index=len(replacements) + len(scope_order),
                 total_batches=len(scope_order),
                 context=context,
-                protocol=str(payload.get("protocol") or "openai_compatible"),
-                capabilities=list(payload.get("model_capabilities") or []),
                 source_revisions={
                     str(episode.id): episode.script_revision for episode in unit.episodes
                 },
@@ -221,6 +270,7 @@ async def confirm_asset_breakdown_recall(
                 story_source=dict(payload.get("story_source") or {}),
                 requested_numbers=list(payload.get("requested_episode_numbers") or []),
                 scope_key=scope_key,
+                item_repair=item_repair,
             )
             replacement.payload = {
                 **replacement.payload,

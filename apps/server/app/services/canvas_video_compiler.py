@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app.models import CanvasDocument, CanvasNode, Provider, ProviderModel
 from app.providers.protocols import effective_protocol, is_toapis_model
 from app.providers.video_contracts import VIDEO_CONTRACTS, validate_video_parameters
+from app.services.video_configuration import projected_params
 
 
 def _digest(value: Any) -> str:
@@ -203,7 +204,7 @@ async def _compile_video_submission_a68(
     )
     for field, choices in (("aspect_ratio", "aspect_ratios"), ("resolution", "resolutions"),
                            ("duration", "durations")):
-        value, allowed = clean_parameters.get(field), (model.default_params or {}).get(choices)
+        value, allowed = clean_parameters.get(field), projected_params(model).get(choices)
         if value not in (None, "", "default", "模型默认") and isinstance(allowed, list) and value not in allowed:
             labels = {"aspect_ratio": "项目画幅", "resolution": "分辨率", "duration": "时长"}
             blockers.append(f"模型不支持{labels[field]} {value}")
@@ -228,7 +229,7 @@ async def _compile_video_submission_a68(
     }}
     snapshot = {
         "model": {"provider_model_id": model.id, "model_id": model.model_id,
-                  "capabilities": sorted(model.capabilities or []), "default_params": model.default_params or {}},
+                  "capabilities": sorted(model.capabilities or []), "default_params": projected_params(model)},
         "director_shot_package": package,
         "effective_references": compiled["effective_references"],
         "video_input_contract": contract,
@@ -267,7 +268,7 @@ async def _legacy_compile_video_submission(
             blockers.append(str(exc))
 
     capabilities = set(model.capabilities or [])
-    defaults = model.default_params or {}
+    defaults = projected_params(model)
     supports_refs = _capability(model, "reference_images", "multi_reference", "image_to_video")
     if is_toapis_model(provider, model) and model.model_id in {"wan2.6", "wan2.6-flash"}:
         from app.providers.toapis import model_defaults

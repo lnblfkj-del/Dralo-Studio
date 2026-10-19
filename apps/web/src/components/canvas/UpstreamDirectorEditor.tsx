@@ -36,6 +36,7 @@ export function UpstreamDirectorEditor({ projectId, nodeId, nodeTitle = "3D 导�
     nodeTitle,
   });
   return createPortal(<section className="upstream-director-editor" data-pointer-lock={pointerState} role="dialog" aria-modal="true" aria-label="3D 导演台原版">
+    {storage.confirmationDialog}
     <header><span>3D 导演台 · {storage.notice}</span><div className="upstream-director-save-actions"><button disabled={!storage.ready} onClick={()=>setLinkOpen(true)}>画布联动</button><button disabled={!storage.ready} onClick={() => void storage.save()}>保存工程</button><button onClick={() => void storage.close()}><X size={15} />返回画布</button></div></header>
     {linkOpen&&<UpstreamCanvasLink frame={frame} projectId={projectId} nodeId={nodeId} runSaved={storage.runSaved} onDismiss={()=>setLinkOpen(false)}/>}
     {storage.exporting&&<div className="upstream-export-lock" aria-label="正在导出，已暂停编辑"/>}

@@ -5,7 +5,6 @@ from hashlib import sha256
 from uuid import uuid4
 
 from sqlalchemy import select, update
-from app.services.team_access import owner_scope, same_team
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models import (
@@ -21,8 +20,9 @@ from app.models import (
     Scene,
     VideoSegment,
 )
-from app.services import asset_production_service, asset_service, canvas_service
 from app.schemas.production_contract import AssetProductionPatch, AssetScopeOverride
+from app.services import asset_production_service, asset_service, canvas_service
+from app.services.team_access import owner_scope, same_team
 
 PRODUCTION_ENTITY_KINDS = {"character", "scene", "costume", "prop", "voice"}
 VISUAL_ENTITY_KINDS = PRODUCTION_ENTITY_KINDS - {"voice"}
@@ -123,6 +123,7 @@ async def enrich(session, project, nodes):
                 "production_revision": shared["revision"],
                 "prompt_anchor": shared["prompt_anchor"],
                 "asset_profile": shared["profile"],
+                "speech_preset": shared["profile"].get("speech_preset"),
                 "sources": shared["sources"],
             })
         node_jobs = {
@@ -261,15 +262,10 @@ async def edit_entity(session, project, node_key, payload):
     if node.node_type != "character" and payload.voice_media_id is not None:
         raise ConflictError("仅角色支持独立音色参考")
     if payload.speech_preset:
-        if node.node_type != "character":
-            raise ConflictError("仅角色可关联配音预设")
-        from app.providers.speech import speech_parameters
-        from app.services.canvas_generation_service import validate_model
-        model = await validate_model(session, payload.speech_preset.provider_model_id, "audio", {})
-        from app.providers.protocols import effective_protocol
-        from app.models import Provider
-        provider = await session.get(Provider, model.provider_id)
-        speech_parameters(model, {"voice": payload.speech_preset.voice}, "验证", protocol=effective_protocol(provider, model))
+        if node.node_type not in {"character", "voice"}:
+            raise ConflictError("仅角色或声音资产可关联配音音色")
+        from app.services.asset_speech_binding import validate_binding
+        await validate_binding(session, payload.speech_preset.model_dump())
     primary_kind = "audio" if node.node_type == "voice" else "image"
     for media_id, kind in [(i, primary_kind) for i in ids] + ([(payload.voice_media_id, "audio")] if payload.voice_media_id else []):
         media = await session.get(MediaFile, media_id)
@@ -280,6 +276,7 @@ async def edit_entity(session, project, node_key, payload):
         raise ConflictError("名称不能为空")
     if payload.update_scope == "local":
         impact = await scope_impact(session, project, node_key)
+        shared = await asset_production_service.read_production(session, project, asset.id)
         target = payload.local_target
         if target is None or not any(
             item["target_type"] == target.target_type and item["target_id"] == target.target_id
@@ -291,10 +288,10 @@ async def edit_entity(session, project, node_key, payload):
             or views != list(previous.get("views") or [])
             or payload.primary_media_id != previous.get("primary_media_id")
             or payload.voice_media_id != previous.get("voice_media_id")
-            or (payload.speech_preset.model_dump() if payload.speech_preset else None) != previous.get("speech_preset")
+            or (payload.speech_preset.model_dump(exclude_none=True) if payload.speech_preset else None)
+            != ({key: value for key, value in shared["profile"]["speech_preset"].items() if value is not None} if shared["profile"].get("speech_preset") else None)
         ):
             raise ConflictError("局部修改只能调整描述、提示词和状态资料，名称与素材属于全剧共享设定")
-        shared = await asset_production_service.read_production(session, project, asset.id)
         local_profile = {
             key: value
             for key, value in (payload.profile.model_dump(mode="json") if payload.profile else {}).items()
@@ -313,11 +310,15 @@ async def edit_entity(session, project, node_key, payload):
         ))
         await session.flush()
         return await canvas_service.get_snapshot(session, project)
-    if payload.profile is not None or payload.prompt_anchor is not None:
+    profile_patch = payload.profile
+    if node.node_type in {"character", "voice"} and "speech_preset" in payload.model_fields_set:
+        from app.schemas.production_contract import AssetProfile
+        profile_patch = (profile_patch or AssetProfile()).model_copy(update={"speech_preset": payload.speech_preset})
+    if profile_patch is not None or payload.prompt_anchor is not None:
         await asset_production_service.update_production(session, project, asset.id, AssetProductionPatch(
             expected_revision=payload.expected_production_revision,
             request_id=payload.request_id,
-            **({"profile": payload.profile} if payload.profile is not None else {}),
+            **({"profile": profile_patch} if profile_patch is not None else {}),
             **({"prompt_anchor": payload.prompt_anchor} if payload.prompt_anchor is not None else {}),
         ))
     profile = {"revision": payload.expected_entity_revision + 1, "views": views,
@@ -436,6 +437,7 @@ async def apply_plan(session, project, source, proposed):
                         views.append({"media_id": media.id, "label": "生成素材"})
                     snapshot = await edit_entity(session, project, command.node_id, ProductionEdit(
                         expected_revision=snapshot["revision"], expected_entity_revision=profile.get("revision", 0), expected_entity_token=profile["token"],
+                        expected_production_revision=profile.get("production_revision", 0),
                         update_scope="series",
                         name=node["data"]["title"], description=node["data"].get("content", ""), views=views,
                         primary_media_id=profile.get("primary_media_id") or (media.id if media.kind == expected_kind else None),
@@ -461,6 +463,7 @@ async def apply_plan(session, project, source, proposed):
                     raise ConflictError("提案引用的实体版本已变化")
                 snapshot = await edit_entity(session, project, command.node_id, ProductionEdit(
                     expected_revision=snapshot["revision"], expected_entity_revision=profile.get("revision", 0), expected_entity_token=profile["token"],
+                    expected_production_revision=profile.get("production_revision", 0),
                     update_scope="series",
                     name=command.title.strip() or node["data"]["title"], description=command.content,
                     views=profile.get("views", []), primary_media_id=profile.get("primary_media_id"), voice_media_id=profile.get("voice_media_id"), speech_preset=profile.get("speech_preset")))

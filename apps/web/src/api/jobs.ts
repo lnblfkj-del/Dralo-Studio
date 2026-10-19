@@ -75,6 +75,7 @@ export interface JobListOptions {
   search?: string;
   sort?: "newest" | "oldest";
   recycled?: boolean;
+  targetType?: string;
 }
 
 export async function listJobsPage(options: JobListOptions = {}): Promise<JobListResponse> {
@@ -87,6 +88,7 @@ export async function listJobsPage(options: JobListOptions = {}): Promise<JobLis
     search: options.search || undefined,
     sort: options.sort,
     recycled: options.recycled || undefined,
+    target_type: options.targetType,
   } })).data;
 }
 
@@ -148,6 +150,25 @@ export async function getOutlineCastReview(jobId: number): Promise<OutlineCastRe
   return (await http.get<OutlineCastReview>(`/jobs/${jobId}/outline-cast-review`)).data;
 }
 
+export interface AssetLinkReview {
+  response_sha256: string;
+  episode_numbers: number[];
+  pending_audio_calls: number;
+  issues: { field: string; asset_key: string; kind: string; episode_number: number; scene: string; source_excerpt: string; allowed_targets: string[]; suggested_targets: string[] }[];
+  targets: { target: string; kind: string; asset_key: string; name: string; aliases: string[]; description: string }[];
+}
+
+export async function getAssetLinkReview(jobId: number): Promise<AssetLinkReview> {
+  return (await http.get<AssetLinkReview>(`/jobs/${jobId}/asset-link-review`)).data;
+}
+
+export async function reprocessAssetLinks(jobId: number, correction: {
+  asset_link_corrections: Record<string, string>; expected_response_sha256: string;
+  acknowledge_pending_audio_calls?: boolean; expected_pending_audio_calls?: number;
+}): Promise<Job> {
+  return (await http.post<Job>(`/jobs/${jobId}/reprocess-asset-links`, correction)).data;
+}
+
 export async function reprocessJobResponse(jobId: number, correction?: {
   character_name_corrections: Record<string, string>;
   expected_response_sha256: string;
@@ -155,11 +176,11 @@ export async function reprocessJobResponse(jobId: number, correction?: {
   return (await http.post<Job>(`/jobs/${jobId}/reprocess-response`, correction)).data;
 }
 
-export async function confirmRecallJob(jobId: number): Promise<Job> {
+export async function confirmRecallJob(jobId: number, options?: { channel_checked: boolean; reason: string }): Promise<Job> {
   return (await http.post<Job>(`/jobs/${jobId}/confirm-recall`, {
     acknowledge_new_model_call: true,
-    channel_checked: true,
-    reason: "用户在失败详情中选择重新生成失败范围",
+    channel_checked: options?.channel_checked ?? true,
+    reason: options?.reason ?? "用户在失败详情中选择重新生成失败范围",
   })).data;
 }
 

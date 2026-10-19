@@ -1,0 +1,13 @@
+.asset-audio-batch { display: grid; gap: 16px; }
+.asset-audio-batch fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
+.asset-audio-batch-row { display: grid; gap: 14px; padding: 18px 0; border-bottom: 1px solid var(--app-color-border); }
+.asset-audio-batch-row h3 { display: flex; align-items: center; gap: 12px; margin: 0; font-size: 14px; }
+.asset-audio-batch-row small { font-size: 12px; font-weight: 400; color: var(--app-color-text-muted); }
+.asset-audio-batch-settings { display: grid; grid-template-columns: repeat(2, minmax(0, 360px)); gap: 20px; align-items: start; }
+.asset-audio-batch-row > p { margin: 0; line-height: 1.5; }
+.asset-audio-batch-row label { display: grid; gap: 8px; font-size: 13px; min-width: 0; }
+.asset-audio-batch-row :is(input,select,textarea) { width: 100%; min-width: 0; box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--app-color-border); border-radius: 6px; color: var(--app-color-text); background: var(--app-color-surface); font: inherit; }
+.asset-audio-batch-row textarea { resize: vertical; }
+.asset-audio-batch-row select { max-width: 360px; }
+.asset-audio-batch-result { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--app-color-border); overflow-wrap: anywhere; }
+@media (max-width: 800px) { .asset-audio-batch-settings { grid-template-columns: minmax(0, 1fr); } }

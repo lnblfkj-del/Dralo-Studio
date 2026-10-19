@@ -117,8 +117,8 @@ async def resolve_bindings(
         ):
             raise ConflictError("同一段原文必需的参考素材已超过模型上限，不能静默丢弃")
     supplied = Counter(binding.role for binding in bindings)
-    if any(supplied[limit.role] < limit.minimum for limit in mode.reference_limits):
-        raise ConflictError("缺少该模式必需的参考媒体")
+    if not bindings:
+        return resolved
     if mode.input_mode in {"first_frame", "first_last_frame"} and not supplied["first_frame"]:
         raise ConflictError("首帧模式必须明确绑定起始画面")
     if mode.input_mode == "first_last_frame" and not supplied["last_frame"]:

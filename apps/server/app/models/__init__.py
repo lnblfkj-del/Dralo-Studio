@@ -4,6 +4,8 @@ Alembic autogenerate 依赖此处的导入来发现全部模型，新增模型�
 """
 
 from app.models.edit_project import EditProject, EditProjectReceipt  # noqa: F401
+from app.models.video_execution_version import VideoAccount, VideoExecutionVersion, VideoAdapterRelease  # noqa: F401
+from app.models.video_configuration_preset import VideoConfigurationPreset  # noqa: F401
 from app.models.agent_config import (
     AGENT_MODES,
     MEDIA_MODALITIES,

@@ -20,7 +20,7 @@ def references_media(value, media_id):
     if not isinstance(value, dict):
         return False
     for key, item in value.items():
-        if key in {"media_id", "mediaId", "preview_media_id", "reference_media_id", "voice_media_id", "source_media_id", "pending_media_id"} and item == media_id:
+        if key in {"media_id", "mediaId", "media_file_id", "mediaFileId", "preview_media_id", "reference_media_id", "voice_media_id", "source_media_id", "pending_media_id"} and item == media_id:
             return True
         if key in {"reference_media_ids", "media_ids"} and isinstance(item, list) and media_id in item:
             return True

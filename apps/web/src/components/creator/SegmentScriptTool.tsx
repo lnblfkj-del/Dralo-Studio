@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Node, mergeAttributes, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from "@tiptap/react";
-import { Clapperboard, Move, Mic } from "lucide-react";
+import { Camera, ChevronDown, Clapperboard, Mic } from "lucide-react";
 import { cameraMoves, documentText } from "@/domain/segmentDocument";
 function Tool({ node, updateAttributes, editor }: NodeViewProps) {
   const a = node.attrs;
@@ -12,8 +12,8 @@ function Tool({ node, updateAttributes, editor }: NodeViewProps) {
     else setDuration(String(a.duration));
   };
   return <NodeViewWrapper as="span" className="script-inline-tool" contentEditable={false}>
-    {a.kind === "shot" ? <><Clapperboard size={14} /><span>镜头</span><input aria-label="镜头时长" type="number" min="0.1" step="0.1" disabled={!editor.isEditable} value={duration} onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") e.currentTarget.blur(); }} onChange={(e) => setDuration(e.target.value)} onBlur={commitDuration} /><span>秒</span></>
-      : a.kind === "movement" ? <><Move size={14} /><select aria-label="运镜" disabled={!editor.isEditable} value={a.value} onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => updateAttributes({ value: e.target.value })}>{[...new Set([a.value, ...cameraMoves])].filter(Boolean).map((value) => <option key={value}>{value}</option>)}</select></>
+    {a.kind === "shot" ? <details className="script-time-picker" onMouseDown={(e) => e.stopPropagation()}><summary aria-label="设置镜头时长" title="设置镜头时长"><Clapperboard size={14} /><span>{a.duration} 秒</span><ChevronDown size={12} /></summary><div><label>镜头时长<input aria-label="镜头时长" type="number" min="0.1" step="0.1" disabled={!editor.isEditable} value={duration} onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter") e.currentTarget.blur(); }} onChange={(e) => setDuration(e.target.value)} onBlur={commitDuration} /></label><span>秒</span></div></details>
+      : a.kind === "movement" ? <><Camera size={14} /><select aria-label="运镜" title="选择运镜方式" disabled={!editor.isEditable} value={a.value} onMouseDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} onChange={(e) => updateAttributes({ value: e.target.value })}>{[...new Set([a.value, ...cameraMoves])].filter(Boolean).map((value) => <option key={value}>{value}</option>)}</select></>
         : <><Mic size={14} /><input aria-label="说话人" disabled={!editor.isEditable} value={a.speaker} placeholder="说话人" onChange={(e) => updateAttributes({ speaker: e.target.value, confirmed: true })} /><input aria-label="语气" disabled={!editor.isEditable} value={a.tone} onChange={(e) => updateAttributes({ tone: e.target.value })} />{!a.confirmed && <button type="button" disabled={!editor.isEditable || !a.speaker} onClick={() => updateAttributes({ confirmed: true })}>确认</button>}</>}
   </NodeViewWrapper>;
 }

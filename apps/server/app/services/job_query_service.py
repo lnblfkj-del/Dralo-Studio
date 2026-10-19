@@ -62,11 +62,14 @@ def _job_list_filters(
     job_type: str | None = None,
     search: str | None = None,
     recycled: bool = False,
+    target_type: str | None = None,
 ) -> list[Any]:
     filters: list[Any] = [owner_scope(Job.owner_id, owner_id)]
     filters.append(Job.deleted_at.is_not(None) if recycled else Job.deleted_at.is_(None))
     if project_id is not None:
         filters.append(Job.project_id == project_id)
+    if target_type is not None:
+        filters.append(Job.target_type == target_type)
     unresolved_failure = or_(
         Job.payload["resolution"]["status"].as_string().is_(None),
         Job.payload["resolution"]["status"].as_string() != "superseded",
@@ -120,6 +123,7 @@ async def list_jobs(
     search: str | None = None,
     sort: str = "newest",
     recycled: bool = False,
+    target_type: str | None = None,
 ) -> dict[str, Any]:
     filters = _job_list_filters(
         owner_id,
@@ -128,6 +132,7 @@ async def list_jobs(
         job_type=job_type,
         search=search,
         recycled=recycled,
+        target_type=target_type,
     )
     order = Job.created_at.asc() if sort == "oldest" else Job.created_at.desc()
     total = int(await session.scalar(select(func.count(Job.id)).where(*filters)) or 0)

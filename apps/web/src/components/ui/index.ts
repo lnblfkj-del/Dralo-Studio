@@ -5,5 +5,6 @@ export { Tooltip, type TooltipPlacement } from "./Tooltip";
 export { FeedbackBoundary } from "./FeedbackBoundary";
 export { useFeedback } from "./useFeedback";
 export { Dialog, ConfirmDialog, type DialogProps, type ConfirmDialogProps, type DialogSize } from "./Dialog";
+export { ModelDialogLayoutScope } from "./DialogLayoutScope";
 export { Drawer, type DrawerProps } from "./Drawer";
 export { Dropdown, type DropdownProps } from "./Dropdown";

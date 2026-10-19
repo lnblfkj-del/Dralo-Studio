@@ -5,12 +5,12 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.core.errors import ConflictError
 from app.core.workspace_context import current_workspace
 from app.models import AgentSkill, AgentSkillVersion, StylePreset
-from app.models.agent_config import BusinessExecutorSetting, StyleCategory
+from app.models.agent_config import StyleCategory
 from app.services.agent_config_service import SKILL_BEHAVIOR_FIELDS, skill_snapshot
 
 
@@ -39,10 +39,17 @@ async def install_skills(session, *, upgrade=False, keys: set[str] | None = None
         if not entries:
             return []
     result = []
-    changed = {}
+    if session.get_bind().dialect.name == "sqlite":
+        await session.flush()
+        await session.execute(update(AgentSkill).where(AgentSkill.workspace_id == scope_id())
+                              .values(version=AgentSkill.version).execution_options(synchronize_session=False))
+    elif session.get_bind().dialect.name == "postgresql":
+        # A workspace may have no catalog rows yet; row locks alone cannot serialize first install.
+        lock_key = int.from_bytes(hashlib.sha256(f"skill-catalog:{scope_id()}".encode()).digest()[:8], "big", signed=True)
+        await session.execute(select(func.pg_advisory_xact_lock(lock_key)))
     for entry in entries:
         definition = entry["definition"]
-        skill = await session.scalar(select(AgentSkill).where(AgentSkill.key == definition["key"], AgentSkill.workspace_id == scope_id()).with_for_update())
+        skill = await session.scalar(select(AgentSkill).where(AgentSkill.key == definition["key"], AgentSkill.workspace_id == scope_id()).with_for_update().execution_options(populate_existing=True))
         if skill is None:
             skill = AgentSkill(**definition, version=entry["initial_version"], is_builtin=True, enabled=True)
             session.add(skill)
@@ -54,25 +61,15 @@ async def install_skills(session, *, upgrade=False, keys: set[str] | None = None
             if current != desired:
                 if not skill.is_builtin or fingerprint(current) not in entry["previous_hashes"]:
                     raise ConflictError(f"{skill.key} 已修改，拒绝覆盖；本次升级回滚")
-                old_version = skill.version
                 skill.version = max(skill.version + 1, entry["initial_version"])
                 # A behavioral upgrade must not reset a user's display name.
                 for key, value in desired.items():
                     setattr(skill, key, value)
                 session.add(AgentSkillVersion(skill_id=skill.id, version=skill.version, snapshot=skill_snapshot(skill)))
-                changed[skill.id] = (old_version, skill.version)
         result.append(skill)
     await session.flush()
-    # Advance only bindings using the version actually upgraded; preserve explicit older choices.
-    for setting in await session.scalars(select(BusinessExecutorSetting).where(BusinessExecutorSetting.workspace_id == scope_id()).with_for_update()):
-        selections = []
-        for selection in setting.skill_versions or []:
-            versions = changed.get(selection["skill_id"])
-            selections.append({**selection, "version": versions[1]} if versions and selection["version"] == versions[0] else dict(selection))
-        if selections != setting.skill_versions:
-            setting.skill_versions = selections
-            setting.revision += 1
-    await session.flush()
+    from app.services.skill_retention_service import retain_latest
+    await retain_latest(session, result)
     return result
 
 

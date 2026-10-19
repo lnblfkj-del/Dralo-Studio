@@ -4,7 +4,7 @@ const rows = (v: unknown): Row[] => Array.isArray(v) ? v : [];
 const visualAssetTypes = new Set(["character", "costume", "scene", "prop"]);
 export function withBoundAssetMentions(document: JSONContent, bindings: Row[]): JSONContent {
   const candidates = bindings.filter((item) => item.resolved !== false && visualAssetTypes.has(String(item.asset_type))
-    && Number.isSafeInteger(Number(item.asset_id)) && Number.isSafeInteger(Number(item.asset_version_id)) && String(item.asset_name ?? "").trim());
+    && Number.isSafeInteger(Number(item.asset_id)) && Number(item.asset_id) > 0 && String(item.asset_name ?? "").trim());
   const unique = candidates.filter((item) => candidates.filter((other) => other.asset_name === item.asset_name).length === 1)
     .sort((a, b) => String(b.asset_name).length - String(a.asset_name).length);
   if (!unique.length) return document;
@@ -20,7 +20,7 @@ export function withBoundAssetMentions(document: JSONContent, bindings: Row[]): 
         if (!match) { result.push({ ...node, text: node.text.slice(cursor) }); break; }
         if (match.index > cursor) result.push({ ...node, text: node.text.slice(cursor, match.index) });
         const binding = match.binding;
-        result.push({ type: "assetMention", attrs: { asset_id: binding.asset_id, asset_version_id: binding.asset_version_id,
+        result.push({ type: "assetMention", attrs: { asset_id: binding.asset_id, asset_version_id: binding.asset_version_id ?? null,
           name: binding.asset_name, media_file_id: binding.media_file_id, asset_type: binding.asset_type } });
         cursor = match.index + String(binding.asset_name).length;
       }

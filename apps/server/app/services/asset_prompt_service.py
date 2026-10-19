@@ -1,6 +1,5 @@
 """Shared A2 asset prompt proposal executor used by UI buttons and Agent tools."""
 
-# ruff: noqa: RUF001
 
 from __future__ import annotations
 
@@ -14,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import ConflictError, GenerationFailedError
 from app.models import Asset, Job, Project, ProjectAssetLink
 from app.services import asset_service, business_executor_service, job_service
+from app.services.asset_character_representation import character_profile
 from app.services.asset_prompt_state import ACTIVE, asset_snapshot, input_hash, prompt_state
+from app.services.asset_scoped_costumes import prompt_identity_snapshot
 from app.services.asset_visual_identity import project_context, retain_visual_facts, visual_profile
 
 TARGET_ASSET_PROMPT_PROPOSAL = "asset_prompt_proposal"
@@ -73,17 +74,23 @@ async def create_proposal_job(
         for row in overlay_rows
         if "prompt_anchor" in (row.production_data or {})
     }
+    from app.services.asset_segment_projection import effective_attributes
     snapshots = [
         {
             "id": asset["id"],
             "type": asset["asset_type"],
             "name": asset["name"],
             "description": asset["description"],
-            "attributes": asset["attributes"] or {},
+            "attributes": effective_attributes(asset["attributes"], links_by_asset[asset["id"]].production_data),
             "profile": visual_profile(asset["attributes"], links_by_asset[asset["id"]].production_data, asset["description"]),
             "source_profile": (links_by_asset[asset["id"]].production_data or {}).get("profile") or {},
+            "character_profile": character_profile(
+                asset["attributes"], links_by_asset[asset["id"]].production_data),
             "current_prompt": prompt_overrides.get(asset["id"], asset["prompt_anchor"]),
             "production_revision": links_by_asset[asset["id"]].production_revision,
+            **({"field_overrides": (links_by_asset[asset["id"]].production_data or {}).get("field_trust_overrides") or [],
+                "prompt_override": bool((links_by_asset[asset["id"]].production_data or {}).get("field_trust_prompt_override"))}
+               if effective_attributes(asset["attributes"], links_by_asset[asset["id"]].production_data).get("field_trust") else {}),
         }
         for asset in (by_id[asset_id] for asset_id in ordered_ids)
     ]
@@ -133,12 +140,14 @@ async def create_proposal_job(
         "必须逐项保留输入资产 ID；使用中文、具体且可视化；不写剧情，不提交图片，"
         "不得返回清单外的资产。\n"
         "角色提示词必须包含已给profile中的外貌、年龄和完整服装（尤其下装、长裤与鞋履）；不得用风格覆盖人物身份、具体衣裤类型与年代。资料没有的信息不得伪称已确认。\n"
+        "character_profile区分single、fixed_group、crowd；小组与人群描述不同成员，不套单人四视图。"
+        "固定小组保留明确人数和成员差异；人群参考样本数不能替代剧情人数，年龄性别物种只依已确认资料。\n"
         "服装本体模式只描述衣物、材质、剪裁和配饰，不输出人物脸孔或人体；角色穿着模式才保留关联角色身份。\n"
         f"执行 Skill：{json.dumps([{'key': item['key'], 'version': item['selected_version'], 'instruction': item.get('snapshot', {}).get('instruction', '')} for item in executor['skills']], ensure_ascii=False)}\n"
         "本次只提供下列资产文字快照，未提供全剧或图片像素。仅据此生成资产提示词，"
         "不得宣称已看图或完成全剧连续性检查；输出仍限定为 assets 中的 id 和 prompt。\n"
         f"项目背景：{json.dumps(visual_context, ensure_ascii=False)}\n"
-        f"资产快照：{json.dumps(snapshots, ensure_ascii=False)}"
+        f"资产快照：{json.dumps([prompt_identity_snapshot(row) for row in snapshots], ensure_ascii=False)}"
     )
     job = await job_service.create_text_job(
         session,

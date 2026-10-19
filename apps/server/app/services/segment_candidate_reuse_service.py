@@ -12,7 +12,7 @@ from app.services.production_snapshot_service import build_script_snapshot_conte
 REUSE_KEY = "reuse_source_version_id"
 EVIDENCE_KEY = "segment_video_candidate"
 PLAN_METADATA = {"source", "parent_plan_id", "operation", "excluded_shot_ids", "confirmed_excluded_shot_ids",
-                 "timeline_selected_lineage_key"}
+                 "timeline_selected_lineage_key", "delete_receipt", "model_switch_receipt"}
 
 
 def comparable_script(content):

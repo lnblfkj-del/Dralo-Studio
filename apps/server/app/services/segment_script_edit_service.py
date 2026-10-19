@@ -87,4 +87,17 @@ def merge_refs(items):
     ):
         values = [value for item in items for value in (item.get("refs") or {}).get(key, [])]
         result[key] = list({fingerprint(value): deepcopy(value) for value in values}.values())
+    references = {}
+    for item in items:
+        for reference in (item.get("refs") or {}).get("asset_references", []):
+            asset_id = reference["asset_id"]
+            if asset_id in references:
+                if references[asset_id].get("delivery") != reference.get("delivery"):
+                    raise ValidationError("同一资产的图片与文字引用方式不同，请统一后再合并")
+                references[asset_id]["source_keys"] = list(dict.fromkeys([
+                    *references[asset_id].get("source_keys", []), *reference.get("source_keys", []),
+                ]))
+            else:
+                references[asset_id] = deepcopy(reference)
+    result["asset_references"] = list(references.values())
     return result

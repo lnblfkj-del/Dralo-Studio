@@ -55,14 +55,16 @@ class BreakdownWorkUnit:
         return rows
 
 
-def script_chunk_ranges(script: str) -> list[tuple[int, int]]:
+def script_chunk_ranges(script: str, *, max_chars: int = MAX_SCRIPT_CHARS_PER_WORK_UNIT) -> list[tuple[int, int]]:
     """Partition every character; prefer paragraph boundaries without discarding text."""
+    if type(max_chars) is not int or max_chars < 1:
+        raise ValueError("Asset extraction character budget must be positive")
     ranges = []
     start = 0
     while start < len(script):
-        end = min(start + MAX_SCRIPT_CHARS_PER_WORK_UNIT, len(script))
+        end = min(start + max_chars, len(script))
         if end < len(script):
-            boundary = script.rfind("\n", start + MAX_SCRIPT_CHARS_PER_WORK_UNIT // 2, end)
+            boundary = script.rfind("\n", start + max_chars // 2, end)
             if boundary >= 0:
                 end = boundary + 1
         ranges.append((start, end))
@@ -93,15 +95,21 @@ def restore_work_unit(
 def smaller_work_units(unit: BreakdownWorkUnit) -> list[BreakdownWorkUnit]:
     """Narrow a truncated range without replaying successful source fragments."""
     if len(unit.episodes) > 1:
-        return [restore_work_unit((episode,), unit.requirement_types, unit.group)
+        return [restore_work_unit((episode,), unit.requirement_types, unit.group,
+                                  [row for row in unit.source_ranges if row["episode_number"] == episode.number])
                 for episode in unit.episodes]
     episode = unit.episodes[0]
     start, end = unit.script_ranges[0][1:] if unit.script_ranges else (0, len(episode.script or ""))
     if end - start < 2:
         return [unit]
     middle = start + (end - start) // 2
+    from app.services.asset_scene_workload import scene_starts
+    scenes = [start + pos for pos in scene_starts(str(episode.script)[start:end])
+              if (end - start) // 4 < pos < (end - start) * 3 // 4]
     boundary = str(episode.script).rfind("\n", start + (end - start) // 4, middle)
-    if boundary >= 0:
+    if scenes:
+        middle = min(scenes, key=lambda pos: abs(pos - middle))
+    elif boundary >= 0:
         middle = boundary + 1
     return [restore_work_unit(unit.episodes, unit.requirement_types, unit.group,
                               [{"episode_number": episode.number, "start": a, "end": b}])
@@ -112,13 +120,15 @@ def _episode_characters(episode: Any) -> int:
     return len(str(getattr(episode, "script", "") or ""))
 
 
-def adaptive_episode_batches(episodes: Iterable[Any]) -> list[tuple[Any, ...]]:
+def adaptive_episode_batches(
+    episodes: Iterable[Any], *, max_chars: int = MAX_SCRIPT_CHARS_PER_WORK_UNIT,
+) -> list[tuple[Any, ...]]:
     batches: list[tuple[Any, ...]] = []
     current: list[Any] = []
     current_chars = 0
     for episode in episodes:
         episode_chars = _episode_characters(episode)
-        exceeds_budget = current and current_chars + episode_chars > MAX_SCRIPT_CHARS_PER_WORK_UNIT
+        exceeds_budget = current and current_chars + episode_chars > max_chars
         if current and (len(current) >= MAX_EPISODES_PER_WORK_UNIT or exceeds_budget):
             batches.append(tuple(current))
             current = []
@@ -131,10 +141,15 @@ def adaptive_episode_batches(episodes: Iterable[Any]) -> list[tuple[Any, ...]]:
 
 
 def build_breakdown_work_units(
-    episodes: Iterable[Any], requirement_types: Iterable[str]
+    episodes: Iterable[Any], requirement_types: Iterable[str], *,
+    max_script_chars: int = MAX_SCRIPT_CHARS_PER_WORK_UNIT,
+    combine_necessary_assets: bool = False,
+    scene_output_tokens: int | None = None,
 ) -> tuple[list[BreakdownWorkUnit], list[BreakdownWorkUnit]]:
+    if isinstance(max_script_chars, bool) or not isinstance(max_script_chars, int) or max_script_chars < 1:
+        raise ValueError("Asset extraction character budget must be positive")
     selected = tuple(dict.fromkeys(requirement_types))
-    batches = adaptive_episode_batches(episodes)
+    batches = adaptive_episode_batches(episodes, max_chars=max_script_chars)
     visual_types = tuple(value for value in selected if value in VISUAL_REQUIREMENT_TYPES)
     audio_types = tuple(value for value in selected if value in AUDIO_REQUIREMENT_TYPES)
 
@@ -144,9 +159,20 @@ def build_breakdown_work_units(
         result = []
         for batch in batches:
             input_chars = sum(_episode_characters(episode) for episode in batch)
-            if len(batch) == 1 and input_chars > MAX_SCRIPT_CHARS_PER_WORK_UNIT:
+            if scene_output_tokens is not None:
+                from app.services.asset_scene_workload import output_load, workload_ranges
+                if input_chars > max_script_chars or sum(output_load(str(ep.script or "")) for ep in batch) > scene_output_tokens * 0.7:
+                    for episode in batch:
+                        for start, end in workload_ranges(str(episode.script or ""), max_script_chars, scene_output_tokens):
+                            result.append(BreakdownWorkUnit(
+                                group=group, requirement_types=types, episodes=(episode,),
+                                input_chars=end - start,
+                                script_ranges=((int(episode.number), start, end),),
+                            ))
+                    continue
+            if len(batch) == 1 and input_chars > max_script_chars:
                 episode = batch[0]
-                for start, end in script_chunk_ranges(str(episode.script or "")):
+                for start, end in script_chunk_ranges(str(episode.script or ""), max_chars=max_script_chars):
                     result.append(BreakdownWorkUnit(
                         group=group, requirement_types=types, episodes=batch,
                         input_chars=end - start,
@@ -158,6 +184,8 @@ def build_breakdown_work_units(
                 ))
         return result
 
+    if combine_necessary_assets and visual_types:
+        return units("visual", selected), []
     return (
         units("visual", visual_types),
         units("audio", audio_types),
@@ -256,6 +284,7 @@ def breakdown_scope_key(
     skill_key: str | None,
     skill_version: int | None,
     source_ranges: list[dict[str, int]] | None = None,
+    contract_version: int = 1,
 ) -> str:
     """Build an immutable range identity used by resume and supersession logic."""
     value = {
@@ -269,6 +298,8 @@ def breakdown_scope_key(
     }
     if source_ranges:
         value["source_ranges"] = source_ranges
+    if contract_version != 1:
+        value["contract_version"] = contract_version
     digest = hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()

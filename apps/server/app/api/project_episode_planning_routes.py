@@ -1,32 +1,21 @@
 """R1 planning API. Every mutation stays scoped to the authorized episode."""
 
-from dataclasses import asdict
-from typing import Literal
-
-from fastapi import APIRouter, Query
-from pydantic import ValidationError as SchemaError
+from fastapi import APIRouter
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, EpisodeDep, SessionDep
-from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError, ValidationError
+from app.core.errors import ConflictError, NotFoundError, PermissionDeniedError
 from app.models import Job, utcnow
-from app.models.episode_planning import EpisodePlanningRecord
 from app.schemas.episode_planning_requests import (
-    ModelSwitch,
     PaidRecovery,
     PlanningCreate,
     PlanningPreflight,
-    ProductionActivation,
     SavedRecovery,
     SegmentOptimization,
 )
 from app.services import episode_planning_recovery as recovery
 from app.services import episode_planning_workflow as workflow
-from app.services.episode_planning_capability import load_capability
-from app.services.episode_planning_contract import fingerprint
-from app.services.episode_planning_coordinator import assess_model_switch
 from app.services.episode_planning_read import read_result
-from app.services.episode_planning_storage import read_plan
 from app.services.permission_service import allowed
 
 router = APIRouter()
@@ -54,9 +43,11 @@ async def scoped_run(session, episode, job_id):
 
 
 @router.get(PREFIX + "/capabilities")
-async def capabilities(video_model_id: int, episode: EpisodeDep, session: SessionDep):
-    capability = await load_capability(session, video_model_id)
-    return capability.model_dump(mode="json")
+async def capabilities(video_model_id: int, episode: EpisodeDep, session: SessionDep, background_music: bool = False,
+                       resolution: str | None = None):
+    from app.services.episode_planning_setup import planning_setup
+    _, _, setup = await planning_setup(session, episode, video_model_id, background_music, resolution, allow_unselected=True)
+    return setup
 
 
 @router.get(PREFIX)
@@ -84,6 +75,7 @@ async def list_runs(episode: EpisodeDep, session: SessionDep):
             "progress": job.progress,
             "stage": (job.result or {}).get("stage"),
             "script_revision": job.payload["request_spec"]["script_revision"],
+            "saved_to_workbench": bool(job.payload.get("production_activation")),
         }
         for job in jobs
     ]
@@ -96,20 +88,6 @@ async def input_context(episode: EpisodeDep, session: SessionDep):
     return await source_context(session, episode)
 
 
-@router.get(PREFIX + "/reference-options")
-async def reference_options(
-    episode: EpisodeDep,
-    session: SessionDep,
-    kind: Literal["image", "audio", "video"] = "image",
-    keyword: str = Query(default="", max_length=128),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=24, ge=1, le=100),
-):
-    from app.services.episode_planning_inputs import reference_options as options
-
-    return await options(session, episode, kind=kind, keyword=keyword, offset=offset, limit=limit)
-
-
 @router.post(PREFIX + "/preflight")
 async def input_preflight(
     payload: PlanningPreflight,
@@ -118,17 +96,16 @@ async def input_preflight(
     user: CurrentUser,
 ):
     from app.services.episode_planning_inputs import preflight
+    from app.services.episode_planning_setup import planning_setup
 
     require(user, "tasks.generate")
-    try:
-        bindings = tuple(item.binding() for item in payload.reference_bindings)
-    except SchemaError as exc:
-        raise ValidationError("参考素材来源范围或首尾帧边界无效") from exc
+    _, mode, _ = await planning_setup(session, episode, payload.video_model_id, payload.background_music, payload.resolution)
     return await preflight(
         session,
         episode,
-        **payload.model_dump(exclude={"reference_bindings"}),
-        reference_bindings=bindings,
+        **payload.model_dump(exclude={"resolution"}),
+        mode_key=mode.key,
+        reference_bindings=(),
     )
 
 
@@ -137,18 +114,24 @@ async def create_run(
     payload: PlanningCreate, episode: EpisodeDep, session: SessionDep, user: CurrentUser
 ):
     require(user, "tasks.generate")
-    if payload.reference_bindings and payload.expected_input_fingerprint is None:
-        raise ValidationError("请先校验参考素材和来源范围，再确认生成费用")
-    try:
-        bindings = tuple(item.binding() for item in payload.reference_bindings)
-    except SchemaError as exc:
-        raise ValidationError("参考素材来源范围或首尾帧边界无效") from exc
+    from app.services.episode_planning_setup import planning_setup
+    # Resolve an accepted request before reading potentially changed defaults.
+    previous = await session.scalar(select(Job).where(
+        Job.target_type == workflow.TARGET_RUN, Job.target_id == episode.id,
+        Job.project_id == episode.project_id, Job.deleted_at.is_(None),
+        Job.payload["request_id"].as_string() == payload.request_id))
+    if previous:
+        if previous.payload.get("submission_input") != payload.model_dump(exclude_none=True):
+            raise ConflictError("该请求编号已经用于其他规划参数")
+        return await read_result(session, episode, previous.id)
+    _, mode, _ = await planning_setup(session, episode, payload.video_model_id, payload.background_music, payload.resolution)
     job = await workflow.create_run(
         session,
         episode,
-        **payload.model_dump(exclude={"reference_bindings", "acknowledge_text_charges"}),
-        reference_bindings=bindings,
+        **payload.model_dump(exclude={"acknowledge_text_charges", "resolution"}),
+        mode_key=mode.key,
     )
+    job.payload = {**job.payload, "submission_input": payload.model_dump(exclude_none=True)}
     # Audit the actual caller, not the owner whose project a team member edits.
     if "creation_authorization" not in job.payload:
         job.payload = {
@@ -196,64 +179,6 @@ async def continue_paid(
     return result
 
 
-@router.get(PREFIX + "/{job_id}/model-check")
-async def model_check(
-    job_id: int, video_model_id: int, mode_key: str, episode: EpisodeDep, session: SessionDep
-):
-    job = await scoped_run(session, episode, job_id)
-    await workflow.validate_context(session, job, check_current_capability=False)
-    record_id = job.payload.get("planning_record_id")
-    record = await session.get(EpisodePlanningRecord, record_id) if record_id else None
-    if record is None:
-        raise ConflictError("尚无冻结计划，请等待规划完成后再检查模型切换")
-    if (
-        record.episode_id != episode.id
-        or record.workspace_id != episode.workspace_id
-        or record.execution_epoch != job.payload["epoch"]
-    ):
-        raise ConflictError("冻结计划归属不匹配，不能检查模型切换")
-    capability = await load_capability(session, video_model_id)
-    if mode_key not in {mode.key for mode in capability.modes}:
-        raise ValidationError("所选模型模式不存在")
-    issues = assess_model_switch(read_plan(record), capability, mode_key)
-    return {
-        "job_id": job.id,
-        "plan_fingerprint": record.fingerprint,
-        "capability_fingerprint": fingerprint(capability),
-        "compatible": not issues,
-        "issues": [asdict(issue) for issue in issues],
-        "requires_replan": bool(issues),
-        "model_called": False,
-        "video_submission_ready": False,
-    }
-
-
-@router.post(PREFIX + "/{job_id}/switch-model")
-async def switch_model(
-    job_id: int, payload: ModelSwitch, episode: EpisodeDep, session: SessionDep, user: CurrentUser
-):
-    from app.services.episode_planning_switch import switch_model as persist_switch
-
-    require(user, "tasks.generate")
-    parent = await scoped_run(session, episode, job_id)
-    run = await persist_switch(session, parent, user.id, **payload.model_dump())
-    await session.commit()
-    return await read_result(session, episode, run.id)
-
-
-@router.post(PREFIX + "/{job_id}/production-draft")
-async def save_production_draft(
-    job_id: int, payload: SavedRecovery, episode: EpisodeDep, session: SessionDep, user: CurrentUser
-):
-    from app.services.episode_planning_projection import project_draft
-
-    require(user, "tasks.generate")
-    parent = await scoped_run(session, episode, job_id)
-    result = await project_draft(session, parent, user.id, **payload.model_dump())
-    await session.commit()
-    return result
-
-
 @router.post(PREFIX + "/{job_id}/optimize-segment")
 async def optimize_segment(
     job_id: int, payload: SegmentOptimization, episode: EpisodeDep, session: SessionDep, user: CurrentUser
@@ -268,14 +193,17 @@ async def optimize_segment(
     return result
 
 
-@router.post(PREFIX + "/{job_id}/activate-production")
-async def activate_production(
-    job_id: int, payload: ProductionActivation, episode: EpisodeDep, session: SessionDep, user: CurrentUser
+@router.post(PREFIX + "/{job_id}/save-result")
+async def save_result(
+    job_id: int, payload: SavedRecovery, episode: EpisodeDep, session: SessionDep, user: CurrentUser
 ):
     from app.services.episode_planning_activation import activate
 
     require(user, "tasks.generate")
     parent = await scoped_run(session, episode, job_id)
-    result = await activate(session, parent, user.id, **payload.model_dump())
+    baseline = parent.payload.get("production_baseline")
+    if baseline is None:
+        raise ConflictError("该任务缺少编辑版本基线，不能自动覆盖当前脚本")
+    result = await activate(session, parent, user.id, **payload.model_dump(), **baseline)
     await session.commit()
     return result

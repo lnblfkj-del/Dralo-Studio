@@ -1,0 +1,19 @@
+.creator-app {
+  --workspace-sidebar-width:270px;
+  --workspace-sidebar-collapsed-width:72px;
+  --workspace-sidebar-header-height:72px;
+}
+.creator-app :is(.r5-category-panel,.segment-library,.episode-video-layout > .episode-sidebar) { box-sizing:border-box; }
+.creator-app :is(.r5-panel-heading,.segment-library > header,.episode-video-layout > .episode-sidebar > header) {
+  box-sizing:border-box;
+  height:var(--workspace-sidebar-header-height);
+  min-height:var(--workspace-sidebar-header-height);
+  flex:0 0 var(--workspace-sidebar-header-height);
+  padding:16px;
+  border-bottom:1px solid var(--app-color-border);
+}
+.creator-app :is(.r5-panel-heading,.segment-library > header,.episode-video-layout > .episode-sidebar > header) strong {
+  font-size:15px;
+  font-weight:650;
+}
+.video-page .episode-video-layout > .episode-sidebar { padding:0; }

@@ -28,8 +28,9 @@ logger = get_logger(__name__)
 
 def fingerprint(job):
     payload = job.payload or {}
-    return hashlib.sha256(json.dumps({key: payload.get(key) for key in (
-        "provider_model_id", "prompt", "parameters", "protocol_contract")},
+    frozen = {key: payload.get(key) for key in ("provider_model_id", "prompt", "parameters", "protocol_contract")}
+    frozen.update({key: payload[key] for key in ("audio_purpose", "voice_description", "voice_sample_method") if key in payload})
+    return hashlib.sha256(json.dumps(frozen,
         ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
@@ -114,7 +115,11 @@ async def execute(job_id, worker_id):
                 from app.providers.audio_contracts import music_parameters
                 from app.providers.speech import speech_parameters
                 from app.services.canvas_generation_service import validate_model
-                model = await validate_model(session, job.payload["provider_model_id"], "audio", job.payload.get("parameters", {}))
+                if job.target_type == "model_audio_test":
+                    from app.services.audio_trial_service import validate_model as validate_trial
+                    model = await validate_trial(session, job.payload["provider_model_id"], job.payload.get("parameters", {}))
+                else:
+                    model = await validate_model(session, job.payload["provider_model_id"], "audio", job.payload.get("parameters", {}))
                 if provider is None or model.provider_id != provider.id:
                     raise GenerationFailedError("音频渠道配置不存在")
                 if job.payload["protocol_contract"] != execution_contract(provider, model):
@@ -122,7 +127,7 @@ async def execute(job_id, worker_id):
                 protocol = effective_protocol(provider, model)
                 prompt = job.payload["prompt"]
                 parameters = job.payload.get("parameters", {})
-                parameters = saved["parameters"] if "parameters" in saved else (speech_parameters(model, parameters, prompt, protocol=protocol)
+                parameters = saved["parameters"] if "parameters" in saved else (speech_parameters(model, parameters, prompt, protocol=protocol, provider=provider)
                     if job.job_type == "tts" else music_parameters(model, parameters, prompt, protocol))
                 adapter = create_provider_adapter(provider, decrypt_api_key(provider.api_key_ciphertext), model)
                 if (saved.get("started") and not saved.get("id")) or job.payload.get("media_submission", {}).get("started"):
@@ -191,6 +196,9 @@ async def execute(job_id, worker_id):
             if current.target_type == "asset":
                 from app.services import asset_audio_generation
                 persisted = await asset_audio_generation.finalize(session, current, result)
+            elif current.target_type == "model_audio_test":
+                from app.services import audio_trial_service
+                persisted = await audio_trial_service.finalize(session, current, result)
             else:
                 persisted = await canvas_service.finalize_audio_node_job(session, current, result)
                 await canvas_agent_service.finalize_media_job(session, current, persisted, "audio")
@@ -233,6 +241,10 @@ async def execute(job_id, worker_id):
 
 
 async def _validate_target(session, job):
+    if job.target_type == "model_audio_test":
+        if job.project_id is not None or job.payload.get("operation") != "audio_trial" or job.target_id != job.payload.get("provider_model_id"):
+            raise GenerationFailedError("模型音频测试目标不匹配")
+        return
     if job.target_type == "asset":
         from app.services import asset_audio_generation
         await asset_audio_generation.target(session, job)

@@ -10,6 +10,11 @@ LABELS = {"age": "年龄", "description": "角色资料", "appearance": "外貌�
 
 
 def visual_profile(attributes, production, description=None):
+    from app.services.asset_segment_projection import effective_attributes, production_projection
+    attributes = effective_attributes(attributes, production)
+    if attributes.get("field_trust"):
+        projected, safe_description = production_projection(attributes, production or {}, "", description or "")
+        production = {**(production or {}), "profile": projected, "description": safe_description}
     profile = (production or {}).get("profile")
     source = profile if isinstance(profile, dict) else attributes or {}
     result = {key: str(source[key]).strip() for key in FIELDS
@@ -18,6 +23,13 @@ def visual_profile(attributes, production, description=None):
         effective_description = (production or {}).get("description", description)
         if isinstance(effective_description, str) and effective_description.strip():
             result["description"] = effective_description.strip()
+    if (attributes or {}).get("field_trust"):
+        overrides = set((production or {}).get("field_trust_overrides") or [])
+        blocked = set(attributes["field_trust"].get("blocked_fields") or []) - overrides
+        result = {key: value for key, value in result.items() if key not in blocked}
+        if attributes.get("generation_description_source") != "user" and "description" not in overrides:
+            result["description"] = ("；".join(value for key, value in result.items() if key != "description")
+                                     if overrides else safe_description)
     return result
 
 
@@ -40,6 +52,11 @@ def retain_visual_facts(prompt, snapshot, context=None):
     if snapshot.get("type") not in {"character", "costume"}:
         return prompt
     profile = snapshot.get("profile") or {}
+    if snapshot.get("type") == "character":
+        from app.services.asset_character_representation import group_prompt, is_group
+        group = snapshot.get("character_profile") or {}
+        if is_group(group):
+            prompt = group_prompt(prompt, group)
     if snapshot.get("type") == "costume" and (snapshot.get("costume_mode") or (snapshot.get("source_profile") or {}).get("costume_mode")) == "garment_only":
         source = {**profile, **(snapshot.get("source_profile") or {})}
         facts = [str(source[key]).strip() for key in ("costume", "material", "description") if source.get(key)]
@@ -60,6 +77,15 @@ def retain_visual_facts(prompt, snapshot, context=None):
 
 
 async def image_identity(db, project, asset, prompt, *, costume_mode=None, costume_direction="正面"):
+    from app.services.asset_character_representation import (
+        character_profile,
+        group_prompt,
+        is_group,
+    )
+    if asset and asset.asset_type == "character" and project is None:
+        group = character_profile(asset.attributes)
+        if is_group(group):
+            return group_prompt(prompt, group), {"type": "character", "character_profile": group}
     if not project or not asset or asset.asset_type not in {"character", "costume"}:
         return prompt, None
     link = await db.scalar(select(ProjectAssetLink).where(ProjectAssetLink.project_id == project.id, ProjectAssetLink.asset_id == asset.id))
@@ -67,6 +93,8 @@ async def image_identity(db, project, asset, prompt, *, costume_mode=None, costu
         raise ConflictError("角色资产不属于当前项目或已归档")
     snapshot = {"type": asset.asset_type, "profile": visual_profile(asset.attributes, link.production_data, asset.description),
                 "production_revision": link.production_revision, "project_context": await project_context(db, project)}
+    if asset.asset_type == "character":
+        snapshot["character_profile"] = character_profile(asset.attributes, link.production_data)
     if asset.asset_type == "costume" and costume_mode == "garment_only":
         from app.services.costume_generation_service import garment_prompt
         snapshot["costume_mode"] = costume_mode

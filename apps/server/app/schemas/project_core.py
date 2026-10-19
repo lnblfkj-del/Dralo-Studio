@@ -140,6 +140,10 @@ class ScriptReadinessIssue(BaseModel):
         "screenplay_source_ambiguous",
     ]
     message: str
+    severity: Literal["warning", "error"] = "error"
+    source_line: int | None = None
+    script_revision: int | None = None
+    script_fingerprint: str | None = None
 
 
 class ScriptReadinessEpisode(BaseModel):

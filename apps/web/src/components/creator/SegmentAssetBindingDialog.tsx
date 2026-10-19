@@ -4,9 +4,11 @@ import { toErrorMessage } from "@/api/client";
 import { Dialog } from "@/components/ui/Dialog";
 import type { Asset, AssetVersion } from "@/types/api";
 import type { AssetProduction } from "@/types/productionContract";
+import type { PlanningMode } from "@/api/planningCapabilities";
 
-export function SegmentAssetBindingDialog({ projectId, asset, version: initialVersion, capabilities, onClose, onBind }: {
+export function SegmentAssetBindingDialog({ projectId, asset, version: initialVersion, capabilities, modes, onClose, onBind }: {
   projectId: number; asset: Asset; version: AssetVersion; capabilities: Record<string, unknown>;
+  modes?: PlanningMode[];
   onClose: () => void; onBind: (binding: Record<string, unknown>) => void;
 }) {
   const [production, setProduction] = useState<AssetProduction | null>(null);
@@ -24,12 +26,18 @@ export function SegmentAssetBindingDialog({ projectId, asset, version: initialVe
   }, [projectId, asset.id]);
   const choices = production?.adoptions.filter((item) => item.version_id === version.id && item.media_file_id === version.media_file_id) ?? [];
   const chosen = choices.find((item) => item.key === key) ?? (choices.length === 1 ? choices[0] : undefined);
+  const supports = (value: string) => {
+    if (!modes) return true;
+    const reference = ({ reference_image: "image", first_frame: "first_frame", last_frame: "last_frame" } as Record<string, string>)[value];
+    return Boolean(reference && modes.some(mode => mode.reference_limits.some(limit => limit.role === reference && limit.maximum > 0)));
+  };
   const reason = production?.archived ? "资产已归档，请先恢复。"
     : production && !choices.length ? "该视图尚未被本项目采用，请先在资产库采用。"
     : version.view_type === "layout_sheet" || version.review_status === "archived" ? "排版图或已归档视图不能引用。"
-    : chosen && role === "reference_image" && (chosen.kind !== "image" || capabilities.supports_reference_images === false) ? "当前模型或媒体不支持参考图用途。"
-    : role === "first_frame" && (version.view_type !== "first_frame" || capabilities.supports_first_frame !== true) ? "需要首帧视图及支持首帧的模型。"
-    : role === "last_frame" && (version.view_type !== "last_frame" || capabilities.supports_last_frame !== true) ? "需要尾帧视图及支持尾帧的模型。"
+    : !supports(role) ? "当前模型在此画幅和清晰度下不支持该素材用途，请选择其他用途或更换模型。"
+    : chosen && role === "reference_image" && (chosen.kind !== "image" || (!modes && capabilities.supports_reference_images === false)) ? "当前模型或媒体不支持参考图用途。"
+    : role === "first_frame" && (version.view_type !== "first_frame" || (!modes && capabilities.supports_first_frame !== true)) ? "需要首帧视图及支持首帧的模型。"
+    : role === "last_frame" && (version.view_type !== "last_frame" || (!modes && capabilities.supports_last_frame !== true)) ? "需要尾帧视图及支持尾帧的模型。"
     : ["audio_reference", "voice_reference"].includes(role) && (asset.asset_type !== "voice" || chosen?.kind !== "audio" || (role === "audio_reference" && capabilities.supports_audio !== true)) ? "声音用途需要可用声音素材，声音参考还需要模型支持。" : "";
   return <Dialog open title={"引用素材 · " + asset.name} onClose={onClose} footer={<button disabled={!chosen || !production || !!reason || !!error} onClick={() => {
     if (!chosen || !production || reason) return;
@@ -37,7 +45,7 @@ export function SegmentAssetBindingDialog({ projectId, asset, version: initialVe
   }}>引用到当前片段</button>}>
     <div className="segment-binding-fields"><label>素材版本<select aria-label="引用素材版本" value={version.id} onChange={(event) => { setVersionId(Number(event.target.value)); setKey(""); }}>
       {versions.map((item) => <option key={item.id} value={item.id}>V{item.version} · {item.view_label || item.view_type}</option>)}
-    </select></label><label>项目采用用途<select aria-label="项目采用用途" value={chosen?.key ?? key} onChange={(event) => setKey(event.target.value)}><option value="">选择采用用途</option>{choices.map((item) => <option key={item.key} value={item.key}>{item.key}</option>)}</select></label><label>片段用途<select aria-label="片段素材用途" value={role} onChange={(event) => setRole(event.target.value)}><option value="reference_image">参考图</option><option value="first_frame">首帧</option><option value="last_frame">尾帧</option><option value="audio_reference">声音参考</option><option value="voice_reference">音色</option></select></label></div>
+    </select></label><label>项目采用用途<select aria-label="项目采用用途" value={chosen?.key ?? key} onChange={(event) => setKey(event.target.value)}><option value="">选择采用用途</option>{choices.map((item) => <option key={item.key} value={item.key}>{item.key}</option>)}</select></label><label>片段用途<select aria-label="片段素材用途" value={role} onChange={(event) => setRole(event.target.value)}>{Object.entries({ reference_image: "参考图", first_frame: "首帧", last_frame: "尾帧", audio_reference: "声音参考", voice_reference: "音色" }).map(([value, label]) => <option key={value} value={value} disabled={!supports(value)}>{label}{!supports(value) ? " · 当前设置不支持" : ""}</option>)}</select></label></div>
     {!production && !error && <p role="status">正在读取项目采用记录…</p>}{(reason || error) && <p role="alert">{reason || error}</p>}
   </Dialog>;
 }

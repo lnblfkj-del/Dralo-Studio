@@ -25,6 +25,7 @@ from app.schemas.creation import (
     ScriptAssetBreakdownRequest,
 )
 from app.schemas.job import JobOut
+from app.schemas.creation_assets import ScriptAssetPartialConfirmRequest, ScriptAssetEvidenceChoice, DeferredAssetReviewRequest, ScriptAssetManualReviewRequest, ScriptAssetBatchReviewRequest
 from app.services import creation_service
 
 router = APIRouter(tags=["projects"])
@@ -343,6 +344,70 @@ async def confirm_project_asset_breakdown(
     counts = await creation_service.confirm_script_asset_breakdown(session, item)
     await session.commit()
     return counts
+
+
+@router.get("/{project_id}/creation-session/asset-breakdown/review-state")
+async def get_asset_breakdown_review_state(project: ProjectDep, session: SessionDep) -> dict:
+    from app.services.asset_extraction_review import review_state
+
+    item = await creation_service.get_or_create_project_session(session, project)
+    return await review_state(session, item)
+
+
+@router.post("/{project_id}/creation-session/asset-breakdown/confirm-completed")
+async def confirm_completed_asset_candidates(
+    payload: ScriptAssetPartialConfirmRequest, project: ProjectDep, session: SessionDep,
+) -> dict[str, int]:
+    from app.services.asset_extraction_review import confirm_completed_candidates
+
+    item = await creation_service.get_or_create_project_session(session, project)
+    counts = await confirm_completed_candidates(session, item, **payload.model_dump())
+    await session.commit()
+    return counts
+
+
+@router.post("/{project_id}/creation-session/asset-breakdown/candidates/{candidate_id}/evidence")
+async def resolve_asset_candidate_evidence(
+    candidate_id: int, payload: ScriptAssetEvidenceChoice,
+    project: ProjectDep, session: SessionDep, user: CurrentUser,
+) -> dict:
+    from app.services.asset_extraction_review import resolve_evidence
+
+    item = await creation_service.get_or_create_project_session(session, project)
+    candidate = await resolve_evidence(session, item, candidate_id, payload, user.id)
+    await session.commit()
+    return candidate
+
+
+@router.post("/{project_id}/creation-session/asset-breakdown/deferred-review")
+async def resolve_deferred_asset(payload: DeferredAssetReviewRequest, project: ProjectDep,
+                                 session: SessionDep, user: CurrentUser) -> dict:
+    from app.services.asset_deferred_review import resolve_item
+    item = await creation_service.get_or_create_project_session(session, project)
+    receipt = await resolve_item(session, item, payload, user.id)
+    await session.commit()
+    return receipt
+
+
+@router.post("/{project_id}/creation-session/asset-breakdown/candidates/{candidate_id}/review")
+async def review_asset_candidate(candidate_id: int, payload: ScriptAssetManualReviewRequest,
+                                 project: ProjectDep, session: SessionDep, user: CurrentUser) -> dict:
+    from app.services.asset_candidate_manual_review import resolve_review
+    item = await creation_service.get_or_create_project_session(session, project)
+    candidate = await resolve_review(session, item, candidate_id, payload, user.id)
+    await session.commit()
+    return candidate
+
+
+@router.post("/{project_id}/creation-session/asset-breakdown/review-batch")
+async def review_asset_candidate_batch(payload: ScriptAssetBatchReviewRequest,
+                                      project: ProjectDep, session: SessionDep, user: CurrentUser) -> dict:
+    from app.services.asset_candidate_manual_review import resolve_many
+    item = await creation_service.get_or_create_project_session(session, project)
+    entries = [(row.candidate_id, ScriptAssetManualReviewRequest(**row.model_dump(exclude={"candidate_id"}))) for row in payload.items]
+    candidates = await resolve_many(session, item, entries, user.id)
+    await session.commit()
+    return {"saved_count": len(candidates), "candidates": candidates}
 
 
 @router.post(

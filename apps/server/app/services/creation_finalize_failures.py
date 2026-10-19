@@ -71,6 +71,18 @@ async def mark_creation_job_failed(session: AsyncSession, job: Job) -> None:
     item = await session.get(CreationSession, job.target_id)
     if item is None or item.owner_id != job.owner_id:
         return
+    if (job.target_type == JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH
+            and dict(job.payload.get("parameters") or {}).get("asset_extraction_contract_version", 1) in {1, 2, 3}):
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        await session.flush()
+        await lock_breakdown_session(session, item)
+        current_payload = await session.scalar(select(Job.payload).where(Job.id == job.id))
+        if (dict((current_payload or {}).get("resolution") or {}).get("status")
+                in {"superseded", "replacement_pending"}
+                or dict(item.settings.get("asset_breakdown") or {}).get("parent_job_id")
+                != job.parent_job_id):
+            return
     if job.target_type == JOB_TARGET_SCRIPT_STORY_EXTRACTION:
         await mark_story_extraction_failed(session, item, job)
         return

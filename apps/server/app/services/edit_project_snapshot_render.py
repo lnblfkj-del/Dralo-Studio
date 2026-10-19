@@ -253,7 +253,14 @@ async def render_snapshot(
                 "-i",
                 str(manifest),
             ]
-            graph += f";[{len(ids) + 1}:v]fps={fps},format=rgba[captions];[0:v][captions]overlay=shortest=1:format=auto[captioned]"
+            # Both inputs already have one packet per edit frame. Rebuild PTS
+            # from frame indices: concat timebase rounding must not drop the
+            # last caption frame or move a clip boundary.
+            graph += (
+                f";[{len(ids) + 1}:v]settb=expr=1/{fps},setpts=N,format=rgba[captions];"
+                f"[0:v]settb=expr=1/{fps},setpts=N[timeline];"
+                "[timeline][captions]overlay=shortest=1:format=auto[captioned]"
+            )
         else:
             graph += f";[0:v]ass=filename='{_filter_path(ass)}'[captioned]"
         from app.services.edit_project_caption_browser import output_filter

@@ -138,6 +138,10 @@ export interface ScriptReadinessIssue {
   episode_number?: number | null;
   code: "no_episodes" | "non_sequential_numbers" | "missing_script" | "missing_duration" | "unconfirmed_revision" | "stale_revision" | "continuity_conflict" | "continuity_stale" | "screenplay_source_ambiguous";
   message: string;
+  severity?: "warning" | "error";
+  source_line?: number | null;
+  script_revision?: number | null;
+  script_fingerprint?: string | null;
 }
 
 export interface ScriptReadinessEpisode {

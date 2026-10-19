@@ -1,0 +1,75 @@
+.provider-config-panel--dialog .channel-model-toolbar { display:grid; grid-template-columns:minmax(220px,1fr) auto auto; align-items:center; gap:10px; padding:0 0 18px; }
+.provider-config-panel--dialog .channel-model-toolbar .channel-model-search { box-sizing:border-box; width:100%; max-width:480px; height:36px; min-width:0; margin:0; padding:0 12px; font-size:13px; }
+.provider-config-panel--dialog .channel-add-model { padding:16px 0; margin-bottom:18px; border-block:1px solid var(--app-color-border); }
+.provider-config-panel--dialog .channel-add-model > h3 { margin:0 0 12px; font-size:14px; color:var(--app-color-text); }
+.provider-config-panel--dialog .model-registration .manual-model { display:grid; grid-template-columns:200px minmax(0,1fr) minmax(0,1fr); gap:14px 18px; margin:0; align-items:start; }
+.provider-config-panel--dialog .model-registration .manual-model > label { display:grid; min-width:0; gap:6px; font-size:13px; }
+.provider-config-panel--dialog .model-registration .manual-model :is(input,select) { box-sizing:border-box; width:100%; height:36px; min-height:36px; padding:0 10px; }
+.provider-config-panel--dialog .model-registration-actions { display:flex; grid-column:1 / -1; align-items:center; justify-content:flex-end; gap:8px; }
+.provider-config-panel--dialog .model-registration-actions .ui-button { min-height:36px; height:36px; padding:0 14px; }
+.provider-config-panel--dialog .model-registration .video-registration-config { grid-column:1 / -1; margin:0; }
+.provider-config-panel--dialog .model-registration .discovery-result { margin:0 0 16px; max-height:220px; overflow:auto; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form .model-connection-section { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); align-items:start; gap:18px 28px; }
+.model-connection-status { display:flex; flex-wrap:wrap; align-items:center; gap:12px; min-height:32px; font-size:13px; }
+.model-connection-status strong { font-weight:500; }
+.ui-dialog.model-management-dialog.ant-modal .model-connection-status .ui-button { padding-inline:6px; }
+.ui-dialog.model-management-dialog.ant-modal .model-connection-editor { display:grid; min-width:0; gap:14px; margin-top:12px; }
+.ui-dialog.model-management-dialog.ant-modal .model-connection-editor > label { display:grid; gap:6px; max-width:280px; }
+.ui-dialog.model-management-dialog.ant-modal .model-connection-editor .model-connection-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form .model-connection-section > .model-connection-capabilities { border:0; padding:0; }
+.ui-dialog.model-management-dialog.ant-modal .model-connection-inherited { margin:0; font-size:12px; color:var(--app-color-text-muted); }
+.ui-dialog.model-management-dialog.ant-modal .model-price-note { display:flex; flex-wrap:wrap; align-items:flex-end; gap:8px 12px; margin-top:12px; }
+.ui-dialog.model-management-dialog.ant-modal .model-price-note > p { margin:0; align-self:center; max-width:720px; font-size:13px; overflow-wrap:anywhere; }
+.ui-dialog.model-management-dialog.ant-modal .model-price-note > label { display:grid; min-width:0; width:min(420px,100%); gap:6px; }
+.ui-dialog.model-management-dialog.ant-modal .model-price-note .ui-button { padding-inline:6px; }
+.ui-dialog.model-management-dialog.ant-modal .model-negative-setting { display:grid; gap:6px; margin-top:16px; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form .model-negative-setting > label { display:flex; align-items:center; gap:8px; margin:0; }
+.ui-dialog.model-management-dialog.ant-modal .model-negative-setting input[type="checkbox"] { flex:0 0 16px; margin:0; }
+.audio-check-list { display:grid; gap:16px; }
+.audio-check-list > section { padding-bottom:16px; border-bottom:1px solid var(--app-color-border); }
+.audio-check-list > section > div { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.audio-check-list [data-check-status] { font-size:12px; color:var(--app-color-text-muted); }
+.audio-check-list [data-check-status="passed"] { color:#15803d; }
+.audio-check-list [data-check-status="failed"] { color:#b91c1c; }
+.audio-check-list p, .audio-check-note { font-size:13px; overflow-wrap:anywhere; }
+.audio-check-note { color:var(--app-color-text-muted); }
+.audio-tools-grid { display:grid; grid-template-columns:260px minmax(0,1fr); align-items:start; gap:28px; }
+.audio-voice-directory { min-width:0; }
+.audio-voice-directory > header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.audio-voice-directory h3 { margin:0; font-size:15px; }
+.audio-voice-directory p { font-size:13px; overflow-wrap:anywhere; }
+.audio-voice-search { display:flex; align-items:center; gap:8px; margin-top:16px; }
+.audio-voice-search input,.audio-voice-manual input { box-sizing:border-box; height:36px; min-width:0; width:100%; border:1px solid var(--app-color-border); border-radius:6px; padding:0 10px; color:var(--app-color-text); background:var(--app-color-surface); }
+.audio-voice-table { max-height:360px; min-height:160px; overflow:auto; border-block:1px solid var(--app-color-border); }
+.audio-voice-table table { width:100%; border-collapse:separate; border-spacing:0; table-layout:fixed; font-size:13px; }
+.audio-voice-table :is(th,td) { padding:10px; text-align:left; border-bottom:1px solid var(--app-color-border); overflow-wrap:anywhere; }
+.audio-voice-table th { position:sticky; top:0; z-index:2; background:var(--app-color-bg-surface,white); line-height:20px; white-space:nowrap; }
+.audio-voice-table :is(th,td):first-child { width:48px; }
+.audio-voice-table :is(th,td):last-child { width:110px; }
+.audio-voice-table--preview :is(th,td):last-child { width:56px; }
+.audio-voice-table--preview :is(th,td):nth-child(3) { width:100px; }
+.audio-voice-table strong,.audio-voice-table small { display:block; }
+.audio-voice-table td { vertical-align:middle; line-height:20px; }
+.audio-voice-table input[type=checkbox] { display:block; margin:0; width:14px; height:14px; }
+.audio-voice-table small { margin-top:4px; color:var(--app-color-text-muted); }
+.audio-voice-pagination { display:flex; align-items:center; flex-wrap:wrap; gap:8px; padding:12px 0; font-size:13px; }
+.audio-voice-manual { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:10px; align-items:end; padding-top:12px; border-top:1px solid var(--app-color-border); }
+.audio-voice-manual > label { display:grid; gap:6px; font-size:13px; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form--tts .model-speech-fields > .model-parameter-pair { grid-column:1 / -1; grid-template-columns:repeat(2,minmax(0,360px)); align-items:start; gap:12px 24px; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form--tts .model-speech-fields textarea { min-height:96px; max-width:360px; }
+@media (max-width:900px) {
+  .audio-tools-grid { grid-template-columns:minmax(180px,220px) minmax(0,1fr); gap:20px; }
+  .audio-voice-manual { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
+  .audio-voice-manual > button { grid-column:1 / -1; justify-self:end; }
+  .provider-config-panel--dialog .model-registration .manual-model { grid-template-columns:160px minmax(0,1fr); }
+  .provider-config-panel--dialog .model-registration .manual-model > label:last-of-type { grid-column:1 / -1; max-width:360px; }
+  .ui-dialog.model-management-dialog.ant-modal .model-connection-editor .model-connection-grid { grid-template-columns:minmax(0,1fr); }
+}
+@media (max-width:680px) {
+  .audio-tools-grid { grid-template-columns:minmax(0,1fr); }
+  .ui-dialog.model-management-dialog.ant-modal .model-edit-form--tts .model-speech-fields > .model-parameter-pair { grid-template-columns:minmax(0,360px); }
+  .provider-config-panel--dialog .channel-model-toolbar { grid-template-columns:1fr auto; }
+  .provider-config-panel--dialog .channel-model-toolbar .channel-model-search { grid-column:1 / -1; max-width:none; }
+  .provider-config-panel--dialog .model-registration .manual-model,
+  .ui-dialog.model-management-dialog.ant-modal .model-edit-form .model-connection-section { grid-template-columns:minmax(0,1fr); }
+}

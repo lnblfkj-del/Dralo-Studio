@@ -12,6 +12,7 @@ from app.schemas.creation import (
     ScriptContinuityRepairRequest,
 )
 from app.schemas.job import JobOut
+from app.schemas.screenplay_voice import SourceInterpretationRequest
 from app.schemas.project import (
     EpisodeOut,
     EpisodeSceneShotApplyOut,
@@ -27,6 +28,21 @@ class EpisodeConfirmation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_script_revision: int = Field(ge=1)
     confirmed: Literal[True]
+
+
+@router.get("/{project_id}/episodes/{episode_id}/source-review")
+async def source_review(episode: EpisodeDep, session: SessionDep):
+    from app.services.screenplay_preflight import episode_review
+    return await episode_review(session, episode)
+
+
+@router.put("/{project_id}/episodes/{episode_id}/source-interpretations")
+async def interpret_source(payload: SourceInterpretationRequest, episode: EpisodeDep,
+                           session: SessionDep, user: CurrentUser):
+    from app.services.screenplay_interpretation_service import save_interpretation
+    report = await save_interpretation(session, episode, payload, user.id)
+    await session.commit()
+    return report
 
 
 @router.post("/{project_id}/episodes/{episode_id}/script-finalization", response_model=EpisodeOut)

@@ -61,19 +61,26 @@ BREAKDOWN_ACTIVE_STATUSES = {
 
 
 async def confirm_script_asset_breakdown(
-    session: AsyncSession, item: CreationSession
+    session: AsyncSession, item: CreationSession, *, _locked: bool = False
 ) -> dict[str, Any]:
     if item.project_id is None:
         raise ConflictError("当前创作会话尚未关联项目")
+    if not _locked and int((item.settings.get("asset_breakdown") or {}).get("asset_extraction_contract_version", 1)) in {2, 3}:
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        await lock_breakdown_session(session, item)
     settings = dict(item.settings)
     breakdown = dict(settings.get("asset_breakdown") or {})
     if breakdown.get("status") == "completed":
-        await _backfill_completed_character_roles(session, item, settings, breakdown)
+        if breakdown.get("production_projection_version") != "asset-production.ar4.v1":
+            await _backfill_completed_character_roles(session, item, settings, breakdown)
         return dict(breakdown.get("created_counts") or {})
     if breakdown.get("status") != "awaiting_confirmation":
         raise ConflictError("没有待确认的资产拆解方案")
+    if breakdown.get("review_items_by_scope"):
+        raise ConflictError("部分素材仍待核对，请先确认有效候选；待核对项不会被自动忽略，不会重新调用模型")
 
-    settings, breakdown = await _asset_breakdown_for_review(session, item)
+    settings, breakdown = await _asset_breakdown_for_review(session, item, _locked=True)
 
     source_revisions = dict(breakdown.get("source_script_revisions") or {})
     input_fingerprint = str(breakdown.get("input_fingerprint") or "")
@@ -125,8 +132,16 @@ async def confirm_script_asset_breakdown(
         for candidate in breakdown.get("candidates", [])
         if candidate.get("selected", True) and not candidate.get("merged_into_candidate_id")
     ]
-    if not selected_candidates and breakdown.get("scope_mode") != "partial":
+    if not selected_candidates and breakdown.get("scope_mode") != "partial" and not breakdown.get("asset_necessity_policy"):
         raise ConflictError("请至少保留一个资产候选")
+    if breakdown.get("asset_necessity_policy"):
+        from app.services.asset_necessity_service import validate_policy
+        validate_policy(breakdown["asset_necessity_policy"])
+        if breakdown["asset_necessity_policy"].get("evidence_relation"):
+            from app.services.creation_finalize_service import _candidate_requires_review
+            unresolved = next((row for row in selected_candidates if _candidate_requires_review(row)), None)
+            if unresolved:
+                raise ConflictError(f"资产“{unresolved['name']}”仍有待核对依据；可先确认已完成项，其余候选已保留")
     blocking_issues = [
         issue
         for issue in breakdown.get("validation_issues") or []
@@ -161,9 +176,10 @@ async def confirm_script_asset_breakdown(
         )
         if not key[2]:
             raise ConflictError("资产候选名称不能为空")
-        if key in seen_names:
+        identity_key = (key[0], key[1], str(candidate.get("attributes", {}).get("extraction_identity") or key[2]))
+        if identity_key in seen_names:
             raise ConflictError("存在同类型同名候选，请先合并或改名")
-        seen_names[key] = int(candidate.get("candidate_id") or 0)
+        seen_names[identity_key] = int(candidate.get("candidate_id") or 0)
         matched_id = candidate.get("matched_asset_id")
         if key[1] == "character":
             conflicting_aliases = sorted(
@@ -190,7 +206,7 @@ async def confirm_script_asset_breakdown(
             if matched_id in seen_matches:
                 raise ConflictError("多个候选不能重复匹配同一个正式资产")
             seen_matches.add(matched_id)
-    created_counts = {requirement_type: 0 for requirement_type in R4_REQUIREMENT_TYPES}
+    created_counts = {requirement_type: int((breakdown.get("partial_created_counts") or {}).get(requirement_type, 0)) for requirement_type in R4_REQUIREMENT_TYPES}
     formal_asset_ids: list[int] = []
     matched_count = 0
     character_asset_ids: dict[str, int] = {}
@@ -223,6 +239,13 @@ async def confirm_script_asset_breakdown(
 
     def attach_character_relation(attributes: dict[str, Any], requirement_type: str) -> None:
         if requirement_type not in {"costume", "character_voice"}:
+            return
+        from app.services.asset_extraction_voice import is_standalone_extraction_voice
+
+        if requirement_type == "character_voice" and is_standalone_extraction_voice(attributes):
+            attributes["linked_character_asset_ids"] = []
+            attributes["linked_character_asset_id"] = None
+            attributes["character_relation_status"] = "not_applicable"
             return
         character_names = [
             value.strip()
@@ -272,6 +295,13 @@ async def confirm_script_asset_breakdown(
         production_data["script_scope"] = script_scope
         if asset.asset_type == "voice":
             production_data["profile"] = effective_profile(asset, production_data)
+            profile = production_data["profile"]
+            attributes = asset.attributes or {}
+            if attributes.get("voice_profile_only"):
+                if not profile.get("voice") and attributes.get("voice"):
+                    profile["voice"] = attributes["voice"]
+                if not profile.get("character_asset_id") and attributes.get("linked_character_asset_id"):
+                    profile["character_asset_id"] = attributes["linked_character_asset_id"]
         if link.production_data != production_data:
             link.production_data = production_data
             link.production_revision += 1
@@ -280,6 +310,9 @@ async def confirm_script_asset_breakdown(
     for candidate in breakdown.get("candidates", []):
         if not candidate.get("selected", True) or candidate.get("merged_into_candidate_id"):
             continue
+        from app.services.asset_field_trust import generation_text
+
+        generation_description, generation_anchor = generation_text(candidate)
         matched_asset_id = candidate.get("matched_asset_id")
         requirement_type = str(candidate.get("requirement_type") or candidate.get("asset_type"))
         if matched_asset_id in existing_ids:
@@ -288,7 +321,8 @@ async def confirm_script_asset_breakdown(
             candidate["formal_asset_id"] = matched.id
             formal_asset_ids.append(matched.id)
             refreshed_asset_ids.add(matched.id)
-            matched_count += 1
+            if matched.id not in set(breakdown.get("partial_created_asset_ids") or []):
+                matched_count += 1
             script_scope = await sync_project_script_scope(
                 matched, candidate, requirement_type
             )
@@ -322,9 +356,7 @@ async def confirm_script_asset_breakdown(
                     if (
                         key == "character_role"
                         and str(attributes.get(key) or "unclassified") == "unclassified"
-                    ):
-                        attributes[key] = value
-                    elif key not in attributes:
+                    ) or key not in attributes:
                         attributes[key] = value
                 if candidate_attributes.get("source_conflicts"):
                     attributes["source_conflicts"] = candidate_attributes["source_conflicts"]
@@ -348,9 +380,9 @@ async def confirm_script_asset_breakdown(
                         if str(value).strip():
                             character_asset_ids[str(value).strip().casefold()] = matched.id
                 if not matched.description and candidate.get("description"):
-                    matched.description = candidate["description"]
+                    matched.description = generation_description
                 if not matched.prompt_anchor:
-                    matched.prompt_anchor = candidate.get("prompt_anchor") or candidate.get("description") or ""
+                    matched.prompt_anchor = generation_anchor
             continue
         base_slug = (
             re.sub(r"[^\w\u4e00-\u9fff-]+", "-", str(candidate.get("name") or "")).strip("-")
@@ -400,8 +432,8 @@ async def confirm_script_asset_breakdown(
                 "asset_type": candidate["asset_type"],
                 "name": candidate["name"],
                 "slug": slug,
-                "description": candidate.get("description") or "",
-                "prompt_anchor": candidate.get("prompt_anchor") or candidate.get("description") or "",
+                "description": generation_description,
+                "prompt_anchor": generation_anchor,
                 "attributes": attributes,
             },
         )
@@ -455,6 +487,9 @@ async def confirm_script_asset_breakdown(
                 attributes["needs_review"] = True
         asset.attributes = attributes
 
+    from app.services.asset_admission_identity import bind_admitted_identities
+    await bind_admitted_identities(session, project.id, breakdown.get("candidates", []))
+
     breakdown.update(
         {
             "status": "completed",
@@ -462,6 +497,7 @@ async def confirm_script_asset_breakdown(
             "created_counts": created_counts,
             "matched_count": matched_count,
             "formal_asset_ids": formal_asset_ids,
+            "production_projection_version": "asset-production.ar4.v1",
         }
     )
     settings["asset_breakdown"] = breakdown

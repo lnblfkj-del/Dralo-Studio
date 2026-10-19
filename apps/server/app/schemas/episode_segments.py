@@ -24,8 +24,16 @@ class SegmentPlanAdjustRequest(BaseModel):
         return self
 
 
+class SegmentDeleteRequest(BaseModel):
+    request_id: str = Field(min_length=16, max_length=128)
+    expected_plan_id: int = Field(ge=1)
+    expected_production_revision: int = Field(ge=0)
+    confirmed: Literal[True]
+    segment_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 class SegmentLifecycleRequest(BaseModel):
-    operation: Literal["add", "copy", "archive", "restore", "insert_before", "insert_after", "delete"]
+    operation: Literal["add", "copy", "archive", "restore", "insert_before", "insert_after"]
     expected_production_revision: int = Field(ge=0)
     confirmed: Literal[True]
     segment_id: int = Field(ge=1)

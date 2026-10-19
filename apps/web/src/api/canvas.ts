@@ -179,7 +179,7 @@ export async function editCanvasEntity(projectId: number, nodeId: string, payloa
   expected_production_revision?: number; request_id?: string; prompt_anchor?: string; profile?: AssetProfile;
   update_scope: "local" | "series"; local_target?: {target_type: "scene" | "segment"; target_id: number} | null;
   views: Array<{ media_id: number; label: string }>; primary_media_id: number | null; voice_media_id: number | null;
-  speech_preset?: {provider_model_id: number; voice: string} | null;
+  speech_preset?: import('@/types/productionContract').SpeechBinding | null;
 }) {
   return (await http.put<CanvasSnapshot>(`/projects/${projectId}/canvas/nodes/${encodeURIComponent(nodeId)}/entity`, payload)).data;
 }

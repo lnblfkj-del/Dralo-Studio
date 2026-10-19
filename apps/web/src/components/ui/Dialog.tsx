@@ -2,14 +2,15 @@ import { cloneElement, useEffect, useRef, useState, type ReactElement, type Reac
 import AntModal from "antd/es/modal";
 
 import { Button } from "./Button";
+import { useModelDialogLayout } from "./DialogLayoutScope";
 import "./ui.css";
 
 export type DialogSize = "small" | "medium" | "large";
 
 const dialogWidths: Record<DialogSize, number> = {
-  small: 480,
-  medium: 640,
-  large: 1120,
+  small: 1200,
+  medium: 1200,
+  large: 1200,
 };
 
 function useUnsavedChangesGuard(active: boolean) {
@@ -33,9 +34,11 @@ export interface DialogProps {
   title: ReactNode;
   description?: ReactNode;
   size?: DialogSize;
+  purpose?: "content" | "confirmation";
   dirty?: boolean;
   busy?: boolean;
   maskClosable?: boolean;
+  preserveContent?: boolean;
   footer?: ReactNode | ((requestClose: () => void) => ReactNode);
   children: ReactNode | ((requestClose: () => void) => ReactNode);
   onClose: () => void;
@@ -51,13 +54,17 @@ export function Dialog({
   title,
   description,
   size = "medium",
+  purpose = "content",
   dirty = false,
   busy = false,
   maskClosable = true,
+  preserveContent = false,
   footer,
   children,
   onClose,
 }: DialogProps) {
+  const modelLayout = useModelDialogLayout();
+  const confirmation = purpose === "confirmation" || dialogRole === "alertdialog";
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const restoreFocusTarget = useRef<HTMLElement | null>(null);
   const wasOpen = useRef(false);
@@ -65,7 +72,7 @@ export function Dialog({
     restoreFocusTarget.current = document.activeElement;
   }
   wasOpen.current = open;
-  useUnsavedChangesGuard(open && (dirty || busy));
+  useUnsavedChangesGuard((open || preserveContent) && (dirty || busy));
   useEffect(() => {
     if (!open) setConfirmDiscard(false);
   }, [open]);
@@ -87,10 +94,10 @@ export function Dialog({
       <AntModal
         aria-label={accessibleLabel ?? (typeof title === "string" ? title : undefined)}
         centered
-        className={["ui-dialog", className].filter(Boolean).join(" ")}
+        className={["ui-dialog", "site-dialog", confirmation && "site-dialog--confirmation", modelLayout && (confirmation ? 'model-management-confirm' : 'model-management-dialog'), className].filter(Boolean).join(" ")}
         closable={{ disabled: busy, "aria-label": closeLabel }}
-        footer={footer ? <div className="ui-dialog__footer">{typeof footer === "function" ? footer(requestClose) : footer}</div> : null}
-        destroyOnHidden
+        footer={footer || modelLayout ? <div className="ui-dialog__footer">{footer ? typeof footer === "function" ? footer(requestClose) : footer : <Button disabled={busy} onClick={requestClose}>关闭</Button>}</div> : null}
+        destroyOnHidden={!preserveContent}
         keyboard={!busy}
         mask={{ closable: !busy && maskClosable }}
         modalRender={(node) => dialogRole === "dialog" ? node : cloneElement(node as ReactElement<Record<string, unknown>>, {
@@ -105,21 +112,22 @@ export function Dialog({
           <div aria-hidden={accessibleLabel ? "true" : undefined}>{typeof title === "string" ? <h2>{title}</h2> : title}</div>
           {description && <p aria-hidden="true">{description}</p>}
         </div>}
-        width={dialogWidths[size]}
+        width={confirmation ? 480 : dialogWidths[size]}
       >
         <div className="ui-dialog__body">{typeof children === "function" ? children(requestClose) : children}</div>
       </AntModal>
       {confirmDiscard && <AntModal
         aria-label="放弃未保存的修改"
         centered
-        className="ui-dialog ui-dialog--confirm"
+        className={`ui-dialog site-dialog site-dialog--confirmation ui-dialog--confirm${modelLayout ? ' model-management-confirm' : ''}`}
+        rootClassName="ui-dialog-root"
         closable={false}
         destroyOnHidden
         mask={{ closable: !busy }}
         onCancel={() => setConfirmDiscard(false)}
         open
         title="放弃未保存的修改？"
-        width={dialogWidths.small}
+        width={480}
         footer={
           <div className="ui-dialog__footer">
             <Button autoFocus onClick={() => setConfirmDiscard(false)}>继续编辑</Button>
@@ -127,7 +135,7 @@ export function Dialog({
           </div>
         }
       >
-        <p>关闭后，本次尚未保存的内容将丢失。</p>
+        <div className="ui-dialog__body"><p>关闭后，本次尚未保存的内容将丢失。</p></div>
       </AntModal>}
     </>
   );

@@ -25,6 +25,7 @@ from app.models import (
     VideoSegment,
 )
 
+
 async def list_episodes(session: AsyncSession, project_id: int) -> list[Episode]:
     stmt = (
         select(Episode)
@@ -159,11 +160,6 @@ async def list_episode_productions(
         )
         .group_by(Scene.episode_id)
     )).all())
-    asset_counts = dict((await session.execute(
-        select(AssetUsage.episode_id, func.count(func.distinct(AssetUsage.asset_id)))
-        .where(AssetUsage.episode_id.in_(episode_ids))
-        .group_by(AssetUsage.episode_id)
-    )).all())
     profiles = {
         item.episode_id: item for item in (await session.execute(
             select(EpisodeProduction).where(EpisodeProduction.episode_id.in_(episode_ids))
@@ -175,6 +171,25 @@ async def list_episode_productions(
             select(EpisodeProductionPlan).where(EpisodeProductionPlan.id.in_(active_plan_ids))
         )).scalars()
     } if active_plan_ids else {}
+    from app.services.segment_asset_references import catalog
+    asset_catalog = await catalog(session, project_id)
+    asset_types = {asset["asset_id"]: asset["asset_type"] for asset in asset_catalog}
+    episode_asset_ids = {episode.id: {asset["asset_id"] for asset in asset_catalog
+                                    if episode.number in asset["episode_numbers"]} for episode in episodes}
+    usage_rows = (await session.execute(select(AssetUsage.episode_id, AssetUsage.asset_id).where(
+        AssetUsage.episode_id.in_(episode_ids), AssetUsage.project_id == project_id))).all()
+    for episode_id, asset_id in usage_rows:
+        if asset_id in asset_types:
+            episode_asset_ids[episode_id].add(asset_id)
+    for episode_id, profile in profiles.items():
+        episode_asset_ids[episode_id].update(asset_id for asset_id in (profile.settings or {}).get("asset_ids", [])
+                                             if asset_id in asset_types)
+    active_refs = (await session.execute(select(VideoSegment.episode_id, VideoSegment.refs).where(
+        VideoSegment.plan_id.in_(active_plan_ids), VideoSegment.status != "archived"))).all() if active_plan_ids else []
+    for episode_id, refs in active_refs:
+        episode_asset_ids[episode_id].update(item["asset_id"] for item in [
+            *(refs or {}).get("asset_references", []), *(refs or {}).get("asset_bindings", []),
+        ] if isinstance(item, dict) and item.get("asset_id") in asset_types)
     segment_stats = {
         row.plan_id: row
         for row in (await session.execute(
@@ -264,6 +279,8 @@ async def list_episode_productions(
             ),
             "script_stale_reason": profile.script_stale_reason if profile else None,
             "scene_count": int(scene_counts.get(episode.id, 0)),
+            "character_count": sum(asset_types[asset_id] == "character" for asset_id in episode_asset_ids[episode.id]),
+            "scene_asset_count": sum(asset_types[asset_id] == "scene" for asset_id in episode_asset_ids[episode.id]),
             "shot_count": shot_count,
             # Compatibility plans are a one-shot/one-segment migration view.
             # Keep legacy counters meaningful there while confirmed E5 plans
@@ -286,10 +303,7 @@ async def list_episode_productions(
             "failed_segment_count": failed_segment_count,
             "duration": float(segment_row.timeline_duration if segment_row else shots.duration if shots else 0),
             "generation_duration": float(segment_row.generation_duration if segment_row else 0),
-            "asset_count": max(
-                int(asset_counts.get(episode.id, 0)),
-                len(settings.get("asset_ids") or []),
-            ),
+            "asset_count": len(episode_asset_ids[episode.id]),
             "final_media_file_id": final_media_id,
             "final_media_url": f"/api/media/{final_media_id}" if final_media_id else None,
             "active_job_id": operation.id if operation else None,
@@ -325,8 +339,8 @@ async def update_episode_production(
     expected_revision: int,
 ) -> dict[str, Any]:
     """以乐观锁保存制作设置；媒体生成和状态变化不走此入口。"""
-    from app.services.production_dialogue_service import validate_dialogue_cues, validate_sound_cues
     from app.services.audio_policy import resolve
+    from app.services.production_dialogue_service import validate_dialogue_cues, validate_sound_cues
     resolve(settings)
 
     await validate_dialogue_cues(session, episode, settings.get("dialogue_cues") or [])
@@ -337,6 +351,8 @@ async def update_episode_production(
         from app.services.team_access import same_team
         if media is None or not await same_team(session, media.owner_id, episode.owner_id) or media.kind != "audio":
             raise ConflictError("配乐素材不存在、类型错误或无权使用")
+        from app.services.audio_purpose import require_production_audio
+        require_production_audio(media)
         if media.project_id != episode.project_id:
             linked = await session.scalar(select(ProjectMediaLink.id).where(
                 ProjectMediaLink.project_id == episode.project_id,
@@ -355,9 +371,11 @@ async def update_episode_production(
         ):
             raise ConflictError("保存的视频模型不存在、已停用或类型不正确")
         resolution = str(settings.get("resolution") or "").lower()
+        from app.services.video_configuration import projected_params
+
         supported_resolutions = {
             str(item).lower()
-            for item in (video_model.default_params or {}).get("resolutions", [])
+            for item in projected_params(video_model).get("resolutions", [])
             if str(item).strip()
         }
         if resolution != "project" and (
@@ -378,9 +396,17 @@ async def update_episode_production(
         if found_asset_ids != asset_ids:
             raise ConflictError("本集引用了不存在或尚未加入项目的资产")
 
+    await session.execute(update(Episode).where(Episode.id == episode.id).values(
+        script_revision=Episode.script_revision).execution_options(synchronize_session=False))
     profile = await session.scalar(
         select(EpisodeProduction).where(EpisodeProduction.episode_id == episode.id)
+        .execution_options(populate_existing=True)
     )
+    from app.services.screenplay_interpretation_service import SETTINGS_KEY
+    # This metadata is writable only through the version-bound interpretation API.
+    settings = {key: value for key, value in settings.items() if key != SETTINGS_KEY}
+    if profile and SETTINGS_KEY in (profile.settings or {}):
+        settings[SETTINGS_KEY] = profile.settings[SETTINGS_KEY]
     if profile is None:
         if expected_revision != 0:
             raise ConflictError("制作设置已变化，请刷新后重试")

@@ -13,9 +13,10 @@ interface Props {
   assetType: string;
   alt: string;
   compact?: boolean;
+  playbackVolume?: number;
 }
 
-export function AssetMediaPreview({ mediaFileId, kind, assetType, alt, compact = false }: Props) {
+export function AssetMediaPreview({ mediaFileId, kind, assetType, alt, compact = false, playbackVolume }: Props) {
   const [source, setSource] = useState("");
   const [failed, setFailed] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -25,6 +26,11 @@ export function AssetMediaPreview({ mediaFileId, kind, assetType, alt, compact =
   const actor = useAuthStore(state => state.user?.id);
   const ended = useAuthStore(state => state.sessionEnded);
   const previewTitle = compact ? `${alt}缩略图` : alt;
+  useEffect(()=>{
+    if(audioRef.current && playbackVolume!==undefined && Number.isFinite(playbackVolume)) {
+      audioRef.current.volume=Math.max(0,Math.min(1,playbackVolume));
+    }
+  },[playbackVolume,source]);
   useEffect(() => { setOpen(false); }, [mediaFileId, actor, ended]);
 
   useEffect(() => {

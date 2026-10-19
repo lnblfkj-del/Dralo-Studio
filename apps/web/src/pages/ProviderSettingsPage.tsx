@@ -3,26 +3,24 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Boxes,
   Check,
-  FlaskConical,
   KeyRound,
-  LoaderCircle,
-  Pencil,
   Plus,
   RefreshCw,
   ServerCog,
   Settings2,
-  Star,
+  ChevronDown,
   Trash2,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { Button, Dialog, ConfirmDialog } from "@/components/ui";
+import { Button, Dialog, ConfirmDialog, Dropdown, ModelDialogLayoutScope } from "@/components/ui";
 import { toErrorMessage } from "@/api/client";
 import * as providerApi from "@/api/providers";
 import { useAuthStore } from "@/stores/authStore";
-import { ModelBrandIcon, ProviderBrandIcon } from "@/components/settings/BrandIcon";
+import { ProviderBrandIcon } from "@/components/settings/BrandIcon";
+import { ModelDefinitionRow } from "@/components/settings/ModelDefinitionRow";
 import { ModelSettingsDialog } from "@/components/settings/ModelSettingsDialog";
 import { ModelRegistration } from "@/components/settings/ModelRegistration";
 import { SettingsNavigation } from "@/components/settings/SettingsNavigation";
@@ -31,15 +29,20 @@ import "@/styles/settings.css";
 import "@/styles/settings-readable.css";
 import "@/styles/settings-redesign.css";
 import "@/styles/provider-directory.css";
+import "@/styles/model-management-simple.css";
+
+const DEFAULT_CHANNEL_TIMEOUT = 500;
+const DEFAULT_CHANNEL_CONCURRENCY = 200;
 
 const formSchema = z.object({
   name: z.string().trim().min(1, "请输入渠道名称").max(128),
   base_url: z.string().url("请输入有效的 HTTP(S) 地址"),
   proxy_url: z.string().trim().refine((value) => !value || /^https?:\/\//i.test(value), "代理地址必须以 http:// 或 https:// 开头"),
   api_key: z.string().max(4096),
+  credential_action: z.enum(["new_account", "rotate"]).optional(),
   timeout_seconds: z.number().int().min(5).max(600),
-  max_concurrency: z.number().int().min(1).max(100),
-  protocol: z.enum(["stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music", "meaicc_video_images", "meaicc_video", "openai_compatible", "google_gemini", "anthropic_messages", "newapi", "sora_compatible", "dashscope_video_t2v", "dashscope_video_i2v", "ark_video_t2v", "ark_video_images", "jimeng_video_first_last", "jimeng_video_t2v", "jimeng_video_pro", "kling_video_t2v", "kling_video_i2v", "kling_video_multi_image"]),
+  max_concurrency: z.number().int().min(1).max(200, "最大并发不能超过 200"),
+  protocol: z.enum(["stepfun_gen", "custom_video", "stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music", "meaicc_video_images", "meaicc_video", "openai_compatible", "google_gemini", "anthropic_messages", "newapi", "sora_compatible", "dashscope_video_t2v", "dashscope_video_i2v", "ark_video_t2v", "ark_video_images", "jimeng_video_first_last", "jimeng_video_t2v", "jimeng_video_pro", "kling_video_t2v", "kling_video_i2v", "kling_video_multi_image"]),
 });
 
 type ProviderFormValues = z.infer<typeof formSchema>;
@@ -48,8 +51,8 @@ const MODEL_TYPE_LABELS: Record<ProviderModelType, string> = {
   text: "文本",
   image: "图片",
   video: "视频",
-  audio: "音频",
-  tts: "语音合成",
+  audio: "音乐",
+  tts: "配音",
   embedding: "向量",
 };
 
@@ -115,7 +118,7 @@ function ProviderForm({
   const protocols = useQuery({ queryKey: ["provider-protocols"], queryFn: providerApi.listProtocols });
   const { register, handleSubmit, reset, watch, formState: { errors, isDirty } } = useForm<ProviderFormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { name: "", base_url: "", proxy_url: "", api_key: "", timeout_seconds: 300, max_concurrency: 2, protocol: "openai_compatible" },
+    defaultValues: { name: "", base_url: "", proxy_url: "", api_key: "", timeout_seconds: DEFAULT_CHANNEL_TIMEOUT, max_concurrency: DEFAULT_CHANNEL_CONCURRENCY, protocol: "openai_compatible" },
   });
   useEffect(() => {
     reset(provider ? {
@@ -126,7 +129,7 @@ function ProviderForm({
       timeout_seconds: provider.timeout_seconds,
       max_concurrency: provider.max_concurrency,
       protocol: provider.protocol,
-    } : { name: preset?.name ?? "", base_url: preset?.base_url ?? "", proxy_url: "", api_key: "", timeout_seconds: 300, max_concurrency: 2, protocol: preset?.protocol ?? "openai_compatible" }, { keepDirtyValues: true });
+    } : { name: preset?.name ?? "", base_url: preset?.base_url ?? "", proxy_url: "", api_key: "", timeout_seconds: DEFAULT_CHANNEL_TIMEOUT, max_concurrency: DEFAULT_CHANNEL_CONCURRENCY, protocol: preset?.protocol ?? "openai_compatible" }, { keepDirtyValues: true });
   }, [preset, provider, reset]);
   useEffect(() => onDirtyChange(isDirty), [isDirty, onDirtyChange]);
 
@@ -136,13 +139,15 @@ function ProviderForm({
       <label><span>渠道名称</span><input {...register("name")} disabled={!canManage} placeholder="例如：公司文本模型" />{errors.name && <small>{errors.name.message}</small>}</label>
       <label><span>Base URL</span><input {...register("base_url")} disabled={!canManage} placeholder={`https://api.example.com${selectedProtocol?.default_path ?? "/v1"}`} />{errors.base_url && <small>{errors.base_url.message}</small>}</label>
       <label><span>API Key</span><div className="key-input"><KeyRound size={15} /><input type="password" {...register("api_key")} disabled={!canManage} placeholder={provider ? `${provider.api_key_masked}（留空则不修改）` : "输入 API Key"} /></div></label>
-      <label><span>渠道默认协议</span><select {...register("protocol")} disabled={!canManage}>{(protocols.data ?? [{ id: "openai_compatible", name: "OpenAI 兼容" }, { id: "google_gemini", name: "Google Gemini 原生" }, { id: "anthropic_messages", name: "Anthropic Messages" }]).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="provider-field-hint">模型可单独覆盖协议及地址；改动不会替换已选模型。有进行中任务时禁止更改路由。</small></label>
+      {provider?.models.some(model => model.model_type === "video") && !!watch("api_key") && <label><span>这次更换密钥的原因</span><select {...register("credential_action")} defaultValue="new_account" disabled={!canManage}>
+        <option value="new_account">更换供应商账号（保留原账号供旧视频恢复）</option><option value="rotate">仍是同一账号，只更新密钥</option></select><small>不确定时选择“更换供应商账号”。旧账号的密钥可在视频模型的配置历史中单独更新。</small></label>}
+      <label><span>渠道默认协议</span><select {...register("protocol")} disabled={!canManage}>{(protocols.data ?? [{ id: "openai_compatible", name: "OpenAI 兼容" }, { id: "google_gemini", name: "Google Gemini 原生" }, { id: "anthropic_messages", name: "Anthropic Messages" }]).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><small className="provider-field-hint">模型可单独设置协议及地址；已固定版本的视频任务继续使用原接法。其他进行中的任务可能需要先完成。</small></label>
     </div>
     {selectedProtocol?.note && <p className="provider-field-hint">{selectedProtocol.note}</p>}
     <details className="channel-advanced"><summary>高级连接设置 · 超时、并发与代理</summary><div className="advanced-settings">
       <h3><Settings2 size={15} />运行参数</h3>
-      <label><span>请求超时（秒）</span><input type="number" {...register("timeout_seconds", { valueAsNumber: true })} disabled={!canManage} /></label>
-      <label><span>最大并发</span><input type="number" {...register("max_concurrency", { valueAsNumber: true })} disabled={!canManage} /></label>
+      <label><span>请求超时（秒）</span><input aria-label="请求超时（秒）" type="number" min={5} max={600} {...register("timeout_seconds", { valueAsNumber: true })} disabled={!canManage} />{errors.timeout_seconds && <small>{errors.timeout_seconds.message}</small>}</label>
+      <label><span>最大并发</span><input aria-label="最大并发" type="number" min={1} max={200} {...register("max_concurrency", { valueAsNumber: true })} disabled={!canManage} />{errors.max_concurrency && <small>{errors.max_concurrency.message}</small>}</label>
       <label><span>渠道代理（可选）</span><input {...register("proxy_url")} disabled={!canManage} placeholder="http://127.0.0.1:7890" /><small className="provider-field-hint">填写后该渠道使用指定代理；留空遵循后端环境代理，未配置时直连。</small>{errors.proxy_url && <small>{errors.proxy_url.message}</small>}</label>
     </div></details>
   </form>;
@@ -158,11 +163,19 @@ export function ProviderSettingsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<ProviderPreset | null>(null);
-  const [modelDialog, setModelDialog] = useState<{ mode: "test" | "edit"; model: ProviderModel } | null>(null);
+  const [modelDialog, setModelDialog] = useState<{ mode: "test" | "edit"; model: ProviderModel; tools?: boolean } | null>(null);
+  const [restoreModelFocus, setRestoreModelFocus] = useState<{id: number; more: boolean} | null>(null);
+  useEffect(() => {
+    if (modelDialog || restoreModelFocus == null) return;
+    const timer = window.setTimeout(() => document.querySelector<HTMLButtonElement>(`[data-model-${restoreModelFocus.more ? 'more' : 'edit'}="${restoreModelFocus.id}"]`)?.focus({preventScroll: true}), 120);
+    return () => window.clearTimeout(timer);
+  }, [modelDialog, restoreModelFocus]);
   const [deleteCandidate, setDeleteCandidate] = useState<ProviderModel | null>(null);
   const [providerDeleteCandidate, setProviderDeleteCandidate] = useState<Provider | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [providerDirty, setProviderDirty] = useState(false);
+  const [registrationBusy, setRegistrationBusy] = useState(false);
+  const [registrationOpen,setRegistrationOpen]=useState(false);
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [providerView, setProviderView] = useState<"connection" | "models">("connection");
   const [modelSearch, setModelSearch] = useState("");
@@ -194,7 +207,7 @@ export function ProviderSettingsPage() {
     onSuccess: refresh,
   });
   const connection = useMutation({ mutationFn: () => providerApi.checkConnection(selected!.id) });
-  const discover = useMutation({ mutationFn: () => providerApi.discoverModels(selected!.id) });
+  const discover = useMutation({ mutationFn: () => providerApi.discoverModels(selected!.id), onSuccess:()=>setRegistrationOpen(true) });
   const deleteModel = useMutation({
     mutationFn: (id: number) => providerApi.deleteProviderModel(selected!.id, id),
     onSuccess: refresh,
@@ -203,15 +216,16 @@ export function ProviderSettingsPage() {
     mutationFn: (id: number) => providerApi.updateProviderModel(selected!.id, id, { is_default: true }),
     onSuccess: refresh,
   });
-  const activeError = save.error ?? remove.error ?? toggle.error ?? connection.error ?? discover.error ?? deleteModel.error ?? setDefaultModel.error ?? providers.error ?? presets.error;
+  const toggleModel = useMutation({mutationFn: (model: ProviderModel) => providerApi.updateProviderModel(selected!.id, model.id, {enabled: !model.enabled}), onSuccess: refresh});
+  const activeError = save.error ?? remove.error ?? toggle.error ?? toggleModel.error ?? connection.error ?? discover.error ?? deleteModel.error ?? setDefaultModel.error ?? providers.error ?? presets.error;
 
   const openCustom = () => { setCreating(true); setSelectedPreset(null); setSelectedId(null); setMessage(null); discover.reset(); connection.reset(); };
-  const chooseProvider = (id: number, view: "connection" | "models" = "connection") => { setProviderView(view); setModelSearch(""); setProviderDirty(false); setCreating(false); setSelectedPreset(null); setSelectedId(id); setMessage(null); discover.reset(); connection.reset(); };
+  const chooseProvider = (id: number, view: "connection" | "models" = "connection") => { setProviderView(view); setModelSearch(""); setRegistrationOpen(false); setProviderDirty(false); setCreating(false); setSelectedPreset(null); setSelectedId(id); setMessage(null); discover.reset(); connection.reset(); };
   const choosePreset = (preset: ProviderPreset) => { setCreating(true); setSelectedPreset(preset); setSelectedId(null); setMessage(null); discover.reset(); connection.reset(); };
 
-  const closeProvider = () => { if (save.isPending) return; setCreating(false); setSelectedPreset(null); setSelectedId(null); setProviderDirty(false); save.reset(); connection.reset(); discover.reset(); };
+  const closeProvider = () => { if (save.isPending || registrationBusy) return; setCreating(false); setSelectedPreset(null); setSelectedId(null); setProviderDirty(false); save.reset(); connection.reset(); discover.reset(); };
 
-  return <main className="settings-shell settings-single control-settings-page settings-provider-page">
+  return <ModelDialogLayoutScope><main className="settings-shell settings-single control-settings-page settings-provider-page">
     <SettingsNavigation active="providers" />
     <section className="provider-detail settings-page-detail control-settings-content">
       <header className="settings-heading control-page-heading"><div><small>MODEL GATEWAY</small><h1>模型渠道</h1><p>统一维护模型供应商、连接配置与模型清单，所有创作入口使用同一套渠道配置。</p></div></header>
@@ -227,23 +241,29 @@ export function ProviderSettingsPage() {
       <ProviderRail toggling={toggle.isPending} onToggle={provider => toggle.mutate(provider)} providers={providers.data ?? []} presets={presets.data ?? []} onSelect={chooseProvider} onPreset={choosePreset} onCreate={openCustom} onCoverage={() => setCoverageOpen(true)} canManage={canManage} />
       {providers.isPending && <p className="settings-loading">正在读取渠道…</p>}
     </section>
-    {(creating || selected) && !modelDialog && <Dialog open className="provider-dialog" size={providerView === "models" && !creating ? "large" : "medium"} busy={save.isPending} dirty={providerDirty} onClose={closeProvider} title={creating ? selectedPreset?.name ?? "新增模型渠道" : `${selected?.name} · ${providerView === "models" ? "模型管理" : "连接设置"}`} description={creating ? "配置连接信息，创建后再维护模型清单。" : `${selected?.models.length ?? 0} 个模型 · ${selected?.enabled ? "渠道已启用" : "渠道已停用"}`} footer={(creating || providerView === "connection") && canManage ? (requestClose) => <><Button disabled={save.isPending} onClick={requestClose}>取消</Button><Button form="provider-connection-form" type="submit" variant="primary" loading={save.isPending} icon={!save.isPending ? <Check size={16} /> : undefined}>{creating ? "创建渠道" : "保存配置"}</Button></> : undefined}>
+    {(creating || selected) && !modelDialog && <Dialog open className="provider-dialog" size={providerView === "models" && !creating ? "large" : "medium"} busy={save.isPending || registrationBusy} dirty={providerDirty} onClose={closeProvider} title={creating ? selectedPreset?.name ?? "新增模型渠道" : `${selected?.name} · ${providerView === "models" ? "模型管理" : "连接设置"}`} description={creating ? "配置连接信息，创建后再维护模型清单。" : `${selected?.models.length ?? 0} 个模型 · ${selected?.enabled ? "渠道已启用" : "渠道已停用"}`} footer={(creating || providerView === "connection") && canManage ? (requestClose) => <><Button disabled={save.isPending} onClick={requestClose}>取消</Button><Button form="provider-connection-form" type="submit" variant="primary" loading={save.isPending} icon={!save.isPending ? <Check size={16} /> : undefined}>{creating ? "创建渠道" : "保存配置"}</Button></> : undefined}>
       <section className="provider-config-panel provider-config-panel--dialog">
         <header className="provider-config-heading"><div>{!creating && selected && <span className="provider-config-icon"><ProviderBrandIcon presetId={presets.data?.find((preset) => preset.name === selected.name || preset.base_url === selected.base_url)?.id ?? selected.name.toLowerCase().replaceAll(" ", "_")} size={24} /></span>}<div><small>{creating ? "NEW PROVIDER" : selected?.is_builtin ? "BUILT-IN PROVIDER" : "CUSTOM PROVIDER"}</small><h2>{creating ? selectedPreset?.name ?? "添加自定义渠道" : selected?.name}</h2><p>{creating ? selectedPreset?.description ?? "接入兼容网关或原生协议；同一渠道的模型可分别选择协议。密钥仅加密保存在服务端。" : "维护连接配置、运行参数与该渠道的模型定义。"}</p></div></div>{selected && <div className="provider-heading-actions">{canDelete && !selected.is_builtin && <Button variant="danger" type="button" className="icon-danger" title="删除自定义渠道" aria-label="删除自定义渠道" onClick={() => setProviderDeleteCandidate(selected)}><Trash2 size={18} /></Button>}</div>}</header>
         {activeError && <div className="settings-error" role="alert">{toErrorMessage(activeError)}</div>}
         {message && <div className="settings-success">{message}</div>}
         {(creating || providerView === "connection") && <ProviderForm key={creating ? selectedPreset?.id ?? "custom" : selected?.id} provider={creating ? null : selected} preset={creating ? selectedPreset : null} canManage={canManage} onDirtyChange={setProviderDirty} onSubmit={(values) => save.mutate(values)} />}
         {selected && !creating && providerView === "models" && <section className="model-section">
-          <header><div><small>AVAILABLE MODELS</small><h2>模型定义</h2><p>模型清单、接口适配与真实生成分别验证。发现成功不代表所有能力已可用。</p></div>{canManage && <div className="provider-probe-actions"><Button onClick={() => connection.mutate()} disabled={connection.isPending}>{connection.isPending ? <LoaderCircle className="spin" size={15} /> : <ServerCog size={15} />}检查连接</Button><Button onClick={() => discover.mutate()} disabled={discover.isPending}>{discover.isPending ? <LoaderCircle className="spin" size={15} /> : <RefreshCw size={15} />}发现模型（不生成）</Button></div>}</header>
+          <div className="channel-model-toolbar"><input className="channel-model-search" aria-label="搜索渠道模型" placeholder="搜索模型名称或 ID" value={modelSearch} onChange={event => setModelSearch(event.target.value)} />
+            {canManage && <><Button variant="primary" icon={<Plus size={15}/>} disabled={registrationOpen || discover.isPending} onClick={()=>setRegistrationOpen(true)}>添加模型</Button>
+              <Dropdown trigger={['click']} menu={{items:[
+                {key:'connection',label:'检查连接',icon:<ServerCog size={15}/>,disabled:connection.isPending || registrationBusy},
+                {key:'discover',label:'发现模型',icon:<RefreshCw size={15}/>,disabled:discover.isPending || providerDirty || registrationBusy},
+              ],onClick:({key})=>{if(key==='connection') connection.mutate(); else discover.mutate();}}}><Button icon={<ChevronDown size={15}/>} disabled={connection.isPending || discover.isPending}>渠道操作</Button></Dropdown></>}
+          </div>
           {connection.data && <div className="settings-notice">HTTP {connection.data.http_status} · {connection.data.latency_ms} ms · {connection.data.message}</div>}
-          {canManage && <details className="channel-add-model" open={discover.data ? true : undefined}><summary>添加模型 · 手动填写或从发现结果选择</summary><ModelRegistration key={selected.id} providerId={selected.id} existingIds={selected.models.map((model) => model.model_id)} discovered={discover.data} videoContracts={selectedProviderPreset?.video_contracts ?? []} onAdded={refresh} /></details>}
-          <input className="channel-model-search" aria-label="搜索渠道模型" placeholder="搜索模型名称或 Model ID" value={modelSearch} onChange={event => setModelSearch(event.target.value)} />
-<div className="model-card-list">{filteredModels.map((model) => <article className="model-definition-card" key={model.id}><div className="model-definition-main"><span className="model-brand-mark"><ModelBrandIcon modelId={model.model_id} providerName={selected.name} size={25} /></span><div><h3>{model.name}{model.is_default && <em className="default-model"><Star size={11} />默认</em>}</h3><small>{model.model_id} · {model.api_protocol || selected.protocol}{model.api_protocol ? "（模型覆盖）" : "（继承渠道）"} · 并发 {model.effective_concurrency ?? model.max_concurrency ?? 8}/{model.max_concurrency ?? 8}</small><div className="model-capability-tags"><b>{MODEL_TYPE_LABELS[model.model_type]}模型</b>{model.rate_limit_until && <span>429 冷却中</span>}{model.capabilities.map((capability) => <span key={capability}>{capability}</span>)}</div></div></div><div className="model-definition-actions"><Button type="button" disabled={!canManage} onClick={() => setModelDialog({ mode: "test", model })}><FlaskConical size={14} />{model.model_type === "text" ? "测试" : "生成验证"}</Button><Button type="button" disabled={!canManage} onClick={() => setModelDialog({ mode: "edit", model })}><Pencil size={14} />编辑</Button>{model.model_type === "text" && !model.is_default && <Button type="button" disabled={!canManage} onClick={() => setDefaultModel.mutate(model.id)}><Star size={14} />设为默认</Button>}<Button variant="danger" className="danger" type="button" disabled={!canDelete} onClick={() => setDeleteCandidate(model)}><Trash2 size={14} />删除</Button></div></article>)}{!filteredModels.length && <div className="models-empty"><Boxes size={24} /><span>尚未添加模型</span><small>测试连接自动发现，或手动输入 Model ID</small></div>}</div>
+          {canManage && registrationOpen && <section className="channel-add-model"><h3>添加模型</h3><ModelRegistration key={selected.id} providerId={selected.id} existingIds={selected.models.map((model) => model.model_id)} discovered={discover.data} videoContracts={selectedProviderPreset?.video_contracts ?? []} onAdded={async identifier=>{await refresh(); setRegistrationOpen(false); setProviderDirty(false); setModelSearch(''); setMessage(`已添加 ${identifier}`); discover.reset(); const added=queryClient.getQueryData<Provider[]>(['providers'])?.find(item=>item.id===selected.id)?.models.find(item=>item.model_id===identifier); if(added) setRestoreModelFocus({id:added.id,more:false});}} onCancel={()=>{setRegistrationOpen(false); discover.reset();}} onDirtyChange={setProviderDirty} onPendingChange={setRegistrationBusy} /></section>}
+{providerDirty && <p role="status">正在添加模型，完成或取消添加后可编辑其他模型。</p>}
+<div className="model-card-list">{filteredModels.map(model => <ModelDefinitionRow key={model.id} model={model} providerName={selected.name} canManage={canManage && !providerDirty} canDelete={canDelete && !providerDirty} toggling={toggleModel.isPending} onToggle={() => toggleModel.mutate(model)} onEdit={() => setModelDialog({mode: 'edit', model})} onTools={() => setModelDialog({mode: 'edit', model, tools: true})} onTest={() => setModelDialog({mode: 'test', model})} onDefault={() => setDefaultModel.mutate(model.id)} onDelete={() => setDeleteCandidate(model)} />)}{!filteredModels.length && <div className="models-empty"><Boxes size={24} /><span>{modelSearch ? '没有匹配的模型' : '尚未添加模型'}</span><small>{modelSearch ? '换个名称或 ID 试试' : '点击添加模型开始配置'}</small></div>}</div>
         </section>}
       </section>
     </Dialog>}
-    {modelDialog && selected && <ModelSettingsDialog provider={selected} model={modelDialog.model} mode={modelDialog.mode} canManage={canManage} onClose={() => setModelDialog(null)} onSaved={refresh} onDelete={canDelete ? () => setDeleteCandidate(modelDialog.model) : undefined} />}
+    {modelDialog && selected && <ModelSettingsDialog provider={selected} model={modelDialog.model} mode={modelDialog.mode} initialConnectionOpen={modelDialog.tools} canManage={canManage} onClose={() => {setRestoreModelFocus({id: modelDialog.model.id, more: !!modelDialog.tools || modelDialog.mode === 'test'}); setModelDialog(null);}} onSaved={refresh} onDelete={canDelete ? () => setDeleteCandidate(modelDialog.model) : undefined} />}
     {providerDeleteCandidate && <ConfirmDialog open danger title="删除模型渠道？" message={`确定删除“${providerDeleteCandidate.name}”及其模型吗？使用这些模型的功能需要重新配置。`} busy={remove.isPending} onClose={() => setProviderDeleteCandidate(null)} onConfirm={async () => { await remove.mutateAsync(); setProviderDeleteCandidate(null); closeProvider(); }} />}
     {deleteCandidate && <ConfirmDialog open danger title="删除模型？" message={`确定删除“${deleteCandidate.name}”吗？删除后使用该模型的功能需要重新选择模型。`} busy={deleteModel.isPending} onClose={() => setDeleteCandidate(null)} onConfirm={async () => { await deleteModel.mutateAsync(deleteCandidate.id); setDeleteCandidate(null); if (modelDialog?.model.id === deleteCandidate.id) setModelDialog(null); }} />}
-  </main>;
+  </main></ModelDialogLayoutScope>;
 }

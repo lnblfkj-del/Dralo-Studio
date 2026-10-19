@@ -12,6 +12,7 @@ from sqlalchemy import update
 
 from app.core.config import settings
 from app.core.database import SessionLocal, dispose_engine
+from app.core.local_write_session import local_write_session
 from app.core.errors import (
     AppError,
     ConflictError,
@@ -42,6 +43,8 @@ from app.models import (
 from app.providers.factory import create_provider_adapter
 from app.providers.protocols import effective_protocol, execution_contract, is_toapis_model
 from app.providers.video import VideoGenerationHandle
+from app.providers.video_execution import VideoExecution, VideoGenerationRequest
+from app.providers.video_integrations import resolve_video_integration
 from app.services import (
     asset_service,
     canvas_agent_service,
@@ -115,14 +118,15 @@ async def _execute_scoped_job(job_id: int, worker_id: str) -> None:
             await _execute_export_job(job_id, worker_id)
             return
         if job and job.job_type in {"tts", "audio"}:
-            from app.jobs import audio_task
-            await audio_task.execute(job_id, worker_id)
+            from app.jobs import audio_task, voice_design_task
+            executor = voice_design_task if job.payload.get("operation") == "voice_design" else audio_task
+            await executor.execute(job_id, worker_id)
             return
         await _execute_job(job_id, worker_id)
     except AppError as exc:
         # Preparation (model lookup/decryption/reference loading) must also reach
         # a visible failure/retry state, rather than strand the lease.
-        async with SessionLocal() as session:
+        async with local_write_session() as session:
             await job_service.mark_failed(
                 session,
                 job_id,
@@ -135,7 +139,7 @@ async def _execute_scoped_job(job_id: int, worker_id: str) -> None:
             await session.commit()
     except Exception:
         logger.exception("任务 %s 准备失败", job_id)
-        async with SessionLocal() as session:
+        async with local_write_session() as session:
             await job_service.mark_failed(session, job_id, worker_id, "GENERATION_FAILED", "任务准备失败，请检查配置或参考素材")
             await session.commit()
 
@@ -144,7 +148,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
     worker_clock_started = time.perf_counter()
     provider_request_ms = 0
     queue_wait_ms = None
-    async with SessionLocal() as session:
+    async with local_write_session() as session:
         job = await session.get(Job, job_id)
         if job is None:
             return
@@ -185,13 +189,30 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 await job_service.mark_failed(session, job_id, worker_id, "CONFLICT", exc.message)
                 await session.commit()
                 return
+        if job.target_type == "script_asset_breakdown_batch":
+            from app.services.asset_extraction_execution import validate_retry
+            try:
+                await validate_retry(session, job)
+            except ConflictError as exc:
+                await job_service.mark_failed(session, job_id, worker_id, "ASSET_EXECUTION_BLOCKED", exc.message)
+                await session.commit()
+                return
+        resuming_video = job.job_type == JOB_TYPE_VIDEO and bool(remote_video_task_id(
+            (job.payload or {}).get("video_submission") or {}))
+        if job.job_type == JOB_TYPE_VIDEO:
+            from app.services.video_version_service import resolve
+            provider, model = await resolve(session, job, provider, model)
+            from app.services.video_adapter_installation import require_installed
+            await require_installed(session, model, submitting=not resuming_video)
         adapter = create_provider_adapter(
             provider, decrypt_api_key(provider.api_key_ciphertext), model
         )
+        video_execution = (VideoExecution(adapter, resolve_video_integration(provider, model))
+                           if job.job_type == JOB_TYPE_VIDEO else None)
         contract = execution_contract(provider, model)
         if job.payload.get("protocol_contract", contract) != contract:
             raise ProviderRoutingError()
-        if not provider.enabled or not model.enabled:
+        if (not provider.enabled or not model.enabled) and not resuming_video:
             raise GenerationFailedError("执行前模型或渠道已停用")
         job.payload = {**job.payload, "protocol_contract": contract}
         if job.job_type in {"tts", "audio"}:
@@ -208,7 +229,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                     await session.commit()
                     return
 
-            if effective_protocol(provider, model) == "minimax_video_v2":
+            if video_execution.integration.staged_request and not resuming_video:
                 from app.services.h3_video_job_service import assert_h3_video_job
 
                 try:
@@ -219,13 +240,20 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                     )
                     await session.commit()
                     return
-            assert_frozen_video_prompt(job.payload, provider, model)
+            if not resuming_video:
+                assert_frozen_video_prompt(job.payload, provider, model)
+            if (job.payload.get("asset_material_snapshot") is not None
+                    and not job.payload.get("content_planning_run_id")
+                    and not remote_video_task_id(job.payload.get("video_submission") or {})):
+                from app.services.segment_asset_references import validate_material_snapshot
+                await validate_material_snapshot(session, job.payload["asset_material_snapshot"], effective_protocol(provider, model))
         from app.services.style_generation_service import apply_project_style
-        style_snapshot = await apply_project_style(session, job, model)
+        style_snapshot = (job.payload.get("style_snapshot") if resuming_video
+                          else await apply_project_style(session, job, model))
         prompt = job.payload["prompt"]
         parameters = job.payload.get("parameters", {})
         if job.target_type in {"canvas_node", "canvas_agent"}:
-            if not provider.enabled or not model.enabled:
+            if (not provider.enabled or not model.enabled) and not resuming_video:
                 raise GenerationFailedError("执行前模型或渠道已停用")
             parameters = {**parameters, "execution": {**parameters.get("execution", {}),
                 "model_id": model.model_id, "provider": provider.name, "task_type": job.job_type, "started": True}}
@@ -240,7 +268,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 raise GenerationFailedError("生成目标已删除，未提交收费请求")
             await canvas_service.validate_job_node(session, job, node)
             await canvas_service.assert_node_unlocked(session, project, node)
-            await canvas_generation_service.validate_model(session, model.id, "audio" if job.job_type == "tts" else job.job_type, parameters)
+            if not (job.job_type == JOB_TYPE_VIDEO and job.payload.get("video_execution_version")):
+                await canvas_generation_service.validate_model(session, model.id, "audio" if job.job_type == "tts" else job.job_type, parameters)
             from app.services import canvas_advanced_service
             await canvas_advanced_service.preflight(session, job)
         reference_images = []
@@ -255,7 +284,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             contract_refs = (job.payload.get("video_input_contract") or {}).get("reference_media_ids", [])
             if style_media_id not in contract_refs:
                 raise GenerationFailedError("项目风格图未包含在冻结的视频输入协议中，请重新预检后提交")
-        first_frame = last_frame = None
+        media_by_id = {}
+        reference_audios = ()
         if job.job_type == JOB_TYPE_IMAGE and "reference_images" in model.capabilities:
             from app.services.image_model_contract import reference_limit, validate_image_inputs
             validate_image_inputs(model, parameters, job.payload.get("reference_media_ids", []))
@@ -274,18 +304,20 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                     *job.payload.get("reference_media_ids", []),
                 ) if media_id
             ]
-            if effective_protocol(provider, model) != "minimax_video_v2":
+            if (not video_execution.integration.staged_request
+                    and not remote_video_task_id(job.payload.get("video_submission") or {})):
                 unique_ids = list(dict.fromkeys(video_media_ids))
-                model_image_limit = (model.default_params or {}).get("max_image_inputs")
+                from app.services.video_configuration import request_defaults
+
+                model_image_limit = request_defaults(model).get("max_image_inputs")
                 if type(model_image_limit) is not int or model_image_limit < 1:
                     model_image_limit = len(unique_ids) or 1
                 loaded = await asset_service.load_reference_images(
                     session, job, unique_ids, max_images=model_image_limit
                 )
                 media_by_id = dict(zip(unique_ids, loaded, strict=True))
-                first_frame = media_by_id.get(job.payload.get("first_frame_media_id"))
-                last_frame = media_by_id.get(job.payload.get("last_frame_media_id"))
-                reference_images = [media_by_id[item] for item in job.payload.get("reference_media_ids", [])]
+                from app.services.video_voice_reference_service import load as load_voice_references
+                reference_audios = await load_voice_references(session, job, provider, model)
         model_id = model.model_id
         await session.commit()
 
@@ -293,6 +325,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
     call_id = None
     deferred = False
     billing_not_submitted = False
+    is_text_job = job.job_type == "text"
+    text_request_started = False
     pulse = asyncio.create_task(heartbeat(job_id, worker_id))
     try:
         from app.services.media_reservation_service import reserve
@@ -324,16 +358,11 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 parameters={key: value for key, value in parameters.items() if key not in CANVAS_INTERNAL_PARAMETER_KEYS},
             )
         elif job.job_type == JOB_TYPE_VIDEO:
-            toapis = is_toapis_model(provider, model)
-            h3_video = effective_protocol(provider, model) == "minimax_video_v2"
-            if toapis and model_id == "kling-v3-omni":
-                from app.providers.toapis_omni import prompt_with_image_references
-                prompt = prompt_with_image_references(
-                    prompt, first=bool(first_frame), last=bool(last_frame),
-                    references=len(reference_images),
-                )
-            persistent_video = effective_protocol(provider, model) != "fake_video"
+            integration = video_execution.integration
+            persistent_video = integration.persistent
             saved = job.payload.get("video_submission", {})
+            if saved.get("terminal_status") in {"failed", "cancelled"}:
+                raise GenerationFailedError("原渠道视频任务已明确失败或取消，请确认费用后重新生成")
             remote_task_id = remote_video_task_id(saved)
             if remote_task_id:
                 if saved.get("base_url") != adapter.base_url or saved.get("model") != model_id:
@@ -345,7 +374,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 if saved.get("started"):
                     raise GenerationFailedError("上次视频提交结果不确定，已停止自动重发；请先在供应商核对任务/账单")
                 h3_body = None
-                if h3_video:
+                if integration.staged_request:
                     from app.services.h3_media_staging_service import stage_h3_image_media
                     from app.services.h3_request_draft import build_h3_request_draft
 
@@ -369,14 +398,26 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         authored_prompt=prompt, media=h3_media,
                     )
                     h3_body = h3_draft["body"]
+                    request = VideoGenerationRequest(model_id, prompt, job.payload.get("negative_prompt"), (), parameters)
+                else:
+                    request = VideoGenerationRequest.from_payload(
+                        job.payload, model=model_id, prompt=prompt, parameters=parameters, media_by_id=media_by_id,
+                        reference_audios=reference_audios,
+                    )
+                    request = video_execution.prepare(request)
                 if persistent_video:
                     async with SessionLocal() as submit_session:
                         current = await submit_session.get(Job, job_id)
                         if not current or current.worker_id != worker_id or current.status in job_service.TERMINAL_STATUSES:
                             return
+                        live_provider = await submit_session.get(Provider, current.provider_id)
+                        live_model = await submit_session.get(ProviderModel, current.payload["provider_model_id"])
+                        if not live_provider or not live_model or not live_provider.enabled or not live_model.enabled:
+                            raise GenerationFailedError("模型或渠道已停止接收新任务，未提交收费请求")
+                        await require_installed(submit_session, model, submitting=True)
                         current.payload = {**current.payload, "video_submission": {
                             "started": True,
-                            **({"business_id": f"drama-video-{job_id}-{uuid4().hex}"} if toapis else {}),
+                            **({"business_id": f"drama-video-{job_id}-{uuid4().hex}"} if integration.client_business_id else {}),
                             "base_url": adapter.base_url,
                             "model": model_id,
                             "started_at": utcnow().isoformat(),
@@ -385,22 +426,14 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         await submit_session.commit()
                 if persistent_video:
                     call_id = await billing_service.begin(job_id, worker_id, f"job:{job_id}:video")
-                submit_parameters = parameters
-                if toapis:
+                business_id = None
+                if integration.client_business_id:
                     async with SessionLocal() as submit_session:
                         current = await submit_session.get(Job, job_id)
                         business_id = (current.payload.get("video_submission", {}) if current else {}).get("business_id")
                     if not business_id:
-                        raise GenerationFailedError("ToAPIs 视频任务缺少已冻结的业务编号，已停止提交")
-                    submit_parameters = {**parameters, "_client_business_id": business_id}
-                if h3_video:
-                    handle = await adapter.create_video_task(h3_body)
-                else:
-                    handle = await adapter.submit_video(
-                        model=model_id, prompt=prompt, negative_prompt=job.payload.get("negative_prompt"),
-                        first_frame=first_frame, last_frame=last_frame,
-                        reference_images=reference_images, parameters=submit_parameters,
-                    )
+                        raise GenerationFailedError("视频任务缺少已冻结的业务编号，已停止提交")
+                handle = await video_execution.submit(request, business_id=business_id, prepared_body=h3_body)
                 if persistent_video:
                     async with SessionLocal() as submit_session:
                         current = await submit_session.get(Job, job_id)
@@ -408,6 +441,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         if current:
                             current.payload = {**current.payload, "video_submission": {
                                 **current.payload.get("video_submission", {}), "id": handle.id,
+                                **({"reference_audio_media_ids": [audio.media_id for audio in request.reference_audios],
+                                    "reference_audio_status": "submitted"} if request.reference_audios else {}),
                             }}
                             await submit_session.commit()
             while True:
@@ -419,10 +454,19 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         _assert_remote_video_within_deadline(
                             current, current.payload.get("video_submission", {})
                         )
-                video_status = await adapter.poll_video(handle)
+                video_status = await video_execution.poll(handle)
                 if video_status.status == "succeeded":
                     break
                 if video_status.status in {"failed", "cancelled"}:
+                    async with SessionLocal() as status_session:
+                        current = await status_session.get(Job, job_id)
+                        if current:
+                            current.payload = {**current.payload, "video_submission": {
+                                **current.payload.get("video_submission", {}),
+                                "terminal_status": video_status.status,
+                                "terminal_observed_at": utcnow().isoformat(),
+                            }}
+                            await status_session.commit()
                     raise GenerationFailedError(video_status.error or "视频生成失败")
                 if persistent_video:
                     async with SessionLocal() as status_session:
@@ -431,10 +475,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                             job_id,
                             worker_id,
                             progress=video_status.progress,
-                            delay_seconds=max(
-                                getattr(adapter, "poll_interval_seconds", 0),
-                                5 if toapis else 0, settings.job_poll_interval_seconds,
-                            ),
+                            delay_seconds=video_execution.poll_interval(settings.job_poll_interval_seconds),
                         )
                         await status_session.commit()
                     if released:
@@ -444,8 +485,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                     await status_session.execute(update(Job).where(Job.id == job_id, Job.worker_id == worker_id,
                         Job.status.not_in(job_service.TERMINAL_STATUSES)).values(progress=video_status.progress))
                     await status_session.commit()
-                await asyncio.sleep(max(getattr(adapter, "poll_interval_seconds", 0),
-                                        5 if toapis else 0, settings.job_poll_interval_seconds))
+                await asyncio.sleep(video_execution.poll_interval(settings.job_poll_interval_seconds))
             async with SessionLocal() as status_session:
                 downloading = await job_service.mark_downloading(
                     status_session, job_id, worker_id
@@ -454,7 +494,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             if not downloading:
                 return
             try:
-                result = {"video_bytes": await adapter.download_video(handle)}
+                result = {"video_bytes": await video_execution.download(handle)}
             except Exception as exc:
                 raise DownloadFailedError(
                     "视频已在远端生成，但结果下载失败；续跑只会重新查询和下载原任务，不会再次提交生成"
@@ -466,6 +506,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 protocol_keys = {"temperature", "top_p", "top_k", "max_tokens", "stop_sequences", "system", "thinking", "output_config"}
             elif protocol == "google_gemini":
                 protocol_keys = TEXT_PROVIDER_PARAMETER_KEYS | {"top_k", "maxOutputTokens", "topP", "topK", "stopSequences", "responseMimeType", "responseSchema", "responseJsonSchema", "thinkingConfig"}
+            elif protocol == "openai_responses":
+                protocol_keys = {"temperature", "top_p", "max_output_tokens", "reasoning_effort", "reasoning", "text"}
+            elif protocol == "ollama_chat":
+                protocol_keys = {"temperature", "top_p", "top_k", "max_tokens", "think", "format"}
             text_parameters = {
                 key: value
                 for key, value in parameters.items()
@@ -519,9 +563,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         current_job,
                         require_parent_active=True,
                     )
+            if hasattr(adapter, "validate_text_parameters"):
+                adapter.validate_text_parameters(text_parameters)
             call_id = await billing_service.begin(job_id, worker_id, f"job:{job_id}:text:{uuid4().hex}")
             from app.services import job_text_response_service
-            await job_text_response_service.mark_submission_started(job_id, worker_id, call_id, model_id)
             generate_text_function = getattr(adapter.generate_text, "__func__", adapter.generate_text)
             native_openai_adapter = (
                 getattr(generate_text_function, "__module__", "")
@@ -569,6 +614,10 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             from app.services import text_model_policy_service
 
             frozen_text_policy = text_model_policy_service.frozen_for(job, provider)
+            # Complete local preparation before recording a potentially paid submission.
+            if not await job_text_response_service.mark_submission_started(job_id, worker_id, call_id, model_id):
+                return
+            text_request_started = True
             result = await text_model_policy_service.execute(
                 adapter,
                 model=model_id,
@@ -594,7 +643,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
         if job.job_type == JOB_TYPE_VIDEO:
             meter["external_task_id"] = handle.id
         await billing_service.observe(call_id, meter)
-        async with SessionLocal() as session:
+        async with local_write_session() as session:
             job = await session.get(Job, job_id)
             if job is None or job.worker_id != worker_id or job.status in job_service.TERMINAL_STATUSES:
                 return
@@ -679,6 +728,12 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                         ),
                     },
                 }
+            if job.job_type == "text":
+                from app.services.asset_extraction_partial import settle_partial_batch
+
+                if await settle_partial_batch(session, job, worker_id):
+                    await session.commit()
+                    return
             succeeded = await job_service.mark_succeeded(
                 session, job_id, worker_id, persisted_result
             )
@@ -696,7 +751,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
         deferred = True
     except AppError as exc:
         billing_not_submitted = failed_before_video_generation(exc.details)
-        async with SessionLocal() as session:
+        async with local_write_session() as session:
             job = await session.get(Job, job_id)
             await job_service.mark_failed(
                 session,
@@ -713,7 +768,7 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             await session.commit()
     except Exception as exc:
         logger.exception("任务 %s 执行异常", job_id)
-        async with SessionLocal() as session:
+        async with local_write_session() as session:
             job = await session.get(Job, job_id)
             from app.core.job_failure import local_exception
             code, message, details = local_exception(exc) if job and (job.payload or {}).get("text_submission", {}).get("response_received") else ("GENERATION_FAILED", "生成失败，请稍后重试", {})
@@ -727,11 +782,15 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
     finally:
         try:
             if not deferred:
-                await billing_service.finalize_provider_call(call_id, "参考图上传失败，未调用视频生成接口" if billing_not_submitted else None)
+                not_submitted_reason = None
+                if is_text_job and not text_request_started:
+                    not_submitted_reason = "文本请求提交前本地准备失败，未调用模型接口"
+                elif billing_not_submitted:
+                    not_submitted_reason = "视频提交前校验或素材上传失败，未调用视频生成接口"
+                await billing_service.finalize_provider_call(call_id, not_submitted_reason)
         finally:
-            pulse.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await pulse
+            from app.jobs.worker_runtime_helpers import stop_heartbeat
+            await stop_heartbeat(pulse)
 
 
 async def run(local_media_only: bool = False) -> None:
@@ -763,6 +822,8 @@ async def _run_scheduler(local_media_only: bool = False) -> None:
             if time.monotonic() >= next_cleanup:
                 next_cleanup = time.monotonic() + 3600
                 try:
+                    from app.services import job_text_response_service
+                    await job_text_response_service.cleanup_expired_responses()
                     from app.services.reference_parse_cleanup import cleanup
                     async with SessionLocal() as cleanup_session:
                         await cleanup(cleanup_session)
@@ -782,7 +843,7 @@ async def _run_scheduler(local_media_only: bool = False) -> None:
                     break
                 from sqlalchemy.exc import SQLAlchemyError
                 try:
-                    async with SessionLocal() as session:
+                    async with local_write_session() as session:
                         job = await job_service.claim_next_job(
                             session, worker_id, local_media_only
                         )

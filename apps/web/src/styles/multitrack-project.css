@@ -124,6 +124,9 @@
 .assembly-workspace .assembly-media-list > button { padding: 12px 0; border: 0; border-bottom: 1px solid var(--app-color-border); border-radius: 0; background: transparent; }
 .assembly-workspace .assembly-media-icon { width: 44px; height: 44px; }
 .assembly-workspace .multitrack-audio-item { min-height: 44px; border-bottom: 1px solid var(--app-color-border); }
+.multitrack-audio-preview { min-width:0; padding:10px 0; border-bottom:1px solid var(--app-color-border); }
+.multitrack-audio-preview strong { display:block; overflow-wrap:anywhere; font-size:13px; }
+.multitrack-audio-preview audio { width:100%; min-width:0; }
 .assembly-workspace .independent-stage-frame { container-type: size; }
 .assembly-workspace .independent-stage-frame video { position: absolute; left: 50%; top: 50%; width: auto; height: 74%; max-width: 86%; object-fit: contain; transform-origin: center; }
 .independent-preview-subtitles { position: absolute; inset: 0; pointer-events: none; color: white; text-shadow: 0 1px 3px black; overflow-wrap: anywhere; }

@@ -9,6 +9,10 @@ import { getAssetProduction, getAssetUsagePage, getAssetVersionPage, patchAssetP
 import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
 import { AssetVersionSplitDialog } from "@/components/assets/AssetVersionSplitDialog";
 import { AssetAudioGenerator } from "@/components/assets/AssetAudioGenerator";
+import {AssetBgmButton} from './AssetBgmButton';
+import {SpeechBindingFields} from '@/components/audio/SpeechBindingFields';
+import {VoiceDesignButton} from '@/components/audio/VoiceDesignButton';
+import {voiceDescription} from '@/components/audio/voiceSamples';
 import { Button, Dialog } from "@/components/ui";
 import type { AssetProfile, CatalogItem } from "@/types/productionContract";
 import type { AssetViewType } from "@/types/asset";
@@ -84,6 +88,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
       queryClient.invalidateQueries({ queryKey: ["asset-production", projectId, item.id] }),
       queryClient.invalidateQueries({ queryKey: ["asset-version-page", projectId, item.id] }),
       queryClient.invalidateQueries({ queryKey: ["asset-catalog", projectId] }),
+      queryClient.invalidateQueries({ queryKey: ["project-audio-library", projectId] }),
     ]);
     onChanged();
   };
@@ -97,6 +102,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
     onSuccess: (next) => {
       queryClient.setQueryData(["asset-production", projectId, item.id], next);
       setEditing(false);
+      void queryClient.invalidateQueries({queryKey:['project-audio-library',projectId]});
       onChanged();
     },
   });
@@ -125,6 +131,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
     onSuccess: (next) => {
       queryClient.setQueryData(["asset-production", projectId, item.id], next);
       setArchiveConfirm(false);
+      void queryClient.invalidateQueries({queryKey:['project-audio-library',projectId]});
       onChanged();
       onClose();
     },
@@ -157,16 +164,17 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
       <div className="r5-detail-body">
         {error && <p className="r5-error" role="alert">{toErrorMessage(error)}</p>}
         {archived && <div className="r5-archived-notice" role="status">该资产已从当前项目生产范围归档。历史来源、使用关系和采用版本仍保留；恢复后才能继续修改或新增素材。</div>}
-        {tab === "profile" && <ProfileTab item={item} profile={editing ? draft : profile} promptAnchor={editing ? promptDraft : promptAnchor} editing={editing} onChange={setDraft} onPromptChange={setPromptDraft} />}
+        {tab === "profile" && <ProfileTab projectId={projectId} revision={production.data?.revision ?? 0} item={item} profile={editing ? draft : profile} promptAnchor={editing ? promptDraft : promptAnchor} editing={editing} onChange={setDraft} onPromptChange={setPromptDraft} />}
         {tab === "versions" && <section className="r5-version-tab">
           <div className="r5-adoption-key"><label>采用用途<input value={key} onChange={(event) => setKey(event.target.value)} /></label><small>不同用途独立采用，不会覆盖其他造型、视角或音色。</small></div>
           {!archived && <div className="r5-version-upload"><label><span>新素材分类</span><select value={uploadViewType} onChange={(event) => setUploadViewType(event.target.value as AssetViewType)}>{(VIEW_TYPES[item.asset_type] ?? ["base"]).map((value) => <option key={value} value={value}>{VIEW_LABELS[value]}</option>)}</select></label><label className="r5-upload-button"><Upload size={15} />{uploadProgress === null ? "上传新候选" : `上传 ${uploadProgress}%`}<input type="file" disabled={upload.isPending} accept={item.asset_type === "voice" ? "audio/*" : item.asset_type === "video" ? "video/*" : "image/*"} onChange={(event) => { const file = event.target.files?.[0]; if (file) upload.mutate(file); }} /></label></div>}
-          {!archived && item.asset_type === "voice" && production.data && <AssetAudioGenerator key={item.id} projectId={projectId} assetId={item.id} revision={production.data.revision} usage={profile.audio_usage} onChanged={()=>void refresh()} />}
+          {!archived && item.asset_type === "voice" && production.data && <AssetAudioGenerator key={item.id} projectId={projectId} assetId={item.id} revision={production.data.revision} usage={profile.audio_usage} binding={profile.speech_preset} initialPrompt={profile.audio_usage==='voice'?voiceDescription(profile,promptAnchor||profile.description||''):promptAnchor||profile.description||''} onChanged={()=>void refresh()} />}
           <div className="r5-version-list">{versions.data?.items.map((version) => <article key={version.id}>
             <div className="r5-version-media"><AssetMediaPreview mediaFileId={version.media.id} kind={version.media.kind} assetType={item.asset_type} alt={`${item.name} V${version.version}`} compact /></div>
-            <div><strong>V{version.version}</strong><span>{version.view_label} · {version.media.mime_type}</span><small>{formatMedia(version.media)}</small>{version.tags?.includes("qa:manual-review-required") && <span className="r5-split-warning">角色设定图 · 请确认四个视图的身份、服装和体型一致后采用</span>}{version.tags?.includes("qa:landscape-orientation-mismatch") && <span className="r5-split-warning">角色设定图应为横向画幅，建议重新生成</span>}{version.needs_split && <span className="r5-split-warning">待拆分：不能设为最终版或直接采用</span>}</div>
+            <div><strong>V{version.version}</strong><span>{version.view_label} · {version.media.mime_type}</span><small>{formatMedia(version.media)}</small>{version.media.kind==='audio'&&<span>{({voice_reference:'参考声线',dialogue_audio:'后期对白',music:'音乐素材',ambience:'环境声',sfx:'音效',unclassified:'用途待确认'} as Record<string,string>)[version.audio_purpose??'unclassified']}</span>}{version.tags?.includes("qa:manual-review-required") && <span className="r5-split-warning">角色设定图 · 请确认四个视图的身份、服装和体型一致后采用</span>}{version.tags?.includes("qa:landscape-orientation-mismatch") && <span className="r5-split-warning">角色设定图应为横向画幅，建议重新生成</span>}{version.needs_split && <span className="r5-split-warning">待拆分：不能设为最终版或直接采用</span>}</div>
             <div className="r5-version-classify"><select disabled={archived} aria-label={`V${version.version}素材分类`} value={viewDrafts[version.id] ?? version.view_type} onChange={(event) => setViewDrafts((current) => ({ ...current, [version.id]: event.target.value as AssetViewType }))}>{(VIEW_TYPES[item.asset_type] ?? ["base"]).map((value) => <option key={value} value={value}>{VIEW_LABELS[value]}</option>)}</select>{!archived && <button disabled={classify.isPending || (viewDrafts[version.id] ?? version.view_type) === version.view_type} onClick={() => classify.mutate({ versionId: version.id, viewType: viewDrafts[version.id] ?? version.view_type as AssetViewType })}>保存分类</button>}</div>
             {version.needs_split ? !archived && <button type="button" className="r5-split-action" onClick={() => setSplitVersionId(version.id)}>拆分为独立版本</button> : adopted.get(key) === version.id ? <span className="r5-adopted"><Check size={13} />当前采用</span> : !archived && <button type="button" disabled={!production.data || adopt.isPending || !key.trim() || version.review_status === "archived"} onClick={() => adopt.mutate(version.id)}>采用到此用途</button>}
+            {!archived && profile.audio_usage==='music' && production.data?.adoptions.some(choice=>choice.version_id===version.id) && version.review_status!=='archived' && <AssetBgmButton projectId={projectId} assetId={item.id} versionId={version.id} revision={production.data.revision} mediaId={version.media.id} label={`${item.name} · V${version.version}`}/>}
           </article>)}</div>
           {!versions.isPending && !versions.data?.items.length && <p className="r5-empty-inline">还没有素材版本。上传文件后会先成为候选。</p>}
         </section>}
@@ -185,7 +193,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
         {archived ? <Button variant="primary" icon={<RotateCcw size={14} />} loading={archive.isPending} disabled={!production.data} onClick={() => archive.mutate(false)}>恢复资产</Button> : <Button variant="danger" icon={<Archive size={14} />} disabled={!production.data || archive.isPending} onClick={() => setArchiveConfirm(true)}>归档</Button>}
       </footer>
     </Dialog>
-    {archiveConfirm && production.data && <Dialog open title="归档项目资产" description="归档不会删除素材，也不会改写任何历史引用。" size="small" busy={archive.isPending} onClose={() => setArchiveConfirm(false)} footer={<><Button disabled={archive.isPending} onClick={() => setArchiveConfirm(false)}>取消</Button><Button variant="danger" loading={archive.isPending} onClick={() => archive.mutate(true)}>确认归档</Button></>}><div className="r5-archive-impact"><p>归档后该资产不再进入当前项目的生成、采用和编辑范围，恢复后可继续使用。</p><dl><div><dt>制作引用</dt><dd>{production.data.archive_impact.usage_count}</dd></div><div><dt>采用用途</dt><dd>{production.data.archive_impact.adoption_count}</dd></div><div><dt>历史快照</dt><dd>{production.data.archive_impact.historical_snapshot_count}</dd></div><div><dt>关联资产</dt><dd>{production.data.archive_impact.dependent_asset_count}</dd></div></dl></div></Dialog>}
+    {archiveConfirm && production.data && <Dialog purpose="confirmation" open title="归档项目资产" description="归档不会删除素材，也不会改写任何历史引用。" size="small" busy={archive.isPending} onClose={() => setArchiveConfirm(false)} footer={<><Button disabled={archive.isPending} onClick={() => setArchiveConfirm(false)}>取消</Button><Button variant="danger" loading={archive.isPending} onClick={() => archive.mutate(true)}>确认归档</Button></>}><div className="r5-archive-impact"><p>归档后该资产不再进入当前项目的生成、采用和编辑范围，恢复后可继续使用。</p><dl><div><dt>制作引用</dt><dd>{production.data.archive_impact.usage_count}</dd></div><div><dt>采用用途</dt><dd>{production.data.archive_impact.adoption_count}</dd></div><div><dt>历史快照</dt><dd>{production.data.archive_impact.historical_snapshot_count}</dd></div><div><dt>关联资产</dt><dd>{production.data.archive_impact.dependent_asset_count}</dd></div></dl></div></Dialog>}
     {splitVersionId && <AssetVersionSplitDialog projectId={projectId} assetId={item.id} versionId={splitVersionId} assetName={item.name} assetType={item.asset_type} onClose={() => setSplitVersionId(null)} onComplete={() => void refresh()} />}
   </>;
 }
@@ -199,18 +207,26 @@ function SourceLink({ projectId, source }: { projectId: number; source: import("
   return focus ? <Link to={`/projects/${projectId}/canvas?focus=${encodeURIComponent(focus)}`}>在画布中定位</Link> : null;
 }
 
-function ProfileTab({ item, profile, promptAnchor, editing, onChange, onPromptChange }: { item: CatalogItem; profile: AssetProfile; promptAnchor: string; editing: boolean; onChange: (profile: AssetProfile) => void; onPromptChange: (value: string) => void }) {
+function ProfileTab({ projectId, revision, item, profile, promptAnchor, editing, onChange, onPromptChange }: { projectId:number; revision:number; item: CatalogItem; profile: AssetProfile; promptAnchor: string; editing: boolean; onChange: (profile: AssetProfile) => void; onPromptChange: (value: string) => void }) {
   const field = (key: keyof AssetProfile, label: string, multiline = false) => <label><span>{label}</span>{multiline ? <textarea disabled={!editing} value={String(profile[key] ?? "")} onChange={(event) => onChange({ ...profile, [key]: event.target.value || null })} /> : <input disabled={!editing} value={String(profile[key] ?? "")} onChange={(event) => onChange({ ...profile, [key]: event.target.value || null })} />}</label>;
   return <section className="r5-profile-form">
     <label><span>别名</span><input disabled={!editing} value={profile.aliases.join("、")} onChange={(event) => onChange({ ...profile, aliases: event.target.value.split(/[、,，]/).map((value) => value.trim()).filter(Boolean) })} /></label>
     <label className="r5-profile-prompt"><span>资产一致性提示词</span><textarea disabled={!editing} value={promptAnchor} placeholder="尚未填写一致性提示词" onChange={(event) => onPromptChange(event.target.value)} /></label>
     {field("description", "资料说明", true)}
+    {item.asset_type === "character" && <>
+      <label><span>角色形式</span><select disabled={!editing} value={profile.character_form ?? "single"} onChange={(event) => onChange({ ...profile, character_form: event.target.value as AssetProfile["character_form"], ...(event.target.value === "single" ? { group_label: null, group_size: null } : {}) })}><option value="single">单人</option><option value="fixed_group">固定小组</option><option value="crowd">背景人群</option></select></label>
+      {profile.character_form && profile.character_form !== "single" && <>{field("group_label", "群体称呼")}<label><span>原文明确人数</span><input type="number" min={2} max={profile.character_form === "fixed_group" ? 12 : 100000} disabled={!editing} value={profile.group_size ?? ""} onChange={(event) => onChange({ ...profile, group_size: event.target.value ? Number(event.target.value) : null })}/></label></>}
+    </>}
     {item.asset_type === "character" && <><label><span>角色分类</span><select disabled={!editing} value={profile.character_role} onChange={(event) => onChange({ ...profile, character_role: event.target.value as AssetProfile["character_role"] })}><option value="lead">主角</option><option value="supporting">配角</option><option value="extra">群演</option><option value="unclassified">未分类</option></select></label>{field("age", "年龄")}{field("appearance", "外貌", true)}{field("personality", "性格", true)}{field("goal", "目标", true)}{field("conflict", "冲突", true)}{field("arc", "成长弧", true)}{field("costume", "默认造型说明", true)}{field("voice", "声线", true)}{field("story_state", "当前剧情状态", true)}</>}
     {item.asset_type === "scene" && <>{field("location", "地点 / 空间")}{field("time_of_day", "时间 / 日夜")}{field("weather", "天气")}{field("lighting", "光线", true)}{field("atmosphere", "氛围", true)}{field("environment", "环境变体", true)}{field("story_state", "剧情状态", true)}</>}
     {item.asset_type === "prop" && <>{field("appearance", "外观", true)}{field("material", "材质")}{field("owner", "持有人 / 所属")}{field("story_function", "剧情功能", true)}{field("story_state", "剧情状态", true)}</>}
     {item.asset_type === "costume" && <><label><span>服装生成模式</span><select disabled={!editing} value={profile.costume_mode ?? (profile.character_asset_id ? "worn" : "garment_only")} onChange={(event) => onChange({ ...profile, costume_mode: event.target.value as "garment_only" | "worn" })}><option value="garment_only">服装本体</option><option value="worn">角色穿着</option></select></label>{field("character_asset_id", "关联角色 ID")}{field("costume", "服装", true)}{field("hair", "发型", true)}{field("makeup", "妆容", true)}{field("injury", "伤势 / 特殊状态", true)}{field("stage", "适用阶段 / 集场")}{field("story_state", "当前状态", true)}</>}
-    {item.asset_type === "voice" && <><label><span>声音用途</span><select disabled={!editing} value={profile.audio_usage} onChange={(event) => onChange({ ...profile, audio_usage: event.target.value as AssetProfile["audio_usage"] })}><option value="voice">角色声音 / 配音</option><option value="music">配乐</option><option value="ambience">环境声</option><option value="sfx">音效</option><option value="unclassified">未分类</option></select></label>{field("character_asset_id", "关联角色 ID")}{field("language", "语言")}{field("pitch", "音高")}{field("texture", "质感")}{field("pace", "语速 / 节奏")}{field("accent", "口音")}{field("voice", "声音描述", true)}{field("voice_id", "实际音色配置")}</>}
+    {item.asset_type === "voice" && <><label><span>声音用途</span><select disabled={!editing} value={profile.audio_usage} onChange={(event) => onChange({ ...profile, audio_usage: event.target.value as AssetProfile["audio_usage"] })}><option value="voice">角色参考声线</option><option value="music">配乐</option><option value="ambience">环境声</option><option value="sfx">音效</option><option value="unclassified">未分类</option></select></label>{field("character_asset_id", "关联角色 ID")}{field("language", "语言")}{field("pitch", "音高")}{field("texture", "质感")}{field("pace", "语速 / 节奏")}{field("accent", "口音")}{field("voice", "声音描述", true)}{profile.voice_id && !profile.speech_preset && <p>旧音色 ID：{profile.voice_id}</p>}</>}
     {(item.asset_type === "video" || item.asset_type === "reference" || item.asset_type === "canvas") && <>{field("appearance", "关联主体 / 用途", true)}{field("story_state", "来源与状态", true)}</>}
+    {(item.asset_type==='character' || item.asset_type==='voice' && profile.audio_usage==='voice') && <details className="asset-audio-advanced"><summary>高级声音设置</summary>
+      <SpeechBindingFields value={profile.speech_preset} disabled={!editing} onChange={value=>onChange({...profile,speech_preset:value})}/>
+      {editing && <VoiceDesignButton projectId={projectId} assetId={item.id} revision={revision} onUse={value=>onChange({...profile,speech_preset:value})}/>}
+    </details>}
     <div className={`r5-readiness ${item.readiness}`}>{item.readiness === "ready" ? "已有可用采用素材" : item.asset_type === "voice" ? "尚未采用音频" : item.asset_type === "video" ? "尚未采用视频" : "尚未采用图片"}</div>
   </section>;
 }

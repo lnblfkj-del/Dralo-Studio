@@ -44,6 +44,10 @@ async def _lock_attempt_scope(session, owner_id, project_id, episode_id):
     await session.execute(update(Episode).where(
         Episode.id == episode_id, Episode.project_id == project_id, owner_scope(Episode.owner_id, owner_id)
     ).values(number=Episode.number))
+    # Serialize paid confirmation with immutable script saves and batch deletion.
+    await session.execute(update(EpisodeProduction).where(
+        EpisodeProduction.episode_id == episode_id,
+    ).values(revision=EpisodeProduction.revision))
 
 
 async def create_episode_segment_jobs(
@@ -450,6 +454,8 @@ async def start_episode_video_batch(
     max_cost_cents: int,
     expected_plan_id: int | None = None,
     expected_plan_revision: int | None = None,
+    selected_segment_ids: list[int] | None = None,
+    expected_selection_fingerprint: str | None = None,
 ) -> Job:
     await _lock_attempt_scope(session, owner_id, project_id, episode_id)
     request_fingerprint = sha256(
@@ -461,6 +467,10 @@ async def start_episode_video_batch(
                 "parameters": parameters,
                 "regenerate": regenerate,
                 "max_cost_cents": max_cost_cents,
+                "selected_segment_ids": sorted(selected_segment_ids) if selected_segment_ids is not None else None,
+                "expected_plan_id": expected_plan_id,
+                "expected_plan_revision": expected_plan_revision,
+                "expected_selection_fingerprint": expected_selection_fingerprint,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -497,7 +507,12 @@ async def start_episode_video_batch(
         provider_model_id=provider_model_id,
         parameters=parameters,
         regenerate=regenerate,
+        selected_segment_ids=selected_segment_ids,
     )
+    if selected_segment_ids is not None:
+        from app.services.segment_selected_video_service import selection_fingerprint
+        if not expected_selection_fingerprint or selection_fingerprint(plan) != expected_selection_fingerprint:
+            raise ConflictError("所选片段的脚本、素材、模型或费用已变化，请重新预检；未提交视频")
     if expected_plan_id is not None and plan["plan_id"] != expected_plan_id:
         raise ConflictError("片段计划已变化，请重新预检费用")
     if (

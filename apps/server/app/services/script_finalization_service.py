@@ -97,13 +97,20 @@ async def get_project_readiness(
         })
     from app.services.screenplay_preflight import episode_review, project_catalog
     catalog = await project_catalog(session, project.id)
+    productions = {item.episode_id: item for item in (await session.scalars(
+        select(EpisodeProduction).where(EpisodeProduction.episode_id.in_([e.id for e in episodes]))
+    )).all()}
     for episode in episodes:
         state = _episode_status(episode)
-        source_review = await episode_review(session, episode, catalog=catalog)
-        if source_review["blocking"]:
+        source_review = await episode_review(session, episode, catalog=catalog,
+                                            production=productions.get(episode.id, False))
+        for error in source_review["errors"]:
             issues.append({"episode_id": episode.id, "episode_number": episode.number,
                            "code": "screenplay_source_ambiguous",
-                           "message": f"第 {episode.number} 集：" + source_review["errors"][0]["message"]})
+                           "message": f"第 {episode.number} 集：" + error["message"],
+                           "severity": error["severity"], "source_line": error["line"],
+                           "script_revision": episode.script_revision,
+                           "script_fingerprint": source_review["script_fingerprint"]})
         rows.append({
             "episode_id": episode.id,
             "number": episode.number,
@@ -156,7 +163,9 @@ async def get_project_readiness(
     )
     can_confirm = not outline_pending and bool(episodes) and numbers == list(range(1, len(episodes) + 1)) and all(
         row["status"] not in {"missing_script", "missing_duration"} for row in rows
-    ) and not continuity_blocked and not any(issue["code"] == "screenplay_source_ambiguous" for issue in issues)
+    ) and not continuity_blocked and not any(
+        issue["code"] == "screenplay_source_ambiguous" and issue.get("severity") != "warning"
+        for issue in issues)
     confirmed_count = sum(row["status"] == "confirmed" for row in rows)
     finalization = dict((project.creation_settings or {}).get("script_finalization") or {})
     has_stale = (
@@ -168,7 +177,11 @@ async def get_project_readiness(
         status = "no_episodes"
     elif has_stale or outline_pending:
         status = "stale"
-    elif confirmed_count == len(episodes) and not issues:
+    elif confirmed_count == len(episodes) and not any(
+        i.get("severity") != "warning" and i["code"] != "screenplay_source_ambiguous"
+        for i in issues
+    ):
+        # Catalog changes can require production binding review without undoing script approval.
         status = "confirmed"
     elif can_confirm:
         status = "ready"
@@ -247,6 +260,7 @@ async def finalize_project_scripts(
     continuity_issue = next((
         issue for issue in readiness["issues"]
         if issue["code"] in {"continuity_conflict", "continuity_stale", "screenplay_source_ambiguous"}
+        and issue.get("severity") != "warning"
     ), None)
     if continuity_issue is not None:
         raise ConflictError(f"剧本一致性尚未通过: {continuity_issue['message']}")

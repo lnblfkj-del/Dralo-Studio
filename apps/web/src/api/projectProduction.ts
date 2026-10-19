@@ -91,6 +91,11 @@ export async function adjustSegmentProductionPlan(
   return data;
 }
 
+export async function deleteSelectedSegments(projectId: number, episodeId: number, payload: import("@/types/api").SegmentDeleteInput): Promise<SegmentProductionPlan> {
+  const { data } = await http.post<SegmentProductionPlan>(`/projects/${projectId}/episodes/${episodeId}/production/segment-plan/delete`, payload);
+  return data;
+}
+
 export async function changeSegmentLifecycle(
   projectId: number,
   episodeId: number,
@@ -117,6 +122,22 @@ export interface EpisodeProductionPlanInput {
   provider_model_id: number;
   parameters?: Record<string, unknown>;
   regenerate?: boolean;
+}
+
+export interface SelectedVideoInput {
+  segment_ids: number[];
+  provider_model_id: number;
+  parameters: Record<string, unknown>;
+}
+export type SelectedVideoPlan = EpisodeProductionPlan & { selection_fingerprint: string; selected_segment_ids: number[] };
+export async function planSelectedVideos(projectId: number, episodeId: number, payload: SelectedVideoInput): Promise<SelectedVideoPlan> {
+  return (await http.post<SelectedVideoPlan>(`/projects/${projectId}/episodes/${episodeId}/production/selected-videos/plan`, payload)).data;
+}
+export async function startSelectedVideos(projectId: number, episodeId: number, payload: SelectedVideoInput & {
+  request_id: string; confirmed: true; max_cost_cents: number;
+  expected_plan_id: number; expected_plan_revision: number; expected_selection_fingerprint: string;
+}): Promise<Job> {
+  return (await http.post<Job>(`/projects/${projectId}/episodes/${episodeId}/production/selected-videos/start`, payload)).data;
 }
 
 export async function planEpisodeProduction(

@@ -11,6 +11,7 @@ from app.services.episode_planning_contract import fingerprint
 from app.services.screenplay_source_parser import parse_sources
 
 TIMED_KINDS = {"dialogue", "narration", "action", "sound"}
+SPEECH_ROUNDING_MS = 100
 
 
 def _speech_floor(text: str) -> int:
@@ -22,13 +23,17 @@ def _speech_floor(text: str) -> int:
     return math.ceil(1000 * ((cjk + digits) / 8 + words / 5))
 
 
-def prepare_sources(script: str, catalog: list[dict]) -> PlanningSources:
+def prepare_sources(script: str, catalog: list[dict], interpretations=None) -> PlanningSources:
     rows = [
-        {"line": index, "text": text.strip()}
+        {"line": index, "text": text}
         for index, text in enumerate(script.splitlines(), 1)
         if text.strip()
     ]
-    records = parse_sources(rows, catalog)
+    records = parse_sources(rows, catalog, interpretations)
+    if any(record.get("speaker_kind") == "unbound" for record in records):
+        from app.services.screenplay_source_parser import fail
+        fail(next(r["line"] for r in records if r.get("speaker_kind") == "unbound"),
+             "的声音来源尚未确认", resolvable=True)
     units = []
     scene_key = "scene-start"
     for index, record in enumerate(records):
@@ -50,9 +55,12 @@ def prepare_sources(script: str, catalog: list[dict]) -> PlanningSources:
                 kind=kind,
                 text=record["text"],
                 speaker=record.get("speaker"),
+                speaker_asset_ids=tuple(value for value in record.get("speaker_refs", []) if type(value) is int and value > 0),
                 spoken_text=record.get("spoken_text"),
                 scene_key=scene_key,
                 source_lines=tuple(record["source_lines"]),
+                voice_source=record.get("voice_source"),
+                audio_kind=record["kind"] if kind == "sound" else None,
             )
         )
     return PlanningSources(
@@ -65,6 +73,8 @@ def analysis_prompt(sources: PlanningSources) -> str:
     # Neither the editorial target nor video limits may bias content duration.
     timed = [unit.key for unit in sources.units if unit.kind in TIMED_KINDS]
     untimed = [unit.key for unit in sources.units if unit.kind not in TIMED_KINDS]
+    speech_floors = {unit.key: _speech_floor(unit.spoken_text) for unit in sources.units
+                     if unit.kind in {"dialogue", "narration"} and unit.spoken_text}
     return (
         "分析以下已确认正文的自然演绎时间，只返回 episode-timing.v1 JSON。"
         "不创作或改写正文，不规划视频请求数量。一个 block 是一个可连续表演的镜头，"
@@ -91,9 +101,38 @@ def analysis_prompt(sources: PlanningSources) -> str:
         f"source_fingerprint 固定为 {fingerprint(sources)}。\n"
         f"必须各计时一次的来源：{json.dumps(timed, ensure_ascii=False)}\n"
         f"禁止添加 event 但必须保留在 source_keys 的来源：{json.dumps(untimed, ensure_ascii=False)}\n"
+        "以下仅是对白最低校验边界，不是自然语速目标；minimum_ms 不得低于它，"
+        "estimated_ms 应按真实停顿和情绪留足时间，不要四舍五入到边界之下："
+        f"{json.dumps(speech_floors, ensure_ascii=False)}\n"
         f"结构：{json.dumps(ContentAnalysis.model_json_schema(), ensure_ascii=False)}\n"
         f"正文来源：{sources.model_dump_json()}"
     )
+
+
+def constrain_speech_minima(sources: PlanningSources, analysis: ContentAnalysis):
+    """Constrain lower bounds and reconcile one 100ms estimation rounding step."""
+    by_key = {unit.key: unit for unit in sources.units}
+    corrections = []
+    blocks = []
+    for block in analysis.blocks:
+        events = []
+        for event in block.events:
+            source = by_key.get(event.source_key)
+            if source and source.kind in {"dialogue", "narration"} and source.spoken_text:
+                floor = _speech_floor(source.spoken_text)
+                if (0 < floor - event.estimated_ms <= SPEECH_ROUNDING_MS
+                        and floor <= event.maximum_ms):
+                    corrections.append({"source_key": source.key, "minimum_before_ms": event.minimum_ms,
+                                        "minimum_after_ms": floor, "estimated_before_ms": event.estimated_ms,
+                                        "estimated_after_ms": floor, "reason": "speech_estimate_rounding"})
+                    event = event.model_copy(update={"minimum_ms": floor, "estimated_ms": floor})
+                elif event.minimum_ms < floor <= event.estimated_ms:
+                    corrections.append({"source_key": source.key, "minimum_before_ms": event.minimum_ms,
+                                        "minimum_after_ms": floor, "reason": "speech_sanity_floor"})
+                    event = event.model_copy(update={"minimum_ms": floor})
+            events.append(event)
+        blocks.append(block.model_copy(update={"events": tuple(events)}))
+    return analysis.model_copy(update={"blocks": tuple(blocks)}), corrections
 
 
 def validate_analysis(sources: PlanningSources, analysis: ContentAnalysis) -> None:

@@ -348,6 +348,8 @@ async def export_episode_video(
     background_audio_path: Path | None = None
     if background_audio_media_id is not None:
         background_audio = await get_owned_media(session, background_audio_media_id, owner_id)
+        from app.services.audio_purpose import require_production_audio
+        require_production_audio(background_audio)
         if background_audio.kind != "audio":
             raise ConflictError("整集配乐必须选择音频文件")
         if background_audio.project_id != episode.project_id:

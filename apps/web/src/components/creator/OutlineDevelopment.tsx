@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import * as creationApi from "@/api/creation";
 import { getProjectScriptReadiness } from "@/api/projects";
@@ -10,7 +11,7 @@ import { EpisodeScriptWorkspace } from "./EpisodeScriptWorkspace";
 import { ProjectCreationWorkspace } from "./ProjectCreationWorkspace";
 import { ProductionPreparationWorkspace } from "./ProductionPreparationWorkspace";
 import { readStoredCreationStage, writeStoredCreationStage, type CreationStage } from "./CreationStageNav";
-import { creationSourceMode, deriveCreationStageAvailability, restoreStageFromAvailability } from "./projectCreationStage";
+import { assetPreparationCompleted, creationSourceMode, deriveCreationStageAvailability, restoreStageFromAvailability } from "./projectCreationStage";
 import { cloneEpisodes } from "./creativeOutlineModel";
 import { toErrorMessage } from "@/api/client";
 import { getJob, subscribeToJob } from "@/api/jobs";
@@ -39,6 +40,13 @@ export function OutlineDevelopment({
   });
   const [liveJob, setLiveJob] = useState<Job | null>(null);
   const [uploadStage, setUploadStage] = useState<CreationStage>(() => readStoredCreationStage(projectId) ?? "script");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const restoredUploadProject = useRef<number | null>(null);
+  const selectUploadStage = (stage: CreationStage) => {
+    setUploadStage(stage);
+    writeStoredCreationStage(projectId, stage);
+    setSearchParams(current => { const next = new URLSearchParams(current); next.set("tab", stage); return next; }, { replace: true });
+  };
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["project-creation-session", projectId] });
     void queryClient.invalidateQueries({ queryKey: ["assets", projectId] });
@@ -88,20 +96,18 @@ export function OutlineDevelopment({
     hasOutline: hasImportedOutline,
     outlineConfirmed: importedOutline?.status === "confirmed",
     scriptsConfirmed: Boolean(scriptsConfirmed),
-    prepCompleted: assetBreakdown?.status === "completed",
+    prepCompleted: assetPreparationCompleted(assetBreakdown),
     activeJob: activeJobForDisplay,
   });
   useEffect(() => {
-    if (!session.data || sourceMode === "original") return;
+    if (!session.data || readiness.isPending || sourceMode === "original" || restoredUploadProject.current === projectId) return;
     const stored = readStoredCreationStage(projectId);
     const preferred = sourceMode === "upload_outline"
       ? (["outline", "script", "prep"] as CreationStage[]).includes(stored as CreationStage) ? stored : "outline"
       : (["script", "prep"] as CreationStage[]).includes(stored as CreationStage) ? stored : "script";
-    setUploadStage(restoreStageFromAvailability(preferred, preferred, stageAvailability));
-  }, [projectId, session.data?.id, sourceMode, scriptsConfirmed, importedOutline?.status, assetBreakdown?.status]);
-  useEffect(() => {
-    if (session.data && sourceMode !== "original") writeStoredCreationStage(projectId, uploadStage);
-  }, [projectId, session.data, sourceMode, uploadStage]);
+    restoredUploadProject.current = projectId;
+    selectUploadStage(restoreStageFromAvailability(searchParams.get("tab"), preferred, stageAvailability));
+  }, [projectId, session.data?.id, sourceMode, scriptsConfirmed, readiness.isPending, importedOutline?.status, assetBreakdown?.status, searchParams]);
   if (session.isPending) {
     return <div className="script-flow-loading"><LoaderCircle className="spin" />正在恢复剧本…</div>;
   }
@@ -129,10 +135,10 @@ export function OutlineDevelopment({
     status: importedOutline?.status === "confirmed" ? "confirmed" as const : "draft" as const,
   }));
   return (
-    <ProjectCreationWorkspace projectId={projectId} active={uploadStage} availability={stageAvailability} onSelect={setUploadStage} sourceLabel={materialLabel} sourceDetail="原始素材已只读保留" episodeDirectory={episodeDirectory}>
+    <ProjectCreationWorkspace projectId={projectId} active={uploadStage} availability={stageAvailability} onSelect={selectUploadStage} sourceLabel={materialLabel} sourceDetail="原始素材已只读保留" episodeDirectory={episodeDirectory}>
       <main className="creative-main upload-creation-adapter">
       {uploadStage === "outline" && sourceMode === "upload_outline" ? <>
-        <EpisodeOutlineWorkspace projectId={projectId} session={session.data} activeJob={currentJob} onJob={setLiveJob} refresh={refresh} onConfirmed={() => setUploadStage("script")} uploadedSource />
+        <EpisodeOutlineWorkspace projectId={projectId} session={session.data} activeJob={currentJob} onJob={setLiveJob} refresh={refresh} onConfirmed={() => selectUploadStage("script")} uploadedSource />
       </> : uploadStage === "prep" ? <>
         <ProductionPreparationWorkspace projectId={projectId} session={session.data} readiness={readiness.data}
           sourceMode={sourceMode} activeJob={currentJob} onJob={setLiveJob} />
@@ -141,8 +147,8 @@ export function OutlineDevelopment({
         projectId={projectId}
         sourceMode={sourceMode === "upload_outline" ? "upload_outline" : "upload_script"}
         defaultDuration={Number(session.data.settings.episode_duration) || 90}
-        onBack={sourceMode === "upload_outline" ? () => setUploadStage("outline") : undefined}
-        onConfirmed={() => setUploadStage("prep")}
+        onBack={sourceMode === "upload_outline" ? () => selectUploadStage("outline") : undefined}
+        onConfirmed={() => selectUploadStage("prep")}
       />
       </div>}
       </main>

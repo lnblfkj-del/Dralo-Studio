@@ -3,11 +3,20 @@
 from datetime import datetime
 from math import isfinite
 from typing import Any
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
-from app.models.provider import MODEL_TYPES, PROTOCOL_OPENAI_COMPATIBLE, PROVIDER_PROTOCOLS
+from app.models.provider import (
+    DEFAULT_PROVIDER_MAX_CONCURRENCY,
+    DEFAULT_PROVIDER_TIMEOUT_SECONDS,
+    MAX_PROVIDER_CONCURRENCY,
+    MODEL_TYPES,
+    PROTOCOL_OPENAI_COMPATIBLE,
+    PROVIDER_PROTOCOLS,
+)
 from app.schemas.common import ORMModel
+from app.schemas.video_configuration import VideoConfigInput
 
 
 def validate_model_values(value, *, pricing=False):
@@ -41,9 +50,9 @@ class ProviderCreate(BaseModel):
     protocol: str = PROTOCOL_OPENAI_COMPATIBLE
     base_url: HttpUrl
     api_key: str = Field(min_length=1, max_length=4096)
-    timeout_seconds: int = Field(default=300, ge=5, le=600)
+    timeout_seconds: int = Field(default=DEFAULT_PROVIDER_TIMEOUT_SECONDS, ge=5, le=600)
     proxy_url: HttpUrl | None = None
-    max_concurrency: int = Field(default=8, ge=1, le=100)
+    max_concurrency: int = Field(default=DEFAULT_PROVIDER_MAX_CONCURRENCY, ge=1, le=MAX_PROVIDER_CONCURRENCY)
     enabled: bool = True
 
     @field_validator("name")
@@ -60,6 +69,7 @@ class ProviderCreate(BaseModel):
 
 
 class ProviderUpdate(BaseModel):
+    credential_action: Literal["new_account", "rotate"] = "new_account"
     protocol: str | None = None
     name: str | None = Field(default=None, min_length=1, max_length=128)
     base_url: HttpUrl | None = None
@@ -67,7 +77,7 @@ class ProviderUpdate(BaseModel):
     timeout_seconds: int | None = Field(default=None, ge=5, le=600)
     proxy_url: HttpUrl | None = None
     clear_proxy: bool = False
-    max_concurrency: int | None = Field(default=None, ge=1, le=100)
+    max_concurrency: int | None = Field(default=None, ge=1, le=MAX_PROVIDER_CONCURRENCY)
     enabled: bool | None = None
 
     @field_validator("protocol")
@@ -84,6 +94,7 @@ class ProviderUpdate(BaseModel):
 
 
 class ProviderModelCreate(BaseModel):
+    video_config: VideoConfigInput | None = None
     api_protocol: str | None = None
     api_base_url: HttpUrl | None = None
     model_id: str = Field(min_length=1, max_length=255)
@@ -134,7 +145,20 @@ class ProviderModelCreate(BaseModel):
         return value
 
 
+class TextTimeoutOverrides(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    request_timeout_seconds: int | None = Field(default=None, ge=5, le=3600, strict=True)
+    first_byte_timeout_seconds: int | None = Field(default=None, ge=5, le=600, strict=True)
+    stream_idle_timeout_seconds: int | None = Field(default=None, ge=5, le=900, strict=True)
+
+
 class ProviderModelUpdate(BaseModel):
+    text_timeout_overrides: TextTimeoutOverrides | None = None
+    preserve_text_timeouts: bool = False
+    expected_video_config_fingerprint: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    video_config: VideoConfigInput | None = None
+    video_modes: list[dict[str, Any]] | None = Field(default=None, min_length=1, max_length=64)
     api_protocol: str | None = None
     api_base_url: HttpUrl | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=255)
@@ -201,7 +225,12 @@ class ProviderModelTestOut(BaseModel):
 
 
 class ProviderModelOut(ORMModel):
+    video_config_fingerprint: str | None = None
+    video_config: dict[str, Any] | None = None
     audio_verification: dict[str, Any] | None = None
+    audio_voices: list[dict[str, str]] | None = None
+    audio_catalog_voices: list[dict[str, str]] | None = None
+    audio_voice_scope: str | None = None
     api_protocol: str | None = None
     api_base_url: str | None = None
     id: int

@@ -155,6 +155,30 @@
     "id",
     "workspace_id"
   ],
+  "video_adapter_releases": [
+    "adapter_key",
+    "version",
+    "fingerprint",
+    "package",
+    "enabled",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
+  "video_configuration_presets": [
+    "release_key",
+    "name",
+    "version",
+    "source",
+    "model_ids",
+    "package",
+    "fingerprint",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
   "workspace_invitations": [
     "workspace_id",
     "created_by",
@@ -311,6 +335,7 @@
     "api_base_url",
     "capabilities",
     "default_params",
+    "video_config",
     "video_prompt_certifications",
     "pricing",
     "max_concurrency",
@@ -321,6 +346,16 @@
     "last_rate_limited_at",
     "enabled",
     "is_default",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
+  "video_accounts": [
+    "provider_id",
+    "current",
+    "key_ciphertext",
+    "key_hint",
     "id",
     "created_at",
     "updated_at",
@@ -688,6 +723,16 @@
     "preview_media_id",
     "reference_media_id",
     "enabled",
+    "id",
+    "created_at",
+    "updated_at",
+    "workspace_id"
+  ],
+  "video_execution_versions": [
+    "model_id",
+    "account_id",
+    "fingerprint",
+    "snapshot",
     "id",
     "created_at",
     "updated_at",

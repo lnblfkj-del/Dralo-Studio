@@ -3,6 +3,7 @@
 import re
 
 from app.core.errors import ValidationError
+from app.services.screenplay_voice_sources import AMBIENCE, DEVICE, NOISE, SOUND, location
 
 VERSION = "screenplay.sources.v1"
 PAIRS = {"（": "）", "(": ")", "【": "】", "[": "]"}
@@ -18,7 +19,6 @@ AUDIO = {"bgm": "music", "配乐": "music", "配乐bgm": "music", "音乐": "mus
          "背景音乐": "music", "音效": "sound_effects", "sfx": "sound_effects",
          "环境声": "ambience", "环境音": "ambience", "氛围": "ambience", "剧情内音乐": "diegetic_music"}
 NARRATORS = {"旁白", "画外音", "解说", "独白", "vo", "v.o."}
-DEVICE = re.compile(r"(?:.*(?:耳机|广播|收音机|电视|电话|扬声器|系统)(?:声音|语音|播报)|广播|广播声|系统提示音)$")
 
 
 def bracket_end(text):
@@ -95,12 +95,13 @@ def identity_index(catalog):
     return index, canonical
 
 
-def fail(line, reason):
+def fail(line, reason, *, resolvable=False):
     raise ValidationError(f"正文第 {line} 行{reason}，请核对原文，不会省略该行",
-                          details={"failure_kind": "screenplay_source_ambiguous", "source_line": line})
+                          details={"failure_kind": "screenplay_source_ambiguous", "source_line": line,
+                                   "resolvable": resolvable})
 
 
-def classify(text, identities, scene_people, line):
+def classify(text, identities, scene_people, line, interpretation=None):
     value = unwrap(text)
     if SCENE_SLUG.fullmatch(value):
         return {"kind": "scene"}
@@ -127,8 +128,23 @@ def classify(text, identities, scene_people, line):
         return {"kind": "action"}
     name, directions, spoken = spoken_parts(cue, body)
     references = []
-    if name.casefold() in NARRATORS:
+    candidates = identities.get(name.casefold(), set())
+    if len(candidates) > 1:
+        fail(line, "的说话人对应多个角色")
+    if len(candidates) == 1:
+        speaker_kind = "character"
+        references = list(candidates)
+    elif interpretation:
+        kind = interpretation["kind"]
+        if kind in {"sound_effects", "ambience"}:
+            return {"kind": kind, "field": "audio_note"}
+        speaker_kind = kind
+    elif name.casefold() in NARRATORS:
         speaker_kind = "narration"
+    elif (name in SOUND or name in AMBIENCE) and not NOISE.fullmatch(spoken):
+        fail(line, "的声音标签可能包含语言或声音说明，需要确认声音类型", resolvable=True)
+    elif name in SOUND or name in AMBIENCE or (DEVICE.fullmatch(name) and NOISE.fullmatch(spoken)):
+        return {"kind": "ambience" if name in AMBIENCE else "sound_effects", "field": "audio_note"}
     elif DEVICE.fullmatch(name):
         speaker_kind = "device"
     else:
@@ -138,7 +154,7 @@ def classify(text, identities, scene_people, line):
             labels = [name]
         if name in {"两人", "二人", "两位"}:
             if len(scene_people) != 2 or None in scene_people:
-                fail(line, "的合说主体不明确")
+                fail(line, "的合说主体不明确", resolvable=True)
             references = sorted(scene_people, key=str)
             speaker_kind = "group"
         else:
@@ -151,7 +167,7 @@ def classify(text, identities, scene_people, line):
                     if len(labels) == 1 and spoken.startswith(('“', '"')):
                         speaker_kind = "unbound"
                         break
-                    fail(line, "的说话人或说明不明确")
+                    fail(line, "的说话人或说明不明确", resolvable=True)
                 references.extend(candidates)
             else:
                 speaker_kind = "group" if len(labels) > 1 else "character"
@@ -159,12 +175,15 @@ def classify(text, identities, scene_people, line):
                 fail(line, "的合说主体重复")
     if directions and not spoken:
         return {"kind": "action", "stage_directions": directions}
+    place = interpretation.get("location", "unspecified") if interpretation else location(directions)
     return {"kind": "dialogue", "field": "dialogue", "speaker": name,
             "speaker_kind": speaker_kind, "speaker_refs": references,
-            "stage_directions": directions, "spoken_text": spoken}
+            "stage_directions": directions, "spoken_text": spoken,
+            **({"voice_source": {"speaker_kind": speaker_kind, "location": place}}
+               if interpretation or speaker_kind == "device" or place != "unspecified" else {})}
 
 
-def parse_sources(rows, catalog):
+def parse_sources(rows, catalog, interpretations=None):
     from app.services.segment_script_semantics import quoted_dialogue_closed
 
     identities, canonical = identity_index(catalog)
@@ -172,7 +191,12 @@ def parse_sources(rows, catalog):
     index = 0
     while index < len(rows):
         row = rows[index]
-        info = classify(row["text"], identities, scene_people, row["line"])
+        if any(item.get("source_scope_lines") is not None for item in catalog):
+            identities, canonical = identity_index([item for item in catalog
+                if item.get("source_scope_lines") is None or row["line"] in item["source_scope_lines"]])
+            scene_people.intersection_update({None, *canonical})
+        info = classify(row["text"], identities, scene_people, row["line"],
+                        (interpretations or {}).get(str(row["line"])))
         group = [row]
         index += 1
         if info["kind"] == "scene":

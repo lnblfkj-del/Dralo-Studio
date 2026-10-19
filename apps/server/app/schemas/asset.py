@@ -200,6 +200,7 @@ class EpisodeAssetReadinessOut(BaseModel):
     episode_number: int
     status: Literal["no_requirements", "ready", "incomplete", "stale"]
     required_asset_ids: list[int] = Field(default_factory=list)
+    related_asset_ids: list[int] = Field(default_factory=list)
     ready_asset_ids: list[int] = Field(default_factory=list)
     missing_asset_ids: list[int] = Field(default_factory=list)
     issues: list[AssetReadinessIssue] = Field(default_factory=list)
@@ -259,6 +260,8 @@ class AssetAudioGenerateRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     request_id: str = Field(min_length=1, max_length=128)
     expected_revision: int = Field(ge=0)
+    audio_purpose: Literal["voice_reference", "dialogue_audio", "music", "ambience", "sfx"] | None = None
+    voice_description: str | None = Field(default=None, max_length=1000)
 
 
 class AssetLinkCreate(BaseModel):

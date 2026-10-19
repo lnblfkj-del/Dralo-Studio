@@ -220,9 +220,17 @@ async def create_provider(session: AsyncSession, created_by: int, data: dict[str
 async def update_provider(
     session: AsyncSession, provider: Provider, data: dict[str, Any]
 ) -> Provider:
+    from sqlalchemy import update
+    from app.services import video_version_service
+    await session.execute(update(Provider).where(Provider.id == provider.id).values(
+        name=Provider.name, updated_at=Provider.updated_at).execution_options(synchronize_session=False))
+    await session.refresh(provider)
+    await video_version_service.remember_models(session, provider)
     if any(key in data and data[key] != getattr(provider, key) for key in ("base_url", "protocol", "proxy_url")) or data.get("clear_proxy") or data.get("api_key"):
-        await _assert_no_active_jobs(session, provider.id)
+        from app.services.provider_service import assert_no_active_jobs
+        await assert_no_active_jobs(session, provider.id, allow_versioned_video=True)
     api_key = data.pop("api_key", None)
+    credential_action = data.pop("credential_action", "new_account")
     if data.get("protocol", provider.protocol).startswith("jimeng_video_"):
         from app.providers.jimeng_video import credentials
         credentials(api_key if api_key is not None else decrypt_api_key(provider.api_key_ciphertext))
@@ -235,17 +243,28 @@ async def update_provider(
     if clear_proxy:
         provider.proxy_url = None
     if api_key is not None:
-        provider.api_key_ciphertext = encrypt_api_key(api_key)
-        provider.api_key_hint = api_key_hint(api_key)
+        from app.models import VideoAccount
+        has_accounts = await session.scalar(select(VideoAccount.id).where(VideoAccount.provider_id == provider.id).limit(1))
+        if has_accounts or any(model.model_type == MODEL_TYPE_VIDEO for model in provider.models):
+            await video_version_service.change_key(session, provider, api_key, credential_action)
+        else:
+            provider.api_key_ciphertext = encrypt_api_key(api_key)
+            provider.api_key_hint = api_key_hint(api_key)
     effective_base_url(provider)
     if "protocol" in data:
         for model in provider.models:
             validate_model_protocol(provider, model, configuration=True)
+    await video_version_service.remember_models(session, provider)
     await session.flush()
     return await get_provider(session, provider.id)
 
 
 async def delete_provider(session: AsyncSession, provider: Provider) -> None:
+    from sqlalchemy import update
+    await session.execute(update(Provider).where(Provider.id == provider.id).values(
+        name=Provider.name, updated_at=Provider.updated_at).execution_options(synchronize_session=False))
+    from app.services.video_version_service import assert_deletable
+    await assert_deletable(session, provider.id)
     await _assert_no_active_jobs(session, provider.id)
     if is_builtin_provider(provider):
         raise ConflictError("系统固定供应商不可删除，仅自定义渠道支持删除")
@@ -256,8 +275,22 @@ async def delete_provider(session: AsyncSession, provider: Provider) -> None:
 async def create_model(
     session: AsyncSession, provider: Provider, data: dict[str, Any]
 ) -> ProviderModel:
-    if "_audio_verification" in data.get("default_params", {}):
-        raise ConflictError("音频账户核验记录只能由服务端生成")
+    from sqlalchemy import update
+    await session.execute(update(Provider).where(Provider.id == provider.id).values(
+        name=Provider.name, updated_at=Provider.updated_at).execution_options(synchronize_session=False))
+    await session.refresh(provider)
+    video_config = data.pop("video_config", None)
+    if video_config is not None and data.get("model_type") != MODEL_TYPE_VIDEO:
+        raise ConflictError("视频配置只能用于视频模型")
+    if video_config is not None and data.get("default_params"):
+        raise ConflictError("视频设置请一次保存到视频配置，不能同时提交旧默认参数")
+    if data.get("model_type") == MODEL_TYPE_VIDEO:
+        from app.services.video_configuration import EVIDENCE_KEYS
+
+        if EVIDENCE_KEYS.intersection(data.get("default_params", {})):
+            raise ConflictError("普通模型创建不能登记视频实测记录")
+    if {"_audio_verification", "_audio_checks", "_audio_voice_catalog"}.intersection(data.get("default_params", {})):
+        raise ConflictError("音频检查记录只能由服务端生成")
     if "episode_planning_capability" in data.get("default_params", {}):
         raise ConflictError("请先创建视频模型，再通过规划规格入口登记能力和证据")
     if data.get("video_prompt_certifications"):
@@ -275,12 +308,11 @@ async def create_model(
     data["default_params"] = validate_defaults(
         data["model_type"], data.get("default_params", {})
     )
-    if data["model_type"] == MODEL_TYPE_TEXT:
-        defaults = data["default_params"]
-        policy = {"request_timeout_seconds": 300, **defaults.get("_text_execution", {})}
-        data["default_params"] = validate_defaults(
-            data["model_type"], {**defaults, "_text_execution": policy}
-        )
+    from app.services.audio_voice_catalog import validate_names
+    validate_names(data["default_params"])
+    audio_capability = {"tts": "speech", "audio": "music"}.get(data["model_type"])
+    if audio_capability and "capabilities" not in data:
+        data["capabilities"] = [audio_capability]
     candidate = ProviderModel(provider_id=provider.id, **data)
     validate_model_protocol(provider, candidate, configuration=True)
     exists = await session.scalar(
@@ -310,6 +342,18 @@ async def create_model(
     model = ProviderModel(provider_id=provider.id, **data)
     session.add(model)
     await session.flush()
+    from app.services.video_model_settings import synchronize
+
+    if video_config is not None:
+        from app.services.video_configuration import save_input
+
+        save_input(provider, model, video_config)
+    else:
+        synchronize(provider, model)
+    if model.model_type == MODEL_TYPE_VIDEO:
+        from app.services.video_version_service import capture
+        await capture(session, provider, model)
+    await session.flush()
     return model
 
 
@@ -323,20 +367,96 @@ async def get_model(session: AsyncSession, provider_id: int, model_id: int) -> P
 async def update_model(
     session: AsyncSession, model: ProviderModel, data: dict[str, Any]
 ) -> ProviderModel:
+    timeout_overrides = data.pop("text_timeout_overrides", None)
+    preserve_timeouts = data.pop("preserve_text_timeouts", False)
+    if timeout_overrides is not None or preserve_timeouts:
+        from app.services.text_model_policy_service import POLICY_KEY, TIMEOUT_KEYS
+
+        next_type = data.get("model_type", model.model_type)
+        if model.model_type != MODEL_TYPE_TEXT or next_type != MODEL_TYPE_TEXT:
+            raise ConflictError("等待时间例外规则只能用于文本模型")
+        if timeout_overrides is not None and (preserve_timeouts or data):
+            raise ConflictError("等待时间例外规则须单独保存")
+        current = model.default_params or {}
+        defaults = dict(data.get("default_params", current))
+        policy = dict(defaults.get(POLICY_KEY) or {})
+        for key in TIMEOUT_KEYS:
+            policy.pop(key, None)
+        source = timeout_overrides if timeout_overrides is not None else current.get(POLICY_KEY, {})
+        policy.update({key: source[key] for key in TIMEOUT_KEYS if source.get(key) is not None})
+        if policy:
+            defaults[POLICY_KEY] = policy
+        else:
+            defaults.pop(POLICY_KEY, None)
+        data["default_params"] = defaults
+    if model.model_type == MODEL_TYPE_VIDEO or data.get("model_type") == MODEL_TYPE_VIDEO:
+        from app.services.planning_capability_admin import lock_catalog
+
+        _, model = await lock_catalog(session, model.provider_id, model.id)
+        if model.model_type == MODEL_TYPE_VIDEO:
+            from app.services.video_version_service import capture
+            provider = await session.get(Provider, model.provider_id)
+            await capture(session, provider, model)
+    previous_flags = list(model.capabilities or [])
+    expected_video_config = data.pop("expected_video_config_fingerprint", None)
+    if expected_video_config is not None:
+        from app.services.video_configuration import fingerprint
+
+        if fingerprint(model) != expected_video_config:
+            raise ConflictError("视频配置已被更新，请刷新后再保存；当前修改未覆盖已有配置")
+    video_config = data.pop("video_config", None)
+    video_modes = data.pop("video_modes", None)
+    if video_config is not None:
+        if data.get("model_type", model.model_type) != MODEL_TYPE_VIDEO:
+            raise ConflictError("视频配置只能用于视频模型")
+        if video_modes is not None or data.get("default_params"):
+            raise ConflictError("视频设置请一次保存到视频配置，不能同时提交旧参数或规格")
+    if video_modes is not None and data.get("model_type", model.model_type) != MODEL_TYPE_VIDEO:
+        raise ConflictError("视频设置只能用于视频模型")
+    supplied_params = dict(data.get("default_params") or {})
     if "video_prompt_certifications" in data:
         if data["video_prompt_certifications"] != (model.video_prompt_certifications or {}):
             raise ConflictError("提示词认证须通过独立入口维护，普通模型编辑不能覆盖验收记录")
         data.pop("video_prompt_certifications")
     if "default_params" in data:
-        from app.services.audio_verification_service import KEY
-        saved_audio = (model.default_params or {}).get(KEY)
+        from app.services.audio_verification_service import KEY, CHECKS_KEY
+        from app.services.video_configuration import EVIDENCE_KEYS, projected_params
+
+        current_params = projected_params(model) if model.model_type == MODEL_TYPE_VIDEO else model.default_params or {}
+        if model.model_type == MODEL_TYPE_VIDEO:
+            for field in EVIDENCE_KEYS:
+                if field in data["default_params"] and data["default_params"][field] != current_params.get(field):
+                    raise ConflictError("普通模型编辑不能覆盖视频测试记录")
+                if field in current_params:
+                    data["default_params"][field] = current_params[field]
+        saved_audio = current_params.get(KEY)
         if KEY in data["default_params"] and data["default_params"][KEY] != saved_audio:
             raise ConflictError("普通编辑不能覆盖音频核验记录")
         if saved_audio is not None:
             data["default_params"] = {**data["default_params"], KEY: saved_audio}
+        saved_checks = current_params.get(CHECKS_KEY)
+        if CHECKS_KEY in data["default_params"] and data["default_params"][CHECKS_KEY] != saved_checks:
+            raise ConflictError("普通编辑不能覆盖音频检查记录")
+        if saved_checks is not None:
+            data["default_params"][CHECKS_KEY] = saved_checks
+        from app.services.audio_voice_catalog import KEY as CATALOG_KEY, validate_names
+        saved_catalog = current_params.get(CATALOG_KEY)
+        if CATALOG_KEY in data["default_params"] and data["default_params"][CATALOG_KEY] != saved_catalog:
+            raise ConflictError("普通编辑不能覆盖音色目录")
+        if saved_catalog is not None:
+            data["default_params"][CATALOG_KEY] = saved_catalog
+        validate_names(data["default_params"])
+        # Preserve legacy flags for frozen jobs; they no longer grant or deny access.
+        if model.model_type in {"tts", "audio"}:
+            for key in ("speech_verified", "music_verified"):
+                data["default_params"].pop(key, None)
+                if key in current_params:
+                    data["default_params"][key] = current_params[key]
         from app.services.episode_planning_capability import CONFIG_KEY
 
-        stored = (model.default_params or {}).get(CONFIG_KEY)
+        from app.services.video_configuration import projected_params
+
+        stored = projected_params(model).get(CONFIG_KEY)
         supplied = data["default_params"].get(CONFIG_KEY)
         if CONFIG_KEY in data["default_params"] and supplied != stored:
             raise ConflictError("规划规格须通过独立入口维护，普通默认参数不能覆盖验证记录")
@@ -345,6 +465,8 @@ async def update_model(
     if data.get("api_base_url") is not None:
         data["api_base_url"] = str(data["api_base_url"])
     next_type = data.get("model_type", model.model_type)
+    if model.model_type == MODEL_TYPE_VIDEO and next_type != MODEL_TYPE_VIDEO:
+        raise ConflictError("视频模型已有独立执行版本，请新建其他类型模型，不要更改模型类型")
     if (data.get("video_prompt_certifications", model.video_prompt_certifications)
             and next_type != MODEL_TYPE_VIDEO):
         raise ConflictError("视频提示词认证只能配置在视频模型上")
@@ -355,8 +477,14 @@ async def update_model(
             next_type, data.get("default_params", model.default_params)
         )
     routing = {"api_protocol", "api_base_url", "model_id", "model_type", "default_params", "capabilities"}
-    if any(key in data and data[key] != getattr(model, key) for key in routing):
-        await _assert_no_active_jobs(session, model.provider_id, model.id)
+    if video_config is not None or video_modes is not None or any(key in data and data[key] != getattr(model, key) for key in routing):
+        if model.model_type == MODEL_TYPE_VIDEO:
+            from app.services.planning_capability_admin import assert_no_active_planning
+
+            provider = await session.get(Provider, model.provider_id)
+            await assert_no_active_planning(session, provider, model)
+        else:
+            await _assert_no_active_jobs(session, model.provider_id, model.id)
     next_model_id = data.get("model_id")
     if next_model_id and next_model_id != model.model_id:
         exists = await session.scalar(
@@ -383,9 +511,41 @@ async def update_model(
         data["rate_limit_until"] = None
     for key, value in data.items():
         setattr(model, key, value)
-    if routing.intersection(data) or data.get("enabled") is True:
+    if video_config is not None or video_modes is not None or routing.intersection(data) or data.get("enabled") is True:
         provider = await session.get(Provider, model.provider_id)
         validate_model_protocol(provider, model, configuration=True)
+        from app.services.video_model_settings import synchronize
+
+        if video_config is not None:
+            from app.services.video_configuration import save_input
+
+            save_input(provider, model, video_config)
+        elif video_modes is None:
+            synchronize(provider, model, previous_flags, supplied_params)
+        else:
+            from app.services.video_model_settings import CONFIG_KEY, parse, route_identity, store
+
+            capability = parse({**route_identity(provider, model), "verification": "documented",
+                                "evidence": ["administrator-model-settings"], "modes": video_modes})
+            from app.services.video_configuration import projected_params
+
+            original = projected_params(model).get(CONFIG_KEY)
+            if original:
+                try:
+                    previous = parse(original)
+                except ConflictError:
+                    previous = None
+                if previous and previous.modes == capability.modes and all(
+                    getattr(previous, key) == value for key, value in route_identity(provider, model).items()
+                ):
+                    capability = previous
+            store(model, capability)
+    if model.model_type != MODEL_TYPE_VIDEO:
+        model.video_config = None
+    else:
+        from app.services.video_version_service import capture
+        provider = await session.get(Provider, model.provider_id)
+        await capture(session, provider, model)
     await session.flush()
     return model
 

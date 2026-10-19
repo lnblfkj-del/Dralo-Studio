@@ -9,7 +9,7 @@ import { getAISettings } from "@/api/providers";
 import { getEpisodeDialogueCues, getEpisodeJianyingDraftPreflight, getEpisodeProduction, getProject, getSegmentProductionPlan, listEpisodeEngineeringPackages, listEpisodeExportVersions, listEpisodeJianyingDraftPackages, listEpisodePremiereXmlPackages, listEpisodes, listScenes } from "@/api/projects";
 import { toErrorMessage } from "@/api/client";
 import { stableFingerprint } from "@/domain/episodeProductionDraft";
-import { effectiveVideoResolution, videoModelDefaultResolution, videoModelResolutions } from "@/domain/videoModelCapabilities";
+import { effectiveVideoResolution } from "@/domain/videoModelCapabilities";
 import { isTerminalVideoJob, segmentProductionPollInterval } from "@/domain/videoJobRecovery";
 import type { EpisodeDialogueCue, EpisodeDialogueCuePreview, EpisodeExportPreflight, EpisodeProductionPlan, EpisodeSoundCue } from "@/types/api";
 
@@ -79,7 +79,7 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
   const [segmentAttemptPlan, setSegmentAttemptPlan] = useState<EpisodeProductionPlan | null>(null);
   const [segmentAttemptId, setSegmentAttemptId] = useState<number | null>(null);
   const scriptBaseline = useRef<{ episodeId: number; revision: number; value: string } | null>(null);
-  const productionBaseline = useRef<{ episodeId: number; revision: number; value: string } | null>(null);
+  const productionBaseline = useRef<{ episodeId: number; revision: number; planId?: number; value: string } | null>(null);
   const requestedSegmentId = Number(searchParams.get("segment"));
   const initialSegmentId = Number.isSafeInteger(requestedSegmentId) && requestedSegmentId > 0 ? requestedSegmentId : null;
   const returnToCanvas = searchParams.get("return") === "canvas";
@@ -136,13 +136,15 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
     refetchInterval: (query) => isTerminalVideoJob(query.state.data) ? false : 1500,
   });
 
-  const effectiveModelId = videoModelId ?? production.data?.settings.video_model_id ?? aiSettings.data?.default_video_model_id ?? null;
+  const effectiveModelId = segmentPlan.data?.provider_model_id ?? videoModelId ?? production.data?.settings.video_model_id ?? aiSettings.data?.default_video_model_id ?? null;
   const effectiveModel = videoModels.find((item) => item.id === effectiveModelId);
+  const savedResolution = segmentPlan.data ? String(segmentPlan.data.parameters?.resolution ?? production.data?.settings.resolution ?? "")
+    : effectiveVideoResolution(production.data?.settings.resolution, effectiveModel);
   const productionDraftFingerprint = stableFingerprint({
     backgroundAudioId,
     backgroundAudioVolume,
     includeSubtitles,
-    outputResolution: effectiveVideoResolution(outputResolution, effectiveModel),
+    outputResolution: segmentPlan.data ? outputResolution : effectiveVideoResolution(outputResolution, effectiveModel),
     selectedAssetIds: [...selectedAssetIds].sort((left, right) => left - right),
     videoModelId: effectiveModelId,
     dialogueCues: dialogueCues.map(dialogueCueSettings),
@@ -221,16 +223,16 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
       backgroundAudioId: production.data.settings.background_audio_media_id,
       backgroundAudioVolume: Math.round(production.data.settings.background_audio_volume * 100),
       includeSubtitles: production.data.settings.include_subtitles,
-      outputResolution: effectiveVideoResolution(production.data.settings.resolution, effectiveModel),
+      outputResolution: savedResolution,
       selectedAssetIds: [...(production.data.settings.asset_ids ?? [])].sort((left, right) => left - right),
-      videoModelId: production.data.settings.video_model_id ?? effectiveModelId,
+      videoModelId: segmentPlan.data?.provider_model_id ?? production.data.settings.video_model_id ?? effectiveModelId,
       dialogueCues: serverDialogueCues.map(dialogueCueSettings),
       soundCues: (production.data.settings.sound_cues ?? []).map(soundCueSettings),
     });
     const previous = productionBaseline.current;
-    if (previous?.episodeId === episodeId && previous.revision === production.data.revision) return;
+    if (previous?.episodeId === episodeId && previous.revision === production.data.revision && previous.planId === segmentPlan.data?.id) return;
     const localChanged = previous?.episodeId === episodeId && productionDraftFingerprint !== previous.value;
-    productionBaseline.current = { episodeId, revision: production.data.revision, value: next };
+    productionBaseline.current = { episodeId, revision: production.data.revision, planId: segmentPlan.data?.id, value: next };
     if (localChanged && productionDraftFingerprint !== next) {
       setProductionConflictRevision(production.data.revision);
       return;
@@ -238,12 +240,12 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
     setBackgroundAudioId(production.data.settings.background_audio_media_id);
     setBackgroundAudioVolume(Math.round(production.data.settings.background_audio_volume * 100));
     setIncludeSubtitles(production.data.settings.include_subtitles);
-    setOutputResolution(effectiveVideoResolution(production.data.settings.resolution, effectiveModel));
+    setOutputResolution(savedResolution);
     setSelectedAssetIds(production.data.settings.asset_ids ?? []);
     setDialogueCues(serverDialogueCues);
     setSoundCues((production.data.settings.sound_cues ?? []).map(soundCueSettings));
     setProductionConflictRevision(null);
-  }, [aiSettings.isPending, effectiveModel, effectiveModelId, dialogueCuePreview.data, dialogueCuePreview.isPending, episodeId, production.data?.production_id, production.data?.revision, productionDraftFingerprint, segmentPlan.data, segmentPlan.isPending, videoModelId]);
+  }, [aiSettings.isPending, effectiveModel, effectiveModelId, savedResolution, dialogueCuePreview.data, dialogueCuePreview.isPending, episodeId, production.data?.production_id, production.data?.revision, productionDraftFingerprint, segmentPlan.data, segmentPlan.isPending, videoModelId]);
   useEffect(() => {
     if (videoModelId !== null || !production.data || aiSettings.isPending) return;
     const savedId = production.data?.settings.video_model_id;
@@ -256,12 +258,6 @@ export function useStoryboardVideoWorkspace() {  const { projectId: rawProjectId
     const enabledDefault = videoModels.find((model) => model.id === defaultId);
     if (enabledDefault) setVideoModelId(enabledDefault.id);
   }, [aiSettings.isPending, aiSettings.data?.default_video_model_id, production.data, videoModelId, videoModels]);
-  useEffect(() => {
-    const model = videoModels.find((item) => item.id === videoModelId);
-    const supported = videoModelResolutions(model);
-    if (!supported.length || supported.includes(outputResolution)) return;
-    setOutputResolution(videoModelDefaultResolution(model));
-  }, [aiSettings.data?.models, outputResolution, videoModelId]);
   useEffect(() => {
     if (directorPlannerModelId !== null) return;
     const preferred = aiSettings.data?.script_agent_text_model_id ?? aiSettings.data?.default_text_model_id;

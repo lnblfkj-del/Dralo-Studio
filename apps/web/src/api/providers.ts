@@ -1,5 +1,7 @@
 import { http } from "@/api/client";
 
+export type TextTimeoutOverrides = Partial<Record<"request_timeout_seconds" | "first_byte_timeout_seconds" | "stream_idle_timeout_seconds", number | null>>;
+
 export interface PriceQuote {
   quota?: {unit: string; amount: string | null; status: string; reason: string} | null;
   status: string;
@@ -9,12 +11,25 @@ export interface PriceQuote {
   pricing_version: string;
   estimated_cents: number | null;
 }
-export interface AudioVerification { required: boolean; ready: boolean; reason: string; model_called: boolean }
+export interface AudioVerification { required: boolean; ready: boolean; reason: string; model_called: boolean;
+  checks?: {connection: import('@/types/provider').AudioCheck; voices: import('@/types/provider').AudioCheck} }
 export async function getAudioVerification(providerId: number, modelId: number): Promise<AudioVerification> {
   return (await http.get(`/providers/${providerId}/models/${modelId}/audio-verification`)).data;
 }
-export async function verifyAudioAccount(providerId: number, modelId: number): Promise<AudioVerification> {
-  return (await http.post(`/providers/${providerId}/models/${modelId}/audio-verification`)).data;
+export async function verifyAudioAccount(providerId: number, modelId: number, check: 'connection' | 'voices' = 'connection'): Promise<AudioVerification> {
+  return (await http.post(`/providers/${providerId}/models/${modelId}/audio-verification`, undefined, {params: {check}})).data;
+}
+export interface AudioVoice {id: string; name: string; language?: string; category?: string; description?: string}
+export interface AudioVoiceCatalog {
+  status: 'unknown' | 'passed' | 'failed' | 'unsupported'; reason: string; items: AudioVoice[];
+  partial: boolean; synced_at?: string | null; model_called?: boolean;
+  last_sync?: {status: string; reason: string};
+}
+export async function getAudioVoices(providerId: number, modelId: number): Promise<AudioVoiceCatalog> {
+  return (await http.get(`/providers/${providerId}/models/${modelId}/voices`)).data;
+}
+export async function syncAudioVoices(providerId: number, modelId: number): Promise<AudioVoiceCatalog> {
+  return (await http.post(`/providers/${providerId}/models/${modelId}/voices/sync`)).data;
 }
 export async function estimateModelPrice(providerId: number, modelId: number, payload: {prompt: string; parameters: Record<string, unknown>}): Promise<PriceQuote> {
   return (await http.post<PriceQuote>(`/providers/${providerId}/models/${modelId}/estimate`, payload)).data;
@@ -111,7 +126,7 @@ export async function createProviderModel(
 export async function updateProviderModel(
   providerId: number,
   modelId: number,
-  payload: Partial<Pick<ProviderModel, "api_protocol" | "api_base_url" | "model_id" | "name" | "model_type" | "capabilities" | "default_params" | "pricing" | "max_concurrency" | "enabled" | "is_default">>,
+  payload: Partial<Pick<ProviderModel, "api_protocol" | "api_base_url" | "model_id" | "name" | "model_type" | "capabilities" | "default_params" | "pricing" | "max_concurrency" | "enabled" | "is_default">> & { preserve_text_timeouts?: boolean; text_timeout_overrides?: TextTimeoutOverrides; video_modes?: import("./planningCapabilities").PlanningMode[]; video_config?: import("@/types/provider").VideoConfigInput; expected_video_config_fingerprint?: string },
 ): Promise<ProviderModel> {
   return (await http.patch<ProviderModel>(`/providers/${providerId}/models/${modelId}`, payload)).data;
 }

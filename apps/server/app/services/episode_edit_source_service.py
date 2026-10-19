@@ -159,6 +159,9 @@ async def build_legacy_edit_projection(
         media = await session.get(MediaFile, media_id)
         if media is None or media.kind != kind or not await same_team(session, owner_id, media.owner_id):
             raise ValidationError("剪辑素材不存在、类型错误或无权使用")
+        if kind == "audio":
+            from app.services.audio_purpose import require_production_audio
+            require_production_audio(media)
         if media.project_id != episode.project_id:
             linked = await session.scalar(select(ProjectMediaLink.id).where(
                 ProjectMediaLink.project_id == episode.project_id,

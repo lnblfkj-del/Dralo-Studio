@@ -3,11 +3,21 @@
 from copy import deepcopy
 from typing import Any
 
+from app.core.errors import ConflictError
+
 
 def batch_prompt_context(context: dict[str, Any]) -> dict[str, Any]:
     episodes = deepcopy(context.get("episodes") or [])
+    if any("script" in row or "source_units" not in row for row in episodes):
+        raise ConflictError("资产拆解仅支持 V3 来源单元格式，请重新创建拆解任务")
     numbers = {int(row["number"]) for row in episodes}
-    fragments = {int(row["number"]): row["script"] for row in episodes if row.get("source_range")}
+    # Source units are exact, ordered slices; evidence stays fragment-scoped.
+    fragments = {
+        int(row["number"]): "".join(
+            unit["text"] for unit in row["source_units"]
+        )
+        for row in episodes if row.get("source_range")
+    }
     source = context.get("production_context") or {}
     episode_sources = [row for row in source.get("episodes") or []
                        if int(row.get("episode_number") or 0) in numbers]
@@ -67,4 +77,10 @@ def batch_prompt_context(context: dict[str, Any]) -> dict[str, Any]:
             for row in context["visual_asset_keys"]
             if set(row.get("episode_numbers") or []) & numbers
         ]
+    if context.get("asset_necessity_policy"):
+        result["asset_necessity_policy"] = deepcopy(context["asset_necessity_policy"])
+        result["candidate_reference_policy"] = (
+            "已有实体仅作身份与命名参考，不代表本批出场或必须生成媒体。"
+            "普通对白和设备/AI播报保留在script，不无条件建角色声音资产。"
+        )
     return result

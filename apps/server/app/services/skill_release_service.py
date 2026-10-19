@@ -102,54 +102,13 @@ async def release(session, instructions: dict[str, str], *, apply=False):
         row.skill_versions = new
         row.revision += 1
     await session.flush()
+    from app.services.skill_retention_service import retain_latest
+    await retain_latest(session, rows)
     return report
 
 
 async def rollback_release(session, *, apply=False):
-    published_ids = select(AgentSkillVersion.skill_id).where(
-        AgentSkillVersion.version == 2,
-        AgentSkillVersion.snapshot["professional_release"]["id"].as_string() == RELEASE_ID,
-    )
-    await session.execute(update(AgentSkill).where(AgentSkill.id.in_(published_ids)).values(version=AgentSkill.version))
-    rows = list(await session.scalars(select(AgentSkill)))
-    changes = []
-    receipts = {}
-    for row in rows:
-        published = await session.scalar(select(AgentSkillVersion).where(
-            AgentSkillVersion.skill_id == row.id, AgentSkillVersion.version == 2))
-        marker = published.snapshot.get("professional_release", {}) if published else {}
-        if marker.get("id") != RELEASE_ID:
-            continue
-        current = await session.scalar(select(AgentSkillVersion).where(
-            AgentSkillVersion.skill_id == row.id, AgentSkillVersion.version == row.version))
-        if current and current.snapshot.get("professional_rollback") == RELEASE_ID:
-            continue
-        expected = {k: v for k, v in published.snapshot.items() if k != "professional_release"}
-        if row.version != 2 or skill_snapshot(row) != expected:
-            raise ConflictError(f"{row.key} 发布后已修改，拒绝覆盖回退")
-        old = await session.scalar(select(AgentSkillVersion).where(
-            AgentSkillVersion.skill_id == row.id, AgentSkillVersion.version == marker["previous_version"]))
-        if old is None:
-            raise ConflictError("旧版本快照缺失")
-        changes.append((row, old.snapshot["instruction"]))
-        receipts.update({item["key"]: item for item in marker["bindings"]})
-    bindings = []
-    for key, receipt in receipts.items():
-        row = await session.scalar(select(BusinessExecutorSetting).where(BusinessExecutorSetting.key == key))
-        if row is None or row.revision != receipt["after_revision"] or row.skill_versions != receipt["after"]:
-            raise ConflictError(f"{key} 发布后已修改，拒绝覆盖回退")
-        bindings.append((row, receipt["before"]))
-    if apply:
-        for row, instruction in changes:
-            await _replace_instruction(session, row, instruction)
-            current = await session.scalar(select(AgentSkillVersion).where(
-                AgentSkillVersion.skill_id == row.id, AgentSkillVersion.version == row.version))
-            current.snapshot = {**current.snapshot, "professional_rollback": RELEASE_ID}
-        for row, before in bindings:
-            row.skill_versions = before
-            row.revision += 1
-        await session.flush()
-    return {"release_id": RELEASE_ID, "restored": [row.key for row, _ in changes], "applied": apply}
+    raise ConflictError("Skill 只保留最新版；旧版回退已停用。请从备份恢复为新版本，不能重新绑定旧版本。")
 
 
 async def release_character_ecosystem(session, instructions: dict[str, str], *, apply=False):
@@ -206,4 +165,6 @@ async def release_character_ecosystem(session, instructions: dict[str, str], *, 
         row.skill_versions = new
         row.revision += 1
     await session.flush()
+    from app.services.skill_retention_service import retain_latest
+    await retain_latest(session, rows)
     return report

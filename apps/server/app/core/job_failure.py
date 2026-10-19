@@ -103,6 +103,23 @@ def failure_detail(job: Any) -> dict[str, Any] | None:
     if code == "PROVIDER_CONTENT_BLOCKED":
         category, title, action = "provider", "模型渠道拦截了内容", "none"
         hint = "请核对请求内容与渠道规则。没有可恢复的有效脚本，系统不会自动重新调用或更换模型。"
+    if code == "ASSET_AUDIO_PREPARATION_BLOCKED":
+        category, title, action = "preparation", "声音批次尚未提交", "retry"
+        hint = "已保存视觉结果。修正原路由后可确认继续声音批次；将调用原任务模型并可能计费，不重新生成视觉范围。"
+    if code == "ASSET_EXECUTION_BLOCKED":
+        category, title, action = "configuration", "原资产拆解路由不可执行", "retry"
+        hint = "尚未调用模型。核对原模型、地址、协议和任务快照后再重试，不会改用当前默认模型。"
+    if (not saved and job.target_type == "script_asset_breakdown_batch"
+            and submission.get("status") == "submitted" and (code == "PROVIDER_OUTCOME_UNKNOWN" or category == "uncertain")):
+        category, action = "uncertain", "recall"
+        hint = "原请求结果或费用不明确。先核对渠道记录，确认未生成后才能明确确认重提，不会自动重发。"
+    if (saved and code in OUTPUT_ERRORS and job.target_type == "script_asset_breakdown_batch"
+            and (payload.get("parameters") or {}).get("asset_extraction_contract_version") in {2, 3}):
+        action = "recall"
+        hint = "已保存原始响应。确认后使用原模型及冻结策略，仅重新生成失败范围；截断范围会缩小，成功范围保留。使用新参数请新建提取方案。"
+    if saved and expired and job.target_type == "script_asset_breakdown_batch":
+        action = "recall"
+        hint = "已保存响应超过保留期限，不能本地恢复；需明确确认重新调用失败范围，可能再次计费。"
     if job.job_type != "text":
         action = "none"
     if (payload.get("resolution") or {}).get("status") in {"superseded", "replacement_pending"}:

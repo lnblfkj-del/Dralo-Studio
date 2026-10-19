@@ -44,6 +44,22 @@ class NativeAudioProvider:
                               headers={header: value}) as response,
             ):
                 if response.status_code != 200:
+                    if response.status_code in {400, 401, 403, 422}:
+                        from app.services.audio_verification_service import permission_error
+                        chunks, size = [], 0
+                        async for chunk in response.aiter_bytes():
+                            size += len(chunk)
+                            if size > 65536:
+                                break
+                            chunks.append(chunk)
+                        reason = None
+                        if size <= 65536:
+                            try:
+                                reason = permission_error(json.loads(b"".join(chunks)))
+                            except (ValueError, UnicodeError):
+                                pass
+                        raise GenerationFailedError(reason or f"音频生成被渠道拒绝（HTTP {response.status_code}），请检查模型、参数和生成权限",
+                            details={"audio_terminal_failure": True})
                     raise GenerationFailedError(f"音频渠道返回 HTTP {response.status_code}；未自动重发，请核对额度和账单")
                 size, chunks = 0, []
                 async for chunk in response.aiter_bytes():
@@ -66,6 +82,13 @@ class NativeAudioProvider:
         return payload
 
     async def generate_speech(self, *, model, prompt, parameters):
+        if self.protocol == "stepfun_gen":
+            return await self._post("/audio/generate", {
+                "model": model, "task": "text_to_audio", "response_format": "mp3",
+                "roles": [{"name": "角色", "description": parameters["voice_description"]}],
+                "scripts": [{"speaker": "角色", "text": prompt}],
+                "instruction": "仅生成指定角色的清晰独白，不添加背景音乐、音效或其他人物声音。",
+            })
         voice = parameters["voice"]
         if self.protocol == "stepfun_tts":
             return await self._post("/audio/speech", {
@@ -108,19 +131,31 @@ class NativeAudioProvider:
         return mp3_result(audio, provider_request_id=str(payload.get("trace_id") or "")[:255], **metadata)
 
     async def generate_music(self, *, model, prompt, parameters):
+        if self.protocol == "stepfun_gen":
+            return await self._post("/audio/generate", {
+                "model": model, "task": "text_to_audio", "response_format": "mp3",
+                "scripts": [{"text": "[" + prompt.strip() + "]"}],
+                "instruction": "只生成描述中的环境声音或音效，不朗读描述，不添加对白或背景音乐。",
+            })
         if self.protocol != "elevenlabs_music":
             raise ProviderError("异步音乐必须先提交任务并保存任务 ID，不能当作同步音频调用")
-        return await self._post("/music", {"model_id": model, "prompt": prompt,
-            "force_instrumental": True, "music_length_ms": parameters["music_length_ms"]},
+        return await self._post("/music", {"model_id": model, "prompt": parameters.get("music_prompt", prompt),
+            "force_instrumental": parameters.get("force_instrumental", True), "music_length_ms": parameters["music_length_ms"]},
             query={"output_format": "mp3_44100_128"})
 
     async def submit_music(self, *, model, prompt, parameters):
         if self.protocol != "stepfun_music":
             raise ProviderError("当前协议没有异步音乐提交接口")
-        payload = await self._post("/audio/music/submit", {
+        body = {
             "task": "text_to_music", "model_id": model, "caption": prompt,
-            "instrumental": True, "response_format": "mp3",
-        }, json_response=True)
+            "response_format": "mp3",
+        }
+        # The official song request omits instrumental; true explicitly requests no vocals.
+        if parameters.get("instrumental", True):
+            body["instrumental"] = True
+        elif parameters.get("lyrics"):
+            body["lyrics"] = parameters["lyrics"]
+        payload = await self._post("/audio/music/submit", body, json_response=True)
         task_id = payload.get("task_id")
         if not isinstance(task_id, str) or not task_id.strip() or len(task_id) > 255:
             raise GenerationFailedError("音乐提交未返回有效任务 ID；结果待核对，不自动重发")

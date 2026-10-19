@@ -54,11 +54,11 @@ export function VideoPromptCertificationDialog({ providerId, modelId, canManage,
     } catch (failure) { setError(toErrorMessage(failure)); }
     finally { inFlight.current = false; setBusy(false); }
   }
-  return <Dialog open title="提示词认证" size="large" busy={busy} dirty={dirty} onClose={onClose} footer={requestClose => <>
+  return <Dialog open title="视频测试记录" size="large" busy={busy} dirty={dirty} onClose={onClose} footer={requestClose => <>
     <Button icon={<RotateCcw size={16} />} disabled={busy} onClick={() => void reload()}>重新读取</Button>
     <Button icon={<Trash2 size={16} />} variant="danger" disabled={busy || !canManage || !state || !Object.keys(state.certifications).length} onClick={() => { setRevoke(true); setRevokeConfirmed(false); }}>撤销全部认证</Button>
     <Button onClick={requestClose} disabled={busy}>关闭</Button>
-    <Button icon={<Save size={16} />} variant="primary" disabled={busy || !canManage || !state || !dirty || !Object.keys(modes).length || state.certification_stale || (hasReal && !acknowledge)} onClick={() => void save()}>保存认证</Button>
+    <Button icon={<Save size={16} />} variant="primary" disabled={busy || !canManage || !state || !dirty || !Object.keys(modes).length || state.certification_stale || (hasReal && !acknowledge)} onClick={() => void save()}>保存记录</Button>
   </>}>
     {query.isLoading && <p role="status">正在读取提示词认证…</p>}
     {(error || query.error) && <p role="alert">{error || toErrorMessage(query.error)}</p>}

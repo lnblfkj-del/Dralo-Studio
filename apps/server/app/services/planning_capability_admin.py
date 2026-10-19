@@ -9,27 +9,21 @@ from sqlalchemy.orm import aliased
 
 from app.core.errors import ConflictError, ValidationError
 from app.models import Job, Provider, ProviderModel
-from app.providers.protocols import effective_protocol, validate_model_protocol
+from app.providers.protocols import validate_model_protocol
 from app.schemas.episode_planning import VideoCapability
 from app.services import provider_catalog_service as catalog
 from app.services.episode_planning_capability import CONFIG_KEY, load_capability
-from app.services.video_prompt_compiler import video_prompt_endpoint_fingerprint
-
-
-def route_identity(provider, model):
-    return {
-        "provider_model_id": model.id, "model_id": model.model_id,
-        "protocol": effective_protocol(provider, model),
-        "endpoint_fingerprint": video_prompt_endpoint_fingerprint(provider, model),
-    }
+from app.services.video_model_settings import route_identity, store
 
 
 def config_fingerprint(provider, model):
     value = {
         "route": route_identity(provider, model), "default_params": model.default_params,
+        "video_config": getattr(model, "video_config", None),
         "capabilities": model.capabilities, "pricing": model.pricing,
         "certifications": model.video_prompt_certifications,
         "model_type": model.model_type, "enabled": [provider.enabled, model.enabled],
+        "credential_fingerprint": hashlib.sha256(str(getattr(provider, "api_key_ciphertext", "")).encode()).hexdigest(),
     }
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                    separators=(",", ":"), allow_nan=False).encode()).hexdigest()
@@ -50,12 +44,15 @@ def parse_capability(raw):
 async def read_state(session, provider, model):
     if model.model_type != "video":
         raise ConflictError("规划规格只适用于视频模型")
-    raw = (model.default_params or {}).get(CONFIG_KEY)
+    from app.services.video_configuration import projected_params
+
+    raw = projected_params(model).get(CONFIG_KEY)
     capability = None
     try:
         if raw is not None:
             capability = parse_capability(raw).model_dump(mode="json")
-        await load_capability(session, model.id)
+        resolved = await load_capability(session, model.id)
+        capability = resolved.model_dump(mode="json")
         ready, reason = True, None
     except (ConflictError, ValidationError) as exc:
         ready, reason = False, exc.message
@@ -83,7 +80,8 @@ async def lock_catalog(session, provider_id, model_id):
 
 
 async def assert_no_active_planning(session, provider, model):
-    await catalog._assert_no_active_jobs(session, provider.id, model.id)
+    from app.services.provider_service import assert_no_active_jobs
+    await assert_no_active_jobs(session, provider.id, model.id, allow_versioned_video=True)
     child = aliased(Job)
     terminal = {"succeeded", "failed", "cancelled"}
     active_child = exists(select(child.id).where(child.parent_job_id == Job.id, child.status.not_in(terminal)))
@@ -110,6 +108,9 @@ async def save_capability(session, provider_id, model_id, payload):
         raise ValidationError("标记渠道实测前，请明确确认本模型当前路由的全部模式已经实测")
     validate_model_protocol(provider, model, configuration=True)
     await assert_no_active_planning(session, provider, model)
-    model.default_params = {**(model.default_params or {}), CONFIG_KEY: capability.model_dump(mode="json")}
+    from app.services.video_version_service import capture
+    await capture(session, provider, model)
+    store(model, capability)
+    await capture(session, provider, model)
     await session.flush()
     return await read_state(session, provider, model)

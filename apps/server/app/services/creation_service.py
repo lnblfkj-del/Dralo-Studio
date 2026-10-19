@@ -74,7 +74,6 @@ from app.services.creation_outline_service import (
 # 兼容导出：剧本研读与资产拆解
 from app.services.creation_breakdown_service import (
     _asset_breakdown_for_review,
-    _asset_breakdown_prompt,
     _refresh_asset_candidate_counts,
     acknowledge_formal_script_candidate_reviews,
     confirm_script_asset_breakdown,
@@ -173,7 +172,6 @@ __all__ = [
     "update_creation_artifact",
     # 剧本研读与资产拆解
     "_asset_breakdown_for_review",
-    "_asset_breakdown_prompt",
     "_refresh_asset_candidate_counts",
     "acknowledge_formal_script_candidate_reviews",
     "confirm_script_asset_breakdown",

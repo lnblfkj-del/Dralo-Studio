@@ -153,6 +153,8 @@ async def _accessible_audio(
         ))
         if linked is None:
             raise ConflictError(f"{label}音频尚未加入当前项目")
+    from app.services.audio_purpose import require_production_audio
+    require_production_audio(media)
     return media
 
 

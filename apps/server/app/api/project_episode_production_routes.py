@@ -5,6 +5,9 @@ from typing import Any
 from fastapi import APIRouter, status
 
 from app.api.deps import CurrentUser, EpisodeDep, SessionDep
+from app.api.segment_model_switch_routes import router as model_switch_router
+from app.api.segment_selected_video_routes import router as selected_video_router
+from app.api.segment_video_recovery_routes import router as video_recovery_router
 from app.schemas.job import JobOut
 from app.schemas.project import (
     EpisodeEngineeringPackagePreflightOut,
@@ -42,6 +45,10 @@ from app.services import (
 )
 
 router = APIRouter(tags=["projects"])
+
+router.include_router(selected_video_router)
+router.include_router(video_recovery_router)
+router.include_router(model_switch_router)
 
 
 @router.post(

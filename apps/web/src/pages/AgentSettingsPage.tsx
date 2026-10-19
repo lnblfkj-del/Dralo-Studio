@@ -449,8 +449,8 @@ export function AgentSettingsPage() {
           <ModelPolicy draft={draft} field="canvas_agent_text_model_id" type="text" label="文本模型" hint="理解指令、规划节点与生成文本" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_text_model_id: modelId })} />
           <ModelPolicy draft={draft} field="canvas_agent_image_model_id" type="image" label="图片模型" hint="生成与编辑画布图片素材" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_image_model_id: modelId })} />
           <ModelPolicy draft={draft} field="canvas_agent_video_model_id" type="video" label="视频模型" hint="从文本或图片生成视频素材" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_video_model_id: modelId })} />
-          <ModelPolicy draft={draft} field="canvas_agent_audio_model_id" type="audio" label="音频模型" hint="生成音乐、音效与其他音频素材" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_audio_model_id: modelId })} />
-          <ModelPolicy draft={draft} field="canvas_agent_tts_model_id" type="tts" label="声音生成模型" hint="把台词和旁白转换为可试听语音" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_tts_model_id: modelId })} />
+          <ModelPolicy draft={draft} field="canvas_agent_audio_model_id" type="audio" label="音乐模型" hint="根据描述生成纯器乐 BGM" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_audio_model_id: modelId })} />
+          <ModelPolicy draft={draft} field="canvas_agent_tts_model_id" type="tts" label="配音模型" hint="使用已有音色朗读台词和旁白" disabled={!canManage} onChange={(modelId) => setDraft({ ...draft, canvas_agent_tts_model_id: modelId })} />
         </div>
       </div>
       <div className="agent-config-section">

@@ -3,6 +3,7 @@
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from app.schemas.screenplay_voice import VoiceSource
 
 Key = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\S")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -132,9 +133,13 @@ class SourceUnit(Contract):
     kind: Literal["dialogue", "narration", "action", "sound", "music", "scene", "metadata"]
     text: str = Field(min_length=1, max_length=16000)
     speaker: Key | None = None
+    speaker_asset_ids: tuple[Annotated[int, Field(gt=0)], ...] = Field(default=(), exclude_if=lambda value: not value)
     spoken_text: str | None = Field(default=None, min_length=1, max_length=16000)
     scene_key: Key = "scene-1"
     source_lines: tuple[Annotated[int, Field(gt=0)], ...] = ()
+    voice_source: VoiceSource | None = Field(default=None, exclude_if=lambda value: value is None)
+    audio_kind: Literal["sound_effects", "ambience", "diegetic_music"] | None = Field(
+        default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def explicit_speaker(self) -> Self:

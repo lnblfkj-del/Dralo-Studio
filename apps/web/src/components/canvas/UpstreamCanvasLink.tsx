@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { http } from "@/api/client";
 import { privateStorageKey } from "@/utils/privateStorageKey";
 import { getMediaBlobUrl, uploadMedia } from "@/api/media";
+import { useConfirmation } from "@/components/ui/useConfirmation";
 
 type Input = {node_key:string;type:string;title:string;content:string;media_id:number|null;purpose:string};
 type Target = {node_key:string;type:string;title:string};
@@ -19,6 +20,7 @@ function Reference({item}:{item:Input}) {
 }
 
 export function UpstreamCanvasLink({frame,projectId,nodeId,runSaved,onDismiss}:{frame:RefObject<HTMLIFrameElement|null>;projectId:number;nodeId:string;runSaved:<T>(op:(revision:number)=>Promise<T>)=>Promise<T>;onDismiss:()=>void}) {
+  const confirmation=useConfirmation();
   const root=`/projects/${projectId}/canvas/nodes/${encodeURIComponent(nodeId)}/director-upstream`;
   const [context,setContext]=useState<{inputs:Input[];targets:Target[]}>({inputs:[],targets:[]});
   const [position,setPosition]=useState("current");
@@ -77,6 +79,7 @@ export function UpstreamCanvasLink({frame,projectId,nodeId,runSaved,onDismiss}:{
     finally{setBusy(false);}
   }
   return <aside className="upstream-canvas-link" aria-label="导演台画布联动">
+    {confirmation.dialog}
     <header><strong>画布联动</strong><button disabled={busy||hasPending} onClick={onDismiss}>收起</button></header>
     <p>上游内容只作拍摄参考，不自动摆场或把二维图转成模型。</p>
     <button disabled={busy} onClick={()=>void load()}>刷新连线参考</button>
@@ -88,7 +91,7 @@ export function UpstreamCanvasLink({frame,projectId,nodeId,runSaved,onDismiss}:{
     <label>写入目标<select disabled={busy||hasPending} value={target} onChange={e=>setTarget(e.target.value)}><option value="">新建关联{kind==="video"?"视频":"图片"}节点</option>{context.targets.filter(t=>t.type===kind).map(t=><option key={t.node_key} value={t.node_key}>{t.title} · {t.node_key}</option>)}</select></label>
     <p>这是白模参考素材，不是 AI 成片。不会调用付费模型；AI 生成仍在视频节点中预检并确认。</p>
     <button disabled={busy} onClick={()=>void write()}>{busy?"正在导出／回写…":hasPending?"重试回写":"导出并写入画布"}</button>
-    {hasPending&&!busy&&<button onClick={()=>{if(window.confirm("停止重试此回写？已上传素材会保留在项目媒体库，不会删除。")){pending.current=null;setHasPending(false);sessionStorage.removeItem(pendingKey);setError("");setMessage("已停止重试，素材仍保留，可重新导出。");}}}>停止重试，保留素材</button>}
+    {hasPending&&!busy&&<button onClick={()=>confirmation.ask("停止重试此回写？已上传素材会保留在项目媒体库，不会删除。",()=>{pending.current=null;setHasPending(false);sessionStorage.removeItem(pendingKey);setError("");setMessage("已停止重试，素材仍保留，可重新导出。");})}>停止重试，保留素材</button>}
     {message&&<p role="status">{message}</p>}{error&&<p role="alert">{error}</p>}
   </aside>;
 }

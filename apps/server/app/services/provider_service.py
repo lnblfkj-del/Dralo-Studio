@@ -275,6 +275,7 @@ async def get_canvas_agent_audio_model(
 
 
 async def list_model_options(session: AsyncSession) -> list[dict[str, Any]]:
+    from app.services.video_configuration import projected_params
     rows = (
         await session.execute(
             select(ProviderModel, Provider)
@@ -291,7 +292,7 @@ async def list_model_options(session: AsyncSession) -> list[dict[str, Any]]:
             "name": model.name,
             "model_type": model.model_type,
             "capabilities": model.capabilities,
-            "default_params": model.default_params or {},
+            "default_params": projected_params(model) if model.model_type == "video" else model.default_params or {},
             "enabled": model.enabled and provider.enabled,
         }
         for model, provider in rows
@@ -504,17 +505,35 @@ async def to_ai_settings_out(session: AsyncSession) -> dict[str, Any]:
 
 
 async def delete_model(session: AsyncSession, model: ProviderModel) -> None:
+    from app.services.planning_capability_admin import lock_catalog
+    _, model = await lock_catalog(session, model.provider_id, model.id)
+    from app.services.video_version_service import assert_deletable
+    await assert_deletable(session, model.provider_id, model.id)
     await assert_no_active_jobs(session, model.provider_id, model.id)
     await session.delete(model)
     await session.flush()
 
 
-async def assert_no_active_jobs(session, provider_id, model_id=None):
+async def assert_no_active_jobs(session, provider_id, model_id=None, *, allow_versioned_video=False):
     from app.models import Job
     from app.services.job_service import TERMINAL_STATUSES
     query = select(Job.id).where(Job.provider_id == provider_id, Job.status.not_in(TERMINAL_STATUSES))
     if model_id is not None:
         query = query.where(Job.payload["provider_model_id"].as_integer() == model_id)
+    if allow_versioned_video:
+        from sqlalchemy import or_, and_
+        query = query.where(or_(Job.job_type != "video", Job.payload["video_execution_version"]["id"].as_integer().is_(None)))
+        legacy = select(Job.id).where(Job.provider_id == provider_id, Job.job_type == "video",
+            Job.status.in_(["failed", "cancelled"]),
+            Job.payload["video_execution_version"]["id"].as_integer().is_(None),
+            Job.payload["video_submission"]["terminal_status"].as_string().is_(None),
+            or_(Job.payload["video_submission"]["id"].as_string().is_not(None),
+                Job.payload["video_submission"]["business_id"].as_string().is_not(None),
+                and_(Job.payload["video_submission"]["started"].as_boolean().is_(True))))
+        if model_id is not None:
+            legacy = legacy.where(Job.payload["provider_model_id"].as_integer() == model_id)
+        if await session.scalar(legacy.limit(1)):
+            raise ConflictError("存在尚未绑定版本的历史视频待恢复或提交结果不明，请先处理原任务；不能猜测原配置后改用新接法")
     if await session.scalar(query.limit(1)):
         raise ConflictError("该渠道或模型仍有排队/执行中的任务，请完成或取消后再修改路由配置或删除")
 
@@ -538,10 +557,12 @@ async def check_connection(provider: Provider) -> dict:
     base_url = effective_base_url(provider)
     host = urlsplit(base_url).hostname or "未知主机"
     last_error: httpx.HTTPError | None = None
+    permission_message = None
     probe_path = (
         "/v2/query/video_generation?page_num=1&page_size=1"
         if protocol == "minimax_video_v2" else "/get_voice"
-        if protocol == "minimax_audio_subscription" else "/models"
+        if protocol == "minimax_audio_subscription" else "/tags"
+        if protocol == "ollama_chat" else "/models"
     )
     for attempt in range(2):
         try:
@@ -552,6 +573,20 @@ async def check_connection(provider: Provider) -> dict:
                     **({"json": {"voice_type": "system"}} if protocol == "minimax_audio_subscription" else {}),
                 ) as response:
                     status = response.status_code
+                    if protocol.startswith("elevenlabs_") and status in {401, 403}:
+                        from app.services.audio_verification_service import permission_error
+                        import json
+                        chunks, size = [], 0
+                        async for chunk in response.aiter_bytes():
+                            size += len(chunk)
+                            if size > 65536:
+                                break
+                            chunks.append(chunk)
+                        if size <= 65536:
+                            try:
+                                permission_message = permission_error(json.loads(b"".join(chunks)))
+                            except (ValueError, UnicodeError):
+                                pass
             break
         except httpx.HTTPError as exc:
             last_error = exc
@@ -593,7 +628,7 @@ async def check_connection(provider: Provider) -> dict:
     if protocol == "minimax_video_v2" and status == 200:
         message = "MiniMax H3 V2 只读查询已通过；不代表生成权限、价格或素材输入已验收"
     if status in {401, 403}:
-        message = "端点已响应，但凭证或访问权限被拒绝"
+        message = permission_message or "端点已响应，但凭证或访问权限被拒绝"
     elif status == 404:
         message = "网络可达，但模型列表路径不存在；请核对协议及 Base URL"
     elif 300 <= status < 400:
@@ -632,6 +667,8 @@ async def test_provider_model(
 
     if model.model_type == MODEL_TYPE_TEXT:
         from app.services import billing_service
+        if hasattr(adapter, "validate_text_parameters"):
+            adapter.validate_text_parameters(parameters)
         call_id = await billing_service.begin_test(owner_id, provider, model, prompt, parameters) if owner_id is not None else None
         try:
             result = await text_model_policy_service.execute(

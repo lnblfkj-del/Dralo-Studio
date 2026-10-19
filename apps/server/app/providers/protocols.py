@@ -8,10 +8,18 @@ from app.providers.video_contracts import VIDEO_CONTRACTS
 from app.providers.audio_contracts import AUDIO_PROTOCOLS, validate_audio_model
 
 PROTOCOL_CATALOG = [
+    {"id": "stepfun_gen", "name": "StepFun 参考声线生成", "model_types": ["tts"], "default_path": "/v1",
+     "note": "stepaudio-3-gen-preview；声线描述与试听文本生成参考声音，无需音色 ID。"},
+    {"id": "custom_video", "name": "自定义视频接法", "model_types": ["video"], "default_path": "",
+     "note": "使用已导入的JSON接法映射，保存和检查不发起生成；特殊签名接法需独立适配器。"},
+    {"id": "openai_responses", "name": "Responses 文本接口", "model_types": ["text"], "default_path": "",
+     "note": "显式 /responses，服务前缀须按渠道填写（可为根地址或 /v1）；非流式单次请求。text.format 需验收，不自动回退 Chat 或猜测前缀。"},
+    {"id": "ollama_chat", "name": "Ollama 原生文本", "model_types": ["text"], "default_path": "/api",
+     "note": "显式 /api/chat，非流式；format JSON/Schema。服务和模型能力需单独验收，不是 OpenAI 兼容入口。"},
     {"id": "stepfun_tts", "name": "StepFun 原生配音", "model_types": ["tts"], "default_path": "/v1",
      "note": "预设音色、MP3；最多 1000 字符。3 / 2.5 TTS 支持 instruction；括号内容需先核对。音色权限须单独验收。"},
-    {"id": "stepfun_music", "name": "StepFun 原生纯音乐（待实测）", "model_types": ["audio"], "default_path": "/v1",
-     "note": "独立 submit/query，纯器乐；无法精确指定时长。画布及持久查询/保存恢复已接入，真实媒体验收及资产库入口待完成。"},
+    {"id": "stepfun_music", "name": "StepFun 原生音乐", "model_types": ["audio"], "default_path": "/v1",
+     "note": "独立 submit/query；支持纯音乐与歌曲，歌词可选，留空自动作词。无法精确指定时长；真实生成权限与费用以渠道为准。"},
     {"id": "minimax_audio_subscription", "name": "MiniMax Audio API Subscription（配音）", "model_types": ["tts"], "default_path": "/v1",
      "note": "独立 t2a_v2、Bearer 鉴权、预设音色和 MP3 Hex 输出；订阅是额度，不等于免费或音乐权限，不使用 Coding Plan 密钥。"},
     {"id": "elevenlabs_tts", "name": "ElevenLabs API Subscription（配音）", "model_types": ["tts"], "default_path": "/v1",
@@ -67,6 +75,10 @@ def effective_base_url(provider, model=None):
     if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
         raise ConflictError("Base URL 只允许 HTTP(S) 服务地址，不得包含凭证、查询参数或片段")
     protocol = effective_protocol(provider, model)
+    if protocol == "openai_responses" and parsed.path.endswith(("/responses", "/chat/completions")):
+        raise ConflictError("Responses Base URL 请填写服务前缀，不带具体 /responses 或 Chat 端点")
+    if protocol == "ollama_chat" and parsed.path and not parsed.path.endswith("/api"):
+        raise ConflictError("Ollama 原生 Base URL 使用根地址或 /api 前缀，不是 /v1 兼容入口")
     if protocol in AUDIO_PROTOCOLS:
         hosts = ({"api.stepfun.com"} if protocol.startswith("stepfun_") else
                  {"api.minimax.io", "api.minimax.cn"} if protocol == "minimax_audio_subscription" else
@@ -137,6 +149,10 @@ def execution_contract(provider, model):
                 "protocol": effective_protocol(provider, model), "base_url": effective_base_url(provider, model)}
     if model.model_type == "video" and contract["protocol"] in VIDEO_CONTRACTS:
         contract["video_protocol_version"] = VIDEO_CONTRACTS[contract["protocol"]]
+    if model.model_type == "video" and contract["protocol"] == "custom_video":
+        from app.providers.video_integrations import resolve_video_integration
+
+        contract["video_protocol_version"] = resolve_video_integration(provider, model).version
     if contract["protocol"] in AUDIO_PROTOCOLS:
         contract["audio_protocol_version"] = AUDIO_PROTOCOLS[contract["protocol"]]["version"]
         from app.services.audio_verification_service import config_fingerprint
@@ -148,5 +164,12 @@ async def model_confirmation_token(session, model):
     from app.models import Provider
     from app.services.canvas_generation_service import fingerprint
     provider = await session.get(Provider, model.provider_id)
-    return fingerprint([model.model_id, model.default_params, model.capabilities, model.pricing,
-                        execution_contract(provider, model), provider.enabled, model.enabled])
+    defaults = model.default_params
+    if model.model_type in {"tts", "audio"}:
+        from app.providers.audio_contracts import AUDIO_METADATA_KEYS
+        defaults = {key: value for key, value in defaults.items() if key not in AUDIO_METADATA_KEYS}
+    values = [model.model_id, defaults, getattr(model, "video_config", None), model.capabilities, model.pricing,
+              execution_contract(provider, model), provider.enabled, model.enabled]
+    if model.model_type == "video":
+        values.append(fingerprint(getattr(provider, "api_key_ciphertext", "")))
+    return fingerprint(values)

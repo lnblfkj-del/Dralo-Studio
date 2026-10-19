@@ -170,6 +170,8 @@ export interface AssetAudioRequest {
   parameters: Record<string, unknown>;
   request_id: string;
   expected_revision: number;
+  audio_purpose?: 'voice_reference'|'dialogue_audio'|'music'|'ambience'|'sfx';
+  voice_description?: string;
 }
 
 export async function generateAssetAudio(projectId: number, assetId: number, payload: AssetAudioRequest) {

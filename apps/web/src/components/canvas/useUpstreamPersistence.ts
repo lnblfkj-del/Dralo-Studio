@@ -4,10 +4,12 @@ import { useCanvasStore } from "@/stores/canvasStore";
 import type { CanvasSnapshot } from "@/types/api";
 import { hydrateOriginal, synchronizeOriginal, type OriginalState } from "./upstreamResources";
 import { otherUpstreamDrafts, upstreamDraftKey } from "./upstreamDrafts";
+import { useConfirmation } from "@/components/ui/useConfirmation";
 
 type Document = {revision: number; state: OriginalState | null};
 type Save = {expected_revision: number; request_id: string; state: OriginalState};
 export function useUpstreamPersistence(frame: RefObject<HTMLIFrameElement | null>, projectId: number, nodeId: string, onClose: () => void) {
+  const confirmation = useConfirmation();
   const [notice, setNotice] = useState("正在读取工程…");
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
@@ -133,8 +135,9 @@ export function useUpstreamPersistence(frame: RefObject<HTMLIFrameElement | null
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function reloadServer() {
-    if (!window.confirm("重新载入将放弃未同步修改。请先下载草稿。确定继续？")) return;
-    runtime.current.pending = null; localStorage.removeItem(draftKey); localStorage.removeItem(`${draftKey}:local`); await boot(true);
+    confirmation.ask("重新载入将放弃未同步修改。请先下载草稿。确定继续？", () => {
+      runtime.current.pending = null; localStorage.removeItem(draftKey); localStorage.removeItem(`${draftKey}:local`); void boot(true);
+    });
   }
   async function recoverDraft(key: string) {
     if (!recoveryDrafts.includes(key)) return;
@@ -186,5 +189,5 @@ export function useUpstreamPersistence(frame: RefObject<HTMLIFrameElement | null
       callbacks.current.clear(); urls.current.forEach(url => URL.revokeObjectURL(url)); urls.current.clear();
     };
   }, [instance]);
-  return {boot: () => boot(), save: () => save(true), close, ready, notice, error, downloadDraft, reloadServer, recoveryDrafts, recoverDraft, readServer: () => boot(true), runSaved, exporting};
+  return {boot: () => boot(), save: () => save(true), close, ready, notice, error, downloadDraft, reloadServer, recoveryDrafts, recoverDraft, readServer: () => boot(true), runSaved, exporting, confirmationDialog: confirmation.dialog};
 }

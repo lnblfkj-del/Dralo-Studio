@@ -9,9 +9,18 @@ class StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
 
 
+class SpeechBinding(StrictContract):
+    provider_model_id: int = Field(gt=0)
+    voice: str = Field(min_length=1, max_length=255)
+    account_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
 class AssetProfile(StrictContract):
     aliases: list[str] = Field(default_factory=list, max_length=30)
     character_role: Literal["lead", "supporting", "extra", "unclassified"] = "unclassified"
+    character_form: Literal["single", "fixed_group", "crowd"] = "single"
+    group_label: str | None = Field(default=None, max_length=200)
+    group_size: int | None = Field(default=None, ge=2, le=100000)
     character_asset_id: int | None = Field(default=None, ge=1)
     age: str | None = Field(default=None, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
@@ -26,6 +35,7 @@ class AssetProfile(StrictContract):
     audio_usage: Literal["voice", "music", "ambience", "sfx", "unclassified"] = "unclassified"
     language: str | None = Field(default=None, max_length=40)
     voice_id: str | None = Field(default=None, max_length=200)
+    speech_preset: SpeechBinding | None = None
     location: str | None = Field(default=None, max_length=1000)
     time_of_day: str | None = Field(default=None, max_length=200)
     weather: str | None = Field(default=None, max_length=500)
@@ -44,6 +54,16 @@ class AssetProfile(StrictContract):
     pace: str | None = Field(default=None, max_length=500)
     accent: str | None = Field(default=None, max_length=500)
     story_state: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_group(self):
+        if "character_form" not in self.model_fields_set:
+            return self
+        if self.character_form == "single" and (self.group_label or self.group_size is not None):
+            raise ValueError("单人角色不能设置群体人数或称呼")
+        if self.character_form == "fixed_group" and (self.group_size is None or self.group_size > 12):
+            raise ValueError("固定小组须设置2至12人的明确人数；更大群体使用背景人群")
+        return self
 
 
 class ProductionSource(StrictContract):
@@ -144,6 +164,7 @@ class AdoptedMedia(StrictContract):
     media_file_id: int
     kind: str
     origin: Literal["explicit", "legacy_final"]
+    audio_purpose: Literal["voice_reference", "dialogue_audio", "music", "ambience", "sfx", "unclassified"] | None = None
 
 
 class AssetProductionContext(StrictContract):

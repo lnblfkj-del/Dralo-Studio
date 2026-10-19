@@ -22,6 +22,7 @@ export function AssetConfirmDialog({
 
   return <Dialog
     open
+    purpose="confirmation"
     title={title}
     description="此操作不可撤销。"
     size="small"

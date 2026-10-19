@@ -18,7 +18,7 @@ export function SegmentUnmatchedAssets({ refs, bindings, disabled, onChange }: {
         onChange({ ...refs, unmatched_assets: names.filter((value) => value !== name),
           manual_asset_matches: [...(Array.isArray(refs.manual_asset_matches) ? refs.manual_asset_matches : []), { name, asset_id: assetId }] });
       }}>
-        <option value="">{options.length ? "选择已绑定素材" : "请先绑定资产视图"}</option>
+        <option value="">{options.length ? "选择已引用资产" : "请先从左侧引用对应资产"}</option>
         {options.map((item) => <option key={Number(item.asset_id)} value={Number(item.asset_id)}>{String(item.asset_name)}</option>)}
       </select>
     </label>

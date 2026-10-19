@@ -90,6 +90,8 @@ export interface EpisodeProduction {
   script_dependency_status: "unconfirmed" | "current" | "stale";
   script_stale_reason: string | null;
   scene_count: number;
+  character_count?: number;
+  scene_asset_count?: number;
   shot_count: number;
   ready_shot_count: number;
   failed_shot_count: number;
@@ -353,12 +355,20 @@ export interface SegmentPlanAdjustInput {
 }
 
 export interface SegmentLifecycleInput {
-  operation: "add" | "copy" | "archive" | "restore" | "insert_before" | "insert_after" | "delete";
+  operation: "add" | "copy" | "archive" | "restore" | "insert_before" | "insert_after";
   expected_production_revision: number;
   confirmed: true;
   segment_id: number;
   shot_ids?: number[];
   title?: string | null;
+}
+
+export interface SegmentDeleteInput {
+  request_id: string;
+  expected_plan_id: number;
+  expected_production_revision: number;
+  confirmed: true;
+  segment_ids: number[];
 }
 
 export interface SegmentContinuityReport {
@@ -428,18 +438,27 @@ export interface EpisodeProductionPlan {
     } | null;
     sound_input?: {
       bindings: Array<{ asset_id?: number; asset_version_id?: number; media_file_id?: number; role?: string }>;
-      delivery: "none" | "postproduction_evidence";
+      delivery: "none" | "postproduction_evidence" | "reference_audio_planned";
       native_audio_generation: boolean;
       native_audio_status?: "always_on" | "optional" | "unsupported" | "unverified" | "legacy";
       audio_policy?: { background_music?: boolean | null; capability?: { warning?: string } };
       voice_guidance?: {
         schema_version: "segment_voice_guidance.v1";
         prompt_text: string;
+        audio_reference?: {
+          fingerprint: string;
+          references: Array<{ media_file_id: number; index: number; duration: number }>;
+          speakers: Array<{
+            speaker_asset_id: number; speaker_name: string;
+            delivery: "text_only" | "audio_reference_planned";
+            reason: string; audio_index?: number; media_file_id?: number;
+          }>;
+        };
         entries: Array<{
           speaker_asset_id: number;
           speaker_name: string;
           voice_asset_id: number | null;
-          source: "voice_asset_description" | "character_voice_description" | "model_choice" | "postproduction";
+          source: "voice_asset_description" | "character_voice_description" | "model_choice" | "postproduction" | "group_speech";
           description: string;
           lines: Array<{ shot_id?: number; text: string; tone: string }>;
         }>;

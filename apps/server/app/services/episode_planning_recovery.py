@@ -16,16 +16,16 @@ from app.services.job_query_service import get_job
 from app.services.job_text_response_service import reprocess_preserved_response
 
 
-async def _parent(session, run_id, actor_id):
+async def _parent(session, run_id, actor_id, *, lock_writes=True):
     parent = await get_job(session, run_id, actor_id)
     if parent.target_type != workflow.TARGET_RUN:
         raise ConflictError("不是当前内容规划任务")
-    return await workflow._lock_parent(session, parent.id)
+    return await workflow._lock_parent(session, parent.id) if lock_writes else parent
 
 
 async def preview(session, run_id: int, actor_id: int) -> dict:
-    parent = await _parent(session, run_id, actor_id)
-    await workflow.validate_context(session, parent)
+    parent = await _parent(session, run_id, actor_id, lock_writes=False)
+    await workflow.validate_context(session, parent, lock_writes=False)
     children = await workflow.current_children(session, parent)
     failed = []
     for child in children:

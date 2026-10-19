@@ -21,15 +21,7 @@ async def edit_timeline(session, episode, current, *, operation, segment_id, tit
     index = next((i for i, item in enumerate(current["segments"]) if item["id"] == segment_id), None)
     if index is None and items:
         raise NotFoundError("要操作的片段不属于当前活动计划")
-    if operation == "delete":
-        if index is None:
-            raise NotFoundError("要删除的片段不存在")
-        removed = items[index]
-        if any(((item.get("refs") or {}).get("continuity") or {}).get("source_lineage_key") == removed["lineage_key"] for item in items):
-            raise ConflictError("其他片段引用了该片段尾帧，请先解除连续帧依赖")
-        excluded.update(removed["shot_ids"])
-        del items[index]
-    elif operation in {"insert_before", "insert_after"}:
+    if operation in {"insert_before", "insert_after"}:
         if len(items) >= 100:
             raise ValidationError("每集最多100个片段")
         model = await session.get(ProviderModel, model_id) if model_id else None

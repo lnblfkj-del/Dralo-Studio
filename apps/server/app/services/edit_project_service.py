@@ -203,6 +203,8 @@ async def save_edit_project(
             )
             if result.rowcount != 1:
                 raise ConflictError("剪辑工程已变化，请保留本地修改并重新核对")
+            from app.services.project_audio_library import pin_verified_audio_sources
+            await pin_verified_audio_sources(session, project_id, document)
             await session.refresh(row)
             output = project_output(row)
             session.add(
@@ -300,6 +302,9 @@ async def create_edit_project(
         async with session.begin_nested():
             session.add(row)
             await session.flush()
+            if document is not None:
+                from app.services.project_audio_library import pin_verified_audio_sources
+                await pin_verified_audio_sources(session, project_id, document)
     except IntegrityError:
         existing = await session.scalar(query)
         if existing is None:

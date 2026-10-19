@@ -1,11 +1,17 @@
 import type { AgentRouteResolution } from "./agent";
 
 export type ProviderModelType = "text" | "image" | "video" | "audio" | "tts" | "embedding";
-export type ProviderProtocol = "stepfun_tts" | "stepfun_music" | "minimax_audio_subscription" | "elevenlabs_tts" | "elevenlabs_music" | "meaicc_video_images" | "meaicc_video" | "openai_compatible" | "google_gemini" | "anthropic_messages" | "newapi" | "sora_compatible" | "dashscope_video_t2v" | "dashscope_video_i2v" | "ark_video_t2v" | "ark_video_images" | "jimeng_video_first_last" | "jimeng_video_t2v" | "jimeng_video_pro" | "kling_video_t2v" | "kling_video_i2v" | "kling_video_multi_image";
+export type ProviderProtocol = "stepfun_gen" | "custom_video" | "stepfun_tts" | "stepfun_music" | "minimax_audio_subscription" | "elevenlabs_tts" | "elevenlabs_music" | "meaicc_video_images" | "meaicc_video" | "openai_compatible" | "google_gemini" | "anthropic_messages" | "newapi" | "sora_compatible" | "dashscope_video_t2v" | "dashscope_video_i2v" | "ark_video_t2v" | "ark_video_images" | "jimeng_video_first_last" | "jimeng_video_t2v" | "jimeng_video_pro" | "kling_video_t2v" | "kling_video_i2v" | "kling_video_multi_image";
 export interface ProtocolDefinition { id: ProviderProtocol; name: string; model_types: ProviderModelType[]; default_path: string; note: string }
 
 export interface ProviderModel {
-  audio_verification?: {required: boolean; ready: boolean; reason: string} | null;
+  video_config_fingerprint?: string | null;
+  video_config?: (Omit<VideoConfigInput, "specification"> & { specification: VideoConfigInput["specification"] | null;
+    pending_settings?: Record<string, unknown> }) | null;
+  audio_verification?: {required: boolean; ready: boolean; reason: string; checks?: {connection: AudioCheck; voices: AudioCheck}} | null;
+  audio_voices?: Array<{id: string; name: string}> | null;
+  audio_catalog_voices?: Array<{id: string; name: string; description?: string; language?: string}> | null;
+  audio_voice_scope?: string | null;
   api_protocol?: ProviderProtocol | null;
   api_base_url?: string | null;
   id: number;
@@ -26,6 +32,23 @@ export interface ProviderModel {
   is_default: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AudioCheck {
+  status: 'unknown' | 'unsupported' | 'passed' | 'failed';
+  reason: string;
+  checked_at?: string | null;
+  missing?: string[];
+  authentication_failed?: boolean;
+}
+
+export interface VideoConfigInput {
+  schema_version: "video-model.v1";
+  integration?: Record<string, unknown> | null;
+  specification: { modes: import("@/api/planningCapabilities").PlanningMode[]; supports_negative_prompt?: boolean | null };
+  generation_defaults: Record<string, unknown>;
+  planning_policy: Record<string, unknown>;
+  transport_params: Record<string, unknown>;
 }
 
 export interface ProviderModelTestInput {
@@ -63,6 +86,7 @@ export interface Provider {
 }
 
 export interface ProviderInput {
+  credential_action?: "new_account" | "rotate";
   name: string;
   protocol?: ProviderProtocol;
   base_url: string;

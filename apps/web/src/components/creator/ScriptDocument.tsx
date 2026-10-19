@@ -11,9 +11,12 @@ import { useDraftBlocker } from "../DraftGuard";
 import { QueryState } from "../workbench/QueryState";
 import { Icon } from "./Icon";
 import { Dialog } from "@/components/ui";
+import { ScriptSourceReview } from "./ScriptSourceReview";
+import { revealEditorLine, sourceLineRange } from "./scriptSourceLocation";
+import type { SourceIssue } from "@/api/screenplaySources";
 
-function ScriptModal({ title, wide = false, onClose, children }: { title: string; wide?: boolean; onClose: () => void; children: ReactNode }) {
-  return <Dialog open className="script-dialog" title={title} size={wide ? "large" : "medium"} closeLabel={`关闭${title}`} onClose={onClose}>{children}</Dialog>;
+function ScriptModal({ title, wide = false, onClose, children, confirmation = false }: { title: string; wide?: boolean; confirmation?: boolean; onClose: () => void; children: ReactNode }) {
+  return <Dialog open purpose={confirmation ? "confirmation" : "content"} className="script-dialog" title={title} size={wide ? "large" : "medium"} closeLabel={`关闭${title}`} onClose={onClose}>{children}</Dialog>;
 }
 
 interface ScriptOptimizationProposal {
@@ -24,7 +27,7 @@ interface ScriptOptimizationProposal {
   source_revision: number;
 }
 
-export function ScriptDocument({ projectId, episode }: { projectId: number; episode: Episode }) {
+export function ScriptDocument({ projectId, episode, sourceTarget }: { projectId: number; episode: Episode; sourceTarget?: { source_line?: number | null; script_revision?: number | null } | null }) {
   const client = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -42,10 +45,35 @@ export function ScriptDocument({ projectId, episode }: { projectId: number; epis
   const [history, setHistory] = useState(false);
   const [discard, setDiscard] = useState(false);
   const [message, setMessage] = useState("");
+  const [highlight, setHighlight] = useState<{ start: number; end: number } | null>(null);
+  const highlightRef = useRef<HTMLElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   const [optimizationJob, setOptimizationJob] = useState<Job | null>(null);
   const [proposal, setProposal] = useState<ScriptOptimizationProposal | null>(null);
   const committed = useRef(false);
   const dirty = editing && draft !== original;
+  const locate = (issue: Pick<SourceIssue, "start" | "end" | "text">, sourceRevision: number) => {
+    if (sourceRevision !== episode.script_revision || script.slice(issue.start, issue.end) !== issue.text) {
+      setMessage("正文版本已变化，请刷新核对后定位。"); return;
+    }
+    if (editing && (draft !== script || revision !== sourceRevision)) {
+      setMessage("当前有未保存或旧版本草稿，先保存或退出编辑后定位；输入内容已保留。"); return;
+    }
+    setExpanded(true); setHighlight({ start: issue.start, end: issue.end });
+  };
+  useEffect(() => {
+    setHighlight(null);
+    if (!sourceTarget?.source_line) return;
+    const range = sourceLineRange(script, sourceTarget.source_line);
+    if (range) locate(range, sourceTarget.script_revision ?? -1);
+  }, [sourceTarget, episode.id, episode.script_revision]);
+  useEffect(() => {
+    if (!highlight) return;
+    if (editing && editorRef.current && draft === script) revealEditorLine(editorRef.current,
+      script.slice(0, highlight.start).replace(/\r\n?/g, "\n").length,
+      script.slice(0, highlight.end).replace(/\r\n?/g, "\n").length);
+    else if (!editing) highlightRef.current?.scrollIntoView?.({ block: "center" });
+  }, [highlight, expanded, editing]);
   const refresh = () => Promise.all([
     client.invalidateQueries({ queryKey: ["workbench", projectId] }),
     client.invalidateQueries({ queryKey: ["outline", projectId, "episodes"] }),
@@ -120,16 +148,18 @@ export function ScriptDocument({ projectId, episode }: { projectId: number; epis
       <div className="script-document-heading"><span className="manuscript-kicker">SCREENPLAY / EP {String(episode.number).padStart(2, "0")}</span><button className="script-version-button" disabled={editing} title={editing ? "请先保存或退出编辑，再查看历史" : "查看和恢复已保存的剧本"} onClick={() => setHistory(true)}>V{episode.script_revision} · 版本历史</button></div>
       <h1>{episode.title || `第 ${episode.number} 集`}</h1>
       {episode.synopsis && <p className="manuscript-synopsis">{episode.synopsis}</p>}
+      {!!script && <ScriptSourceReview projectId={projectId} episodeId={episode.id} revision={episode.script_revision} editing={editing} onLocate={locate} />}
+      {editing && message && <p className="script-save-message" role="status">{message}</p>}
       {editing ? <form onSubmit={(event) => { event.preventDefault(); if (dirty && !save.isPending) save.mutate(); }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); if (dirty && !save.isPending && !confirming) save.mutate(); } }}>
         <div className="script-edit-label"><label htmlFor={`script-${episode.id}`}>剧本正文</label><span>每次保存，留下一份版本</span></div>
         {episode.script_revision !== revision && <p className="script-conflict" role="alert">服务器已有 V{episode.script_revision}。当前输入仍保留，请先下载草稿，再退出编辑查看最新内容。</p>}
-        <textarea id={`script-${episode.id}`} className="script-editor" autoFocus value={draft} maxLength={100000} disabled={save.isPending || confirming} placeholder="写下场景、人物动作和对白，让故事从这里开始……" onChange={(event) => setDraft(event.target.value)} />
+        <textarea ref={editorRef} id={`script-${episode.id}`} className="script-editor" autoFocus value={draft} maxLength={100000} disabled={save.isPending || confirming} placeholder="写下场景、人物动作和对白，让故事从这里开始……" onChange={(event) => setDraft(event.target.value)} />
         <label className="script-version-note"><span>版本备注 <small>选填</small></span><input value={note} maxLength={120} disabled={save.isPending || confirming} onChange={(event) => setNote(event.target.value)} placeholder="例如：调整开场冲突，补充人物对白" /></label>
         {save.error && <div className="script-conflict" role="alert">{toErrorMessage(save.error)}。输入内容已保留。<button type="button" onClick={downloadDraft}>下载当前草稿</button><button type="button" onClick={() => { void refresh(); }}>检查最新版本</button></div>}
         <footer className="script-edit-footer"><span>{Array.from(draft).length.toLocaleString()} / 100,000 字 · {dirty ? "未保存" : "未修改"}</span><div><button type="button" disabled={save.isPending} onClick={() => { if (dirty) setDiscard(true); else setEditing(false); }}>退出编辑</button><button type="submit" className="creator-primary" disabled={!dirty || save.isPending || confirming}>{save.isPending ? "正在保存…" : "保存版本"}</button></div></footer>
         <p className="script-keyboard-hint">Ctrl / ⌘ + S 保存 · 正文修改不会自动改动已有分场和分镜</p>
       </form> : <>
-        {episode.script ? <><div id={scriptId} className={`manuscript-text ${collapsible && !expanded ? "script-preview-collapsed" : ""}`}>{collapsible && !expanded ? script.slice(0, previewEnd) : script}</div>{collapsible && <button type="button" className="script-preview-toggle" aria-expanded={expanded} aria-controls={scriptId} onClick={() => setExpanded(!expanded)}>{expanded ? "收起正文" : "查看更多 · 展开全部剧本"}</button>}</> : <div className="manuscript-empty"><Icon name="pen" size={32} /><h2>让故事从这一页开始</h2><p>写下开场、人物与冲突。每次修改都能保存为一个新版本。</p><button className="creator-primary" onClick={begin}>开始写剧本<Icon name="arrow" size={16} /></button></div>}
+        {episode.script ? <><div id={scriptId} className={`manuscript-text ${collapsible && !expanded ? "script-preview-collapsed" : ""}`}>{highlight && expanded ? <>{script.slice(0, highlight.start)}<mark ref={highlightRef} className="script-source-highlight">{script.slice(highlight.start, highlight.end)}</mark>{script.slice(highlight.end)}</> : collapsible && !expanded ? script.slice(0, previewEnd) : script}</div>{collapsible && <button type="button" className="script-preview-toggle" aria-expanded={expanded} aria-controls={scriptId} onClick={() => setExpanded(!expanded)}>{expanded ? "收起正文" : "查看更多 · 展开全部剧本"}</button>}</> : <div className="manuscript-empty"><Icon name="pen" size={32} /><h2>让故事从这一页开始</h2><p>写下开场、人物与冲突。每次修改都能保存为一个新版本。</p><button className="creator-primary" onClick={begin}>开始写剧本<Icon name="arrow" size={16} /></button></div>}
         <footer><span>{Array.from(episode.script ?? "").length.toLocaleString()} 字 · 预计 {episode.duration_estimate ?? "—"} 秒</span><div><button className="creator-text-button" disabled={!episode.script || optimize.isPending || Boolean(optimizationJob && ["queued", "running", "processing", "retrying"].includes(optimizationJob.status))} onClick={() => optimize.mutate()}>{optimize.isPending || optimizationJob && ["queued", "running", "processing", "retrying"].includes(optimizationJob.status) ? <TextGenerationIcon size={20} /> : <Icon name="spark" size={15} />}{optimizationJob && ["queued", "running", "processing", "retrying"].includes(optimizationJob.status) ? "AI 优化中…" : "AI 优化本集"}</button><button className="creator-text-button" onClick={begin}><Icon name="pen" size={15} />编辑剧本</button></div></footer>
         {message && <p className="script-save-message" role="status">{message}</p>}
       </>}
@@ -148,7 +178,7 @@ export function ScriptDocument({ projectId, episode }: { projectId: number; epis
         <button className="creator-primary" disabled={applyOptimization.isPending} onClick={() => applyOptimization.mutate()}>{applyOptimization.isPending ? "正在保存…" : "确认并保存新版本"}</button>
       </div>
     </ScriptModal>}
-    {confirming && <ScriptModal title="保留未保存的修改？" onClose={() => { if (!save.isPending) { setDiscard(false); if (blocker.state === "blocked") blocker.reset(); } }}>
+    {confirming && <ScriptModal confirmation title="保留未保存的修改？" onClose={() => { if (!save.isPending) { setDiscard(false); if (blocker.state === "blocked") blocker.reset(); } }}>
       <p>{save.isPending ? "正在保存，请等待完成。" : "当前正文尚未保存，离开后本次输入将丢失。已保存的版本不会受影响。"}</p>
       <div className="wb-dialog-footer"><button disabled={save.isPending} onClick={downloadDraft}>下载草稿</button><button disabled={save.isPending} onClick={() => { setDiscard(false); if (blocker.state === "blocked") blocker.reset(); }}>继续编辑</button><button className="danger" disabled={save.isPending} onClick={() => { committed.current = true; setDiscard(false); setEditing(false); if (blocker.state === "blocked") blocker.proceed(); }}>放弃修改</button></div>
     </ScriptModal>}

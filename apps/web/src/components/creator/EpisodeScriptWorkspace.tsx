@@ -16,10 +16,11 @@ import { ScriptDocument } from "./ScriptDocument";
 import { ScriptFinalizationPanel } from "./ScriptFinalizationPanel";
 import { ScriptContinuityPanel } from "./ScriptContinuityPanel";
 import { OutlineWorkspaceContext } from "./outlineWorkspaceContext";
-import type { Episode, Job } from "@/types/api";
+import type { Episode, Job, ScriptReadinessIssue } from "@/types/api";
 import "@/styles/outline-workspace-refresh.css";
 
 type ScriptSourceMode = "original" | "upload_outline" | "upload_script";
+const ACTIVE_GENERATION = new Set(["queued", "running", "processing", "retrying"]);
 
 function durationLabel(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000));
@@ -71,6 +72,7 @@ export function EpisodeScriptWorkspace({
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [sourceTarget, setSourceTarget] = useState<ScriptReadinessIssue | null>(null);
   const [generationJob, setGenerationJob] = useState<Job | null>(null);
   const [generationTargets, setGenerationTargets] = useState<number[]>([]);
   const [clock, setClock] = useState(() => Date.now());
@@ -80,18 +82,30 @@ export function EpisodeScriptWorkspace({
   const recoveredGeneration = useQuery({
     queryKey: ["episode-script-generation-job", projectId],
     queryFn: async () => {
-      const page = await listJobsPage({ projectId, limit: 50 });
-      return page.items.find((job) => job.target_type === "episode_script_batch") ?? null;
+      const page = await listJobsPage({ projectId, targetType: "episode_script_batch", limit: 50 });
+      const batches = page.items.filter(job => job.target_type === "episode_script_batch");
+      return batches.find(job => ACTIVE_GENERATION.has(job.status)) ?? batches[0] ?? null;
     },
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status && ["queued", "running", "processing", "retrying"].includes(status) ? 2000 : false;
+      return query.state.status === "error" ? 4000 : status && ACTIVE_GENERATION.has(status) ? 2000 : false;
     },
   });
   const items = episodes.data ?? [];
   const requestedId = Number(params.get("episode") || 0);
+  const requestedLine = Number(params.get("sourceLine") || 0);
+  const requestedRevision = Number(params.get("sourceRevision") || 0);
+  const linkedSourceTarget = useMemo(() => requestedLine > 0 && requestedRevision > 0 ? {
+    source_line: requestedLine, script_revision: requestedRevision,
+  } : null, [requestedLine, requestedRevision]);
   const selected = items.find((item) => item.id === requestedId) ?? items[0];
   const missingNumbers = useMemo(() => items.filter((item) => !item.script?.trim()).map((item) => item.number), [items]);
+
+  useEffect(() => {
+    setGenerationJob(null);
+    setGenerationTargets([]);
+    refreshedGeneration.current = "";
+  }, [projectId]);
 
   useEffect(() => {
     if (!recoveredGeneration.data) return;
@@ -99,10 +113,10 @@ export function EpisodeScriptWorkspace({
     const visible = ["queued", "running", "processing", "retrying"].includes(candidate.status)
       || (["failed", "cancelled"].includes(candidate.status) && missingNumbers.length > 0)
       || (candidate.status === "succeeded" && generationJob?.id === candidate.id);
-    if (!visible || (generationJob && generationJob.id !== candidate.id)) return;
-    if (generationJob && parseServerTimestamp(candidate.updated_at) <= parseServerTimestamp(generationJob.updated_at)) return;
+    if (!visible || (generationJob?.project_id === projectId && generationJob.id > candidate.id)) return;
+    if (generationJob?.id === candidate.id && parseServerTimestamp(candidate.updated_at) <= parseServerTimestamp(generationJob.updated_at)) return;
     setGenerationJob(candidate);
-    setGenerationTargets((current) => current.length ? current : [...missingNumbers]);
+    setGenerationTargets((current) => generationJob?.id === candidate.id && current.length ? current : [...missingNumbers]);
   }, [generationJob, missingNumbers.length, recoveredGeneration.data]);
 
   const generationActive = ["queued", "running", "processing", "retrying"].includes(generationJob?.status ?? "");
@@ -139,7 +153,11 @@ export function EpisodeScriptWorkspace({
       return completed;
     },
     onSuccess: refresh,
+    onError: () => { void recoveredGeneration.refetch(); },
   });
+  useEffect(() => {
+    if (generationActive && generate.isError) generate.reset();
+  }, [generationActive, generate.isError]);
   const create = useMutation({
     mutationFn: (values: Record<string, unknown>) => createEpisode(projectId, {
       number: Number(values.number),
@@ -253,8 +271,9 @@ export function EpisodeScriptWorkspace({
     {sourceMode !== "original" && <aside className="script-source-protection"><Icon name="lock" size={16} /><div><strong>上传原文保持只读</strong><span>这里的编辑、AI 优化和版本恢复只生成新的项目版本，不会修改上传文件或原始文本。</span></div></aside>}
     <div className="script-workspace-toolbar">
       <div><span>剧本正文</span><strong>{items.length} 集 · {items.length - missingNumbers.length} 集已有正文</strong></div>
-      {missingNumbers.length > 0 && <button className="creator-primary" disabled={generate.isPending || generationActive} onClick={() => { setGenerationTargets([...missingNumbers]); refreshedGeneration.current = ""; setClock(Date.now()); generate.mutate(); }}>{generate.isPending || generationActive ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}生成缺失正文（{missingNumbers.length} 集）</button>}
+      {missingNumbers.length > 0 && <button className="creator-primary" disabled={generate.isPending || generationActive || recoveredGeneration.isFetching || recoveredGeneration.isError} onClick={() => { setGenerationTargets([...missingNumbers]); refreshedGeneration.current = ""; setClock(Date.now()); generate.mutate(); }}>{generate.isPending || generationActive ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}生成缺失正文（{missingNumbers.length} 集）</button>}
     </div>
+    {recoveredGeneration.isError && <p className="script-conflict" role="alert">任务状态读取失败，正在重新连接。</p>}
     {generationJob && <section className={`script-generation-status ${generationJob.status}`} aria-live="polite">
       <div className="script-generation-status__heading">
         <span className="script-generation-status__icon">
@@ -286,12 +305,13 @@ export function EpisodeScriptWorkspace({
     <div className={`outline-layout unified-script-layout ${workspace?.host ? "episode-directory-in-stage-rail" : ""}`}>
       <EpisodeDirectory episodes={items} selectedId={selected?.id} onSelect={select} onCreate={() => setCreating(true)} generationByEpisode={generationByEpisode} />
       <section className="outline-main"><section className="outline-main-surface"><div className="outline-document-area">
-        {selected ? <ScriptDocument key={selected.id} projectId={projectId} episode={selected} /> : <div className="outline-main-empty"><Icon name="file" size={30} /><h2>还没有可编辑的正文</h2><p>确认分集大纲后会自动建立剧集目录。</p><div>{onBack && <button onClick={onBack}>返回分集大纲</button>}<button className="creator-primary" onClick={() => setCreating(true)}>新建第一集</button></div></div>}
+        {selected ? <ScriptDocument key={selected.id} projectId={projectId} episode={selected} sourceTarget={sourceTarget?.episode_id === selected.id ? sourceTarget : requestedId === selected.id ? linkedSourceTarget : null} /> : <div className="outline-main-empty"><Icon name="file" size={30} /><h2>还没有可编辑的正文</h2><p>确认分集大纲后会自动建立剧集目录。</p><div>{onBack && <button onClick={onBack}>返回分集大纲</button>}<button className="creator-primary" onClick={() => setCreating(true)}>新建第一集</button></div></div>}
       </div></section></section>
     </div>
     {generate.error && <p className="script-conflict" role="alert">{toErrorMessage(generate.error)}</p>}
-    <ScriptFinalizationPanel projectId={projectId} defaultDuration={defaultDuration} onOpenReview={() => setReviewOpen(true)} onJumpToEpisode={(episodeId) => {
+    <ScriptFinalizationPanel projectId={projectId} defaultDuration={defaultDuration} onOpenReview={() => setReviewOpen(true)} onJumpToEpisode={(episodeId, issue) => {
       const episode = items.find((item) => item.id === episodeId);
+      setSourceTarget(issue ?? null);
       if (episode) select(episode);
     }} onConfirmed={onConfirmed} />
     {creating && <EditorDialog title="新建一集" fields={episodeCreateFields} initial={{ number: items.length + 1 }} onClose={() => setCreating(false)} onSubmit={async (values) => { await create.mutateAsync(values); }} />}

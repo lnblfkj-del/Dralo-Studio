@@ -3,9 +3,14 @@
 import json
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, ModelOutputBusinessValidationError
+from app.core.errors import (
+    ConflictError,
+    ModelOutputBusinessValidationError,
+    ModelOutputSchemaError,
+)
 from app.models import (
     ASSET_TYPE_CHARACTER,
     ASSET_TYPE_COSTUME,
@@ -86,6 +91,24 @@ def _match_existing_asset(
         )
         if existing_requirement == requirement_type:
             eligible.append(existing)
+
+    if attributes.get("extraction_identity"):
+        if attributes.get("identity_match_status") == "needs_review":
+            return None, str(attributes.get("identity_match_reason") or "身份关联需要核对")
+        # A variant must not silently attach to another same-name formal asset.
+        exact_identity = [entry for entry in eligible if
+                          dict(entry.get("attributes") or {}).get("extraction_identity")
+                          == attributes["extraction_identity"]]
+        if len(exact_identity) == 1:
+            return int(exact_identity[0]["id"]), None
+        if len(exact_identity) > 1:
+            return None, "稳定身份同时命中多个正式资产，请人工选择"
+        if attributes.get("representation_scope_status") == "independent_source_scope":
+            return None, None
+        if ":variant:" in str(attributes.get("asset_key") or ""):
+            return None, None
+        eligible = [entry for entry in eligible if not
+                    dict(entry.get("attributes") or {}).get("extraction_identity")]
 
     identity = _identity_values(attributes, requirement_type)
     if identity:
@@ -288,12 +311,78 @@ async def finalize_asset_breakdown(
         validate_script_asset_breakdown_job_sources,
     )
 
+    parameters = dict(job.payload.get("parameters") or {})
+    contract_version = int(parameters.get("asset_extraction_contract_version", 1))
+    # Every contract writes the same session aggregate after the provider returns.
+    if contract_version in {1, 2, 3}:
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        await lock_breakdown_session(session, item)
+        if job.parent_job_id:
+            parent = await session.get(Job, job.parent_job_id)
+            if parent is not None:
+                await session.refresh(parent)
+                if contract_version in {2, 3}:
+                    current_payload = await session.scalar(select(Job.payload).where(Job.id == job.id))
+                    if dict((current_payload or {}).get("resolution") or {}).get("status") in {
+                        "superseded", "replacement_pending",
+                    } or parameters.get("scope_key") not in (parent.payload.get("scope_order") or []):
+                        raise ConflictError("资产拆解范围已经被替代，旧响应不能重复写入")
     await validate_script_asset_breakdown_job_sources(session, job, require_parent_active=True)
-    breakdown = parse_structured_result(
-        str(result.get("text", "")),
-        ScriptAssetBreakdownResult,
-        "剧本资产拆解结果",
-    )
+    if contract_version in {2, 3}:
+        from app.services.asset_extraction_contract import parse_extraction
+        from app.services.asset_extraction_output import ensure_response
+        from app.services.asset_extraction_partial import parse_batch
+        ensure_response(result, job.payload.get("text_submission"))
+        diagnostics: dict[str, Any] = {}
+        necessity_policy = parameters.get("asset_necessity_policy") if contract_version == 3 else None
+        if contract_version == 3:
+            from app.services.asset_necessity_service import validate_policy
+            validate_policy(necessity_policy)
+
+        parser = parse_batch if job.target_type == JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH else parse_extraction
+        repair_kwargs = {}
+        if parameters.get("item_repair"):
+            from app.services.asset_targeted_repair import parse_repair
+            parser = parse_repair
+            repair_kwargs["repair"] = parameters["item_repair"]
+        breakdown = parser(
+            str(result.get("text", "")),
+            sources=parameters.get("source_segments") or [],
+            kinds=parameters.get("requirement_types") or [],
+            visual_keys=parameters.get("visual_asset_keys") or [],
+            diagnostics_out=diagnostics,
+            necessity_policy=necessity_policy,
+            **repair_kwargs,
+        )
+        job.payload = {**job.payload, "asset_extraction_diagnostics": diagnostics}
+    elif contract_version == 1:
+        try:
+            breakdown = parse_structured_result(
+                str(result.get("text", "")), ScriptAssetBreakdownResult, "剧本资产拆解结果",
+            )
+        except ModelOutputSchemaError as exc:
+            if (exc.details or {}).get("invalid_fields") != ["根对象"]:
+                raise
+            from app.services.asset_extraction_legacy import inspect_saved_links
+
+            issues = inspect_saved_links(str(result.get("text", "")))
+            if not issues:
+                raise
+            fields = [issue["field"] for issue in issues[:12]]
+            raise ModelOutputBusinessValidationError(
+                f"历史资产使用记录关联未通过核对：{fields[0]}；已保存响应不会自动改名或重新调用模型",
+                details={"invalid_fields": fields, "field_errors": [
+                    {"field": issue["field"], "label": issue["field"],
+                     "reason": "资产关联不唯一" if issue["status"] == "ambiguous" else "资产关联未建立，需要核对"}
+                    for issue in issues[:12]
+                ]},
+            ) from exc
+    else:
+        raise ModelOutputBusinessValidationError(
+            "资产拆解响应契约版本未受支持，未写入资产",
+            details={"field": "asset_extraction_contract_version"},
+        )
     source_revisions: dict[str, Any] = {}
     production_context: dict[str, Any] = {}
     result_groups = (
@@ -345,20 +434,45 @@ async def finalize_asset_breakdown(
             )
         settings = dict(item.settings)
         progress = dict(settings.get("asset_breakdown") or {})
+        total_batches = int(progress.get("total_batches") or total_batches)
         production_context = dict(production_context or progress.get("production_context") or {})
         source_revisions = dict(progress.get("source_script_revisions") or {})
         batches = dict(progress.get("batches") or {})
         scope_key = str(parameters.get("scope_key") or "")
         result_slot = scope_key or str(batch_index)
-        batches[result_slot] = breakdown
+        partial_batches = dict(progress.get("partial_batches") or {})
+        rejected_items = (job.payload.get("asset_extraction_diagnostics") or {}).get("rejected_items") or []
+        from app.services.asset_extraction_partial import defers_item_review
+        deferred = defers_item_review(parameters, job.payload.get("asset_extraction_diagnostics") or {})
+        review_scopes = dict(progress.get("review_items_by_scope") or {})
+        if deferred:
+            review_scopes[result_slot] = {
+                "job_id": job.id, "episode_numbers": sorted(expected_numbers),
+                "items": rejected_items,
+            }
+        else:
+            review_scopes.pop(result_slot, None)
+        progress["review_items_by_scope"] = review_scopes
+        progress["coverage_status"] = "requires_review" if review_scopes else "not_exhaustively_verified"
+        if rejected_items and not deferred:
+            batches.pop(result_slot, None)
+            partial_batches[result_slot] = breakdown
+        else:
+            batches[result_slot] = breakdown
+            partial_batches.pop(result_slot, None)
+        failed_scopes = dict(progress.get("failed_scopes") or {})
+        failed_scopes.pop(result_slot, None)
+        progress["failed_scopes"] = failed_scopes
         scope_order = list(progress.get("scope_order") or [])
         visual_scope_keys = list(progress.get("visual_scope_keys") or [])
         progress.update(
             {
-                "status": "running",
+                "status": "failed" if progress.get("failed_scopes") else "running",
                 "total_batches": total_batches,
-                "completed_batches": len(batches),
+                "completed_batches": sum(key in batches for key in scope_order)
+                if scope_order else len(batches),
                 "batches": batches,
+                "partial_batches": partial_batches,
                 "parent_job_id": job.parent_job_id,
             }
         )
@@ -370,7 +484,19 @@ async def finalize_asset_breakdown(
             if visual_scope_keys
             else all(str(index) in batches for index in range(visual_batches))
         )
-        if (
+        if contract_version in {2, 3} and parameters.get("requirement_group") == "visual":
+            parent = await session.get(Job, job.parent_job_id) if job.parent_job_id else None
+            if parent is None:
+                raise ConflictError("资产拆解父任务不存在")
+            from app.services.creation_breakdown_jobs import queue_pending_audio_breakdown_jobs
+
+            await queue_pending_audio_breakdown_jobs(
+                session, item, parent, [batches[key] for key in visual_scope_keys if key in batches],
+            )
+            progress.update(audio_queued=bool(parent.payload.get("audio_queued")), stage="mixed")
+            settings["asset_breakdown"] = progress
+            item.settings = settings
+        elif (
             parameters.get("requirement_group") == "visual"
             and visual_batches
             and visual_complete
@@ -399,7 +525,7 @@ async def finalize_asset_breakdown(
             if scope_order
             else list(batches)
         )
-        if len(completed_slots) < total_batches:
+        if len(completed_slots) < total_batches and contract_version not in {2, 3}:
             await session.flush()
             return
         fingerprint = str(progress.get("input_fingerprint") or "")
@@ -430,13 +556,18 @@ async def finalize_asset_breakdown(
             )
             await session.flush()
             return
+        # Partial scopes contribute only verified candidates, never completion or
+        # dependencies. Scope keys replace results on replay rather than append.
+        projected_slots = [key for key in (scope_order or list(batches))
+                           if key in batches or key in partial_batches]
+        projected_batches = {**partial_batches, **batches}
         breakdown = {
             "reply": "全部批次资产拆解完成",
             **{
                 group: [
                     entry
-                    for slot in (scope_order or [str(index) for index in range(total_batches)])
-                    for entry in batches[slot].get(group, [])
+                    for slot in projected_slots
+                    for entry in projected_batches[slot].get(group, [])
                 ]
                 for group in result_groups
             },
@@ -459,11 +590,34 @@ async def finalize_asset_breakdown(
         or selected_numbers
         or (selected_types and selected_types != ALL_REQUIREMENT_TYPES)
     )
-    if not partial_scope and not any(breakdown[group] for group in result_groups):
+    all_batches_complete = (
+        job.target_type != JOB_TARGET_SCRIPT_ASSET_BREAKDOWN_BATCH
+        or int(pending_progress.get("completed_batches") or 0)
+        >= int(pending_progress.get("total_batches") or 1)
+    )
+    if contract_version != 3 and all_batches_complete and not partial_scope and not any(breakdown[group] for group in result_groups):
         raise ModelOutputBusinessValidationError("模型未返回任何剧本资产，请重新生成")
     if item.project_id is None:
         raise ConflictError("当前创作会话尚未关联项目")
     existing_assets = await asset_service.list_assets(session, item.project_id)
+    if contract_version in {2, 3}:
+        from app.services.asset_extraction_registry import project_registry
+
+        if contract_version == 3:
+            from app.services.asset_scoped_costumes import project_scoped_costumes
+
+            breakdown = project_scoped_costumes(breakdown, kinds=selected_types,
+                                                policy=job_parameters.get("asset_necessity_policy"))
+
+        breakdown = project_registry(breakdown, context=production_context, existing=existing_assets)
+        if contract_version == 3:
+            from app.services.asset_default_appearance import complete_defaults
+            from app.services.asset_stable_voice_profiles import add_frozen_voice_profiles
+            breakdown = complete_defaults(breakdown, existing=existing_assets,
+                                          policy=job_parameters.get("asset_necessity_policy"))
+            breakdown = await add_frozen_voice_profiles(
+                session, job, breakdown, production_context, existing_assets, pending_progress,
+            )
 
     candidates: list[dict[str, Any]] = []
     groups = (
@@ -492,14 +646,13 @@ async def finalize_asset_breakdown(
                     entry,
                 )
             )
-            enriched = _enrich_character_candidate_from_story_bible(
+            identity_entry = {
+                "name": entry["name"], "aliases": aliases,
+                "description": entry["description"], "attributes": entry_attributes,
+            }
+            enriched = identity_entry if contract_version in {2, 3} else _enrich_character_candidate_from_story_bible(
                 requirement_type,
-                {
-                    "name": entry["name"],
-                    "aliases": aliases,
-                    "description": entry["description"],
-                    "attributes": entry_attributes,
-                },
+                identity_entry,
                 production_context,
             )
             aliases = list(enriched.get("aliases") or aliases)
@@ -507,7 +660,7 @@ async def finalize_asset_breakdown(
             entry_attributes = dict(enriched.get("attributes") or {})
             entry_attributes = _apply_character_role_classification(
                 requirement_type,
-                aliases,
+                [entry["name"]] if contract_version in {2, 3} else aliases,
                 entry_attributes,
                 production_context,
             )
@@ -549,7 +702,7 @@ async def finalize_asset_breakdown(
                 (
                     candidate
                     for candidate in candidates
-                    if _candidates_match(
+                    if (contract_version not in {2, 3} and _candidates_match(
                         candidate,
                         {
                             "asset_type": asset_type,
@@ -558,7 +711,7 @@ async def finalize_asset_breakdown(
                             "aliases": aliases,
                             "attributes": entry_attributes,
                         },
-                    )
+                    ))
                 ),
                 None,
             )
@@ -655,7 +808,12 @@ async def finalize_asset_breakdown(
         ]
         candidates = _merge_candidate_list([*candidates, *preserved])
     for candidate_id, candidate in enumerate(candidates, start=1):
-        candidate["candidate_id"] = candidate_id
+        if contract_version in {2, 3} and candidate.get("attributes", {}).get("extraction_identity"):
+            from app.services.asset_extraction_registry import candidate_id as stable_candidate_id
+
+            candidate["candidate_id"] = stable_candidate_id(candidate["attributes"])
+        else:
+            candidate["candidate_id"] = candidate_id
         candidate["needs_review"] = _candidate_requires_review(candidate)
         requirement_type = str(candidate.get("requirement_type") or candidate.get("asset_type"))
         if candidate.get("matched_asset_id") is None:
@@ -688,32 +846,51 @@ async def finalize_asset_breakdown(
             "source_review"
             if candidate.get("needs_review")
             else "ready"
-            if matched and any(version.get("is_final") for version in matched.get("versions", []))
+            if matched and any(version.is_final for version in matched.get("versions", []))
             else "matched"
             if matched
             else "material_missing"
         )
+    if contract_version == 3:
+        from app.services.asset_character_identity import refresh_character_identities
+        from app.services.asset_field_trust import organize_candidates
+
+        await refresh_character_identities(session, item.project_id, candidates,
+                                           context=production_context, existing=existing_assets,
+                                           decisions=pending_progress.get("character_identity_decisions"))
+        organize_candidates(candidates, production_context)
+        for candidate in candidates:
+            candidate["needs_review"] = _candidate_requires_review(candidate)
+            if not candidate["needs_review"] and candidate.get("readiness_status") == "source_review":
+                candidate["readiness_status"] = "matched" if candidate.get("matched_asset_id") else "material_missing"
+    if contract_version in {2, 3}:
+        from app.services.asset_extraction_review import apply_confirmation_receipts
+
+        apply_confirmation_receipts(progress, candidates)
     counts = {
         requirement_type: sum(
             candidate.get("requirement_type") == requirement_type for candidate in candidates
         )
         for requirement_type, _, _ in groups
     }
-    reconcile_dialogue_coverage(candidates, production_context)
+    if all_batches_complete:
+        reconcile_dialogue_coverage(candidates, production_context)
+    from app.services.asset_necessity_service import coverage_context
     validation_issues = [
-        *(dialogue_coverage_issues(candidates, production_context)
+        *(dialogue_coverage_issues(candidates, coverage_context(
+            production_context, progress.get("asset_necessity_policy")))
           if "character" in selected_types or any(row.get("requirement_type") == "character" for row in candidates) else []),
         *_character_alias_issues(candidates, existing_assets),
         *_character_coverage_issues(
             candidates,
             production_context,
             full_character_scope=(
-                "character" in selected_types
+                contract_version not in {2, 3} and "character" in selected_types
                 and not selected_numbers
                 and progress.get("scope_mode") != "partial"
             ),
         ),
-    ]
+    ] if all_batches_complete else []
     issue_candidate_ids = {
         int(issue["candidate_id"])
         for issue in validation_issues
@@ -726,7 +903,9 @@ async def finalize_asset_breakdown(
         candidate["readiness_status"] = "source_review"
     settings = dict(item.settings)
     settings["asset_breakdown"] = {
-        "status": "awaiting_confirmation",
+        **(progress if contract_version in {2, 3} else {}),
+        "asset_extraction_contract_version": contract_version,
+        "status": "awaiting_confirmation" if all_batches_complete else progress.get("status", "running"),
         "completed": False,
         "job_id": job.id,
         "candidate_counts": counts,
@@ -754,6 +933,9 @@ async def finalize_asset_breakdown(
         ),
     }
     item.settings = settings
+    if not all_batches_complete:
+        await session.flush()
+        return
     await append_message(
         session,
         item.id,

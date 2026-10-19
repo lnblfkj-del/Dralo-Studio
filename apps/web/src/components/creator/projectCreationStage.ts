@@ -1,5 +1,13 @@
 import type { CreationStage, StageAvailability } from "./CreationStageNav";
-import type { Job } from "@/types/api";
+import type { Job, ScriptAssetBreakdownState } from "@/types/api";
+
+export function assetPreparationCompleted(breakdown: ScriptAssetBreakdownState | undefined): boolean {
+  if (!breakdown) return false;
+  if (breakdown.status === "completed") return true;
+  if (breakdown.status !== "awaiting_confirmation") return false;
+  const selected = (breakdown.candidates ?? []).filter(item => item.selected && !item.merged_into_candidate_id);
+  return selected.length > 0 && selected.every(item => item.confirmed_in_current_scope);
+}
 
 export type CreationSourceMode = "original" | "upload_outline" | "upload_script";
 

@@ -7,8 +7,8 @@ from hashlib import sha256
 from typing import Any
 
 from app.core.errors import ConflictError
-from app.providers.protocols import effective_protocol, is_toapis_model
-from app.providers.video_contracts import VIDEO_CONTRACTS, validate_video_parameters
+from app.providers.protocols import effective_protocol
+from app.providers.video_integrations import resolve_video_integration
 
 
 def _digest(value: Any) -> str:
@@ -24,7 +24,9 @@ def _normalize_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
 
 
 def _effective_parameters(model, parameters):
-    effective = {**(model.default_params or {}), **parameters}
+    from app.services.video_configuration import request_defaults
+
+    effective = {**request_defaults(model), **parameters}
     # Administrator evidence is an input-planning record, never a wire field.
     effective.pop("episode_planning_capability", None)
     return effective
@@ -36,40 +38,24 @@ def _confirmation_id(role: str, media_id: int) -> str:
 
 def prepare_video_prompt(provider, model, prompt: str, negative_prompt: str | None) -> tuple[str, str | None]:
     """Map prompt constraints to fields actually supported by the upstream protocol."""
-    negative = (negative_prompt or "").strip()
-    if negative and is_toapis_model(provider, model) and model.model_id not in {"wan2.6", "kling-v2-6"}:
-        return f"{prompt.rstrip()}\n\n生成限制（必须遵守）：{negative}", None
-    return prompt, negative_prompt
+    return resolve_video_integration(provider, model).prepare_prompt(model.model_id, prompt, negative_prompt)
 
 
 def _validate(provider, model, parameters, negative_prompt, first, last, references,
               *, preview_only=False, h3_authorized=False) -> dict[str, Any]:
-    protocol = effective_protocol(provider, model)
+    integration = resolve_video_integration(provider, model)
     effective = _effective_parameters(model, parameters)
-    if protocol == "minimax_video_v2":
-        if not preview_only and not h3_authorized:
-            raise ConflictError("MiniMax H3 生产提交尚未开放；请先完成片段英文提示词审核")
-        from app.providers.minimax_video_parameters import validate_h3_video_parameters
+    from app.services.video_settings_validation import validate_settings
 
-        validate_h3_video_parameters(
-            model.model_id, effective, negative_prompt=negative_prompt,
-            first=bool(first), last=bool(last), references=len(references),
-        )
-        return effective
-    if protocol == "fake_video":
-        return effective
-    if protocol in VIDEO_CONTRACTS:
-        validate_video_parameters(protocol, effective, negative_prompt=negative_prompt,
-                                  first=bool(first), last=bool(last), references=len(references))
-        return effective
-    if is_toapis_model(provider, model):
-        from app.providers.toapis import video_parameters
-        if negative_prompt and model.model_id not in {"wan2.6", "kling-v2-6"}:
-            raise ConflictError("此 ToAPIs 视频协议未声明负面提示词，请合并到生成要求中")
-        return video_parameters(model.model_id, effective, first=bool(first), last=bool(last), references=len(references))
-    if first or last or references:
-        raise ConflictError("当前视频适配器没有已注册的图像输入协议")
-    return effective
+    validate_settings(provider, model, effective, input_mode=_mode(first, last, references),
+                      first=first, last=last, references=references)
+    validated = integration.validate_parameters(
+        model.model_id, effective, negative_prompt=negative_prompt,
+        first=bool(first), last=bool(last), references=len(references),
+        preview_only=preview_only, h3_authorized=h3_authorized,
+    )
+    # Native adapters map fields themselves; ToAPIs also supplies request defaults.
+    return validated if integration.client_business_id else effective
 
 
 def _fields(references: list[dict[str, Any]]) -> tuple[int | None, int | None, list[int]]:
@@ -97,18 +83,7 @@ def _mode(first: int | None, last: int | None, references: list[int]) -> str:
 
 def _submission_mode(provider, model, input_mode: str) -> str:
     """Return the exact upstream mode when the channel requires one."""
-    if (
-        effective_protocol(provider, model) == "openai_compatible"
-        and is_toapis_model(provider, model)
-        and model.model_id == "grok-video-1.5"
-    ):
-        return {
-            "text": "text_to_video",
-            "first_frame": "first_frame_image_to_video",
-            "single_image": "reference_images_to_video",
-            "multi_reference": "reference_images_to_video",
-        }[input_mode]
-    return input_mode
+    return resolve_video_integration(provider, model).submission_mode(model.model_id, input_mode)
 
 
 def compile_video_input(provider, model, references: list[dict[str, Any]], parameters: dict[str, Any], *,
@@ -134,7 +109,8 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
             seen.add((media_id, role))
 
     protocol = effective_protocol(provider, model)
-    if preview_only and protocol != "minimax_video_v2":
+    integration = resolve_video_integration(provider, model)
+    if preview_only and not integration.staged_request:
         raise ConflictError("离线预览参数合同仅适用于 MiniMax H3 V2")
     actions, blockers, required = [], [], []
     if style_in_first_frame:
@@ -147,7 +123,8 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
             actions.append({"source": "project_style", "status": "baked_into_first_frame",
                             "count": len(style_refs), "media_ids": [item["media_id"] for item in style_refs],
                             "reason": "已明确确认风格融入首帧，保留风格文本，不重复附加风格图片"})
-    if model.model_id == "kling-v3-omni" and len(normalized) > 7 and is_toapis_model(provider, model):
+    style_limit = integration.optional_style_reference_limit(model.model_id)
+    if style_limit is not None and len(normalized) > style_limit:
         # Only the automatically appended style image is optional. Never remove
         # authored character/scene/prop references to make a request fit.
         style_refs = [item for item in normalized if item.get("purpose") == "project_style"]
@@ -197,7 +174,9 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
                                 "reason": "已按用户确认改作普通参考图"} for item in frame_refs)
                 required = []
 
-    max_refs = (model.default_params or {}).get("max_reference_images")
+    from app.services.video_configuration import projected_params
+
+    max_refs = projected_params(model).get("max_reference_images")
     if type(max_refs) is int and len(ordinary) > max_refs:
         blockers.append(f"普通参考图 {len(ordinary)} 张，超过模型配置上限 {max_refs} 张")
     for role, count in (("first_frame", int(bool(first))), ("last_frame", int(bool(last))),
@@ -206,14 +185,12 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
             actions.append({"source": role, "status": "sent", "count": count,
                             "reason": "按协议原生输入字段发送"})
 
-    protocol_version = VIDEO_CONTRACTS.get(protocol)
-    if protocol_version is None:
-        protocol_version = "toapis.video.v1" if is_toapis_model(provider, model) else protocol
+    protocol_version = integration.version
     if (
         type(original_duration) is float
         and original_duration.is_integer()
         and effective_parameters.get("duration") == int(original_duration)
-        and protocol != "minimax_video_v2"
+        and not integration.staged_request
     ):
         effective_parameters["duration"] = original_duration
     input_mode = _mode(first, last, ordinary)

@@ -17,7 +17,7 @@ from app.services.episode_planning_storage import read_content_analysis, read_pl
 SOURCE_TYPE = "content_frozen"
 
 
-def segment_values(plan, item, order):
+def segment_values(plan, item, order, asset_refs=None):
     from app.services.episode_planning_video_preview import _semantics
 
     mode = next(mode for mode in plan.capability.modes if mode.key == item["mode_key"])
@@ -54,7 +54,7 @@ def segment_values(plan, item, order):
             "video_submission_ready": False,
             "structured_script": _semantics(item)[0],
         },
-        "refs": {"content_segment": item},
+        "refs": {"content_segment": item, **(asset_refs or {})},
     }
 
 
@@ -72,10 +72,11 @@ async def read_projection(session, parent, *, expected_fingerprint):
 
 
 async def _projection(session, parent, actor_id, *, expected_fingerprint, create):
-    parent = await workflow._lock_parent(session, parent.id)
+    if create:
+        parent = await workflow._lock_parent(session, parent.id)
     # A new unactivated revision supersedes old writes, not the active video's
     # immutable source. Reading still checks epoch, script, assets and channel.
-    episode, _, _ = await workflow.validate_context(session, parent, require_latest=create)
+    episode, _, _ = await workflow.validate_context(session, parent, require_latest=create, lock_writes=create)
     if parent.status != "succeeded" or not (parent.result or {}).get("assembly"):
         raise ConflictError("片段详细脚本尚未全部完成，不能保存生产草稿")
     record = await session.get(EpisodePlanningRecord, parent.payload.get("planning_record_id"))
@@ -102,8 +103,13 @@ async def _projection(session, parent, actor_id, *, expected_fingerprint, create
         "timeline_ms": assembly["timeline_ms"],
         "video_submission_ready": False,
     }
+    from app.services.segment_asset_references import automatic_references, catalog
+    assets = await catalog(session, episode.project_id)
+    units = [unit.model_dump(mode="json") for unit in plan.sources]
     values = [
-        segment_values(plan, item, order)
+        segment_values(plan, item, order, automatic_references(
+            assets, episode, units, {source["key"] for shot in item["shots"] for source in shot["sources"]}
+        ))
         for order, item in enumerate(assembly["segments"], start=1)
     ]
     projection = parent.payload.get("production_projection")

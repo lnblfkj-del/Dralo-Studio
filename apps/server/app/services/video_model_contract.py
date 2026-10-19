@@ -4,30 +4,25 @@ from typing import Any
 
 
 def audio_contract(provider, model):
-    """Capabilities belong to a verified route, not a model name or audio flag."""
-    from app.providers.protocols import effective_protocol, is_toapis_model
+    """Output evidence and registered input transport support are independent."""
+    from app.providers.video_integrations import resolve_video_integration
     from app.services.video_prompt_compiler import video_prompt_endpoint_fingerprint
-    defaults = model.default_params or {}
+    from app.services.video_configuration import projected_params
+    from app.providers.protocols import effective_protocol
+    from app.providers.video_reference_audio import supports_reference_audio
+
+    defaults = projected_params(model)
     evidence = defaults.get("native_audio_capability") or {}
     endpoint = video_prompt_endpoint_fingerprint(provider, model)
     result = {"verified": False, "output": "unverified", "dialogue": False,
-              "audio_reference": False, "bgm_control": "prompt_preference",
+              "audio_reference": supports_reference_audio(effective_protocol(provider, model), model.model_id), "bgm_control": "prompt_preference",
               "parameter": None, "endpoint_fingerprint": endpoint,
               "warning": "当前渠道原生声音尚未验证；配乐为提示词偏好，不能保证无配乐。无原生声音时需后期配音。"}
     if not isinstance(evidence, dict) or evidence.get("endpoint_fingerprint") != endpoint or not evidence.get("evidence"):
         return result
     if evidence.get("status") != "verified" or evidence.get("output") not in {"always_on", "optional", "unsupported"}:
         return result
-    protocol = effective_protocol(provider, model)
-    fields = {"ark_video_t2v": "generate_audio", "ark_video_images": "generate_audio",
-              "dashscope_video_t2v": "audio", "dashscope_video_i2v": "audio",
-              "kling_video_t2v": "generate_audio", "kling_video_i2v": "generate_audio"}
-    field = fields.get(protocol)
-    if is_toapis_model(provider, model):
-        field = "generate_audio" if model.model_id == "seedance-2-5" else "audio" if model.model_id in {
-            "kling-v3-omni", "kling-v2-6", "wan2.6", "wan2.6-flash"} else None
-    if protocol == "fake_video":
-        field = "generate_audio"
+    field = resolve_video_integration(provider, model).audio_field(model.model_id)
     if evidence["output"] == "optional" and (not field or evidence.get("parameter") != field):
         return result
     result.update(verified=True, output=evidence["output"],
@@ -49,20 +44,25 @@ def _strings(value: Any) -> list[str]:
 
 
 def normalize(model: ProviderModel) -> dict[str, Any]:
-    defaults = model.default_params or {}
+    from app.services.video_model_settings import display_settings
+
+    view = display_settings(model)
+    defaults = view.default_params or {}
     raw_durations = defaults.get("durations")
     if not isinstance(raw_durations, list):
         raw_durations = []
     durations = sorted({float(item) for item in raw_durations if type(item) in (int, float) and 0 < float(item) <= 30})
     if not durations:
         raise ConflictError("视频模型尚未配置支持时长，不能用于片段规划")
-    capabilities = set(model.capabilities or [])
+    capabilities = set(view.capabilities or [])
     configured_max = defaults.get("max_shots_per_segment")
     multi_shot = "multi_shot" in capabilities or type(configured_max) is int and configured_max > 1
     max_shots = int(configured_max) if type(configured_max) is int and configured_max > 0 else (4 if multi_shot else 1)
-    supports_references = bool(capabilities & {"reference_images", "multi_reference"})
-    inferred_ref_limit = 7 if model.model_id in {"grok-video-1.5", "kling-v3-omni"} and "multi_reference" in capabilities else 4
-    max_refs = defaults.get("max_reference_images", inferred_ref_limit if supports_references else 0)
+    supports_references = bool(capabilities & {"reference_images", "multi_reference"}) or bool(
+        set(_strings(defaults.get("supported_video_input_modes"))) & {"single_image", "multi_reference"}
+    )
+    # Historical undeclared limits stay conservatively bounded; model names do not grant capacity.
+    max_refs = defaults.get("max_reference_images", 4 if supports_references else 0)
     if type(max_refs) is not int or max_refs < 0:
         max_refs = 0
     return {
@@ -96,11 +96,9 @@ def normalize(model: ProviderModel) -> dict[str, Any]:
 
 
 def canonical_parameters(contract: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
-    result = dict(parameters)
-    if (contract.get("model_id") == "kling-v3-omni"
-            and isinstance(result.get("resolution"), str) and result["resolution"] in {"std", "pro"}):
-        result["resolution"] = {"std": "720p", "pro": "1080p"}[result["resolution"]]
-    return result
+    from app.providers.video_integrations import canonical_legacy_parameters
+
+    return canonical_legacy_parameters(contract, parameters)
 
 
 def validate_parameters(contract: dict[str, Any], parameters: dict[str, Any]) -> None:
@@ -108,7 +106,7 @@ def validate_parameters(contract: dict[str, Any], parameters: dict[str, Any]) ->
     for field, choices in (("aspect_ratio", "aspect_ratios"), ("resolution", "resolutions")):
         value = parameters.get(field)
         allowed = contract.get(choices) or []
-        if field == "resolution" and contract.get("model_id") == "kling-v3-omni":
+        if field == "resolution":
             allowed = [canonical_parameters(contract, {"resolution": item})["resolution"] for item in allowed]
         if value not in (None, "default", "模型默认") and (not allowed or str(value) not in allowed):
             raise ValidationError(f"视频模型不支持参数 {field}={value}")

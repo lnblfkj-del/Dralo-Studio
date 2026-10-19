@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { EditorContent, Node, mergeAttributes, useEditor, NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps, type JSONContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
+import { MediaThumbnail } from "@/components/assets/MediaThumbnail";
 import { ScriptTool } from "./SegmentScriptTool";
 import { documentText } from "@/domain/segmentDocument";
+import { Camera, Clapperboard, Clock3, FileImage, FolderOpen, Mic, Volume2, Wrench } from "lucide-react";
 
 type Row = Record<string, unknown>;
+const PreviewBindings = createContext<Row[]>([]);
 function fieldContent(value: string, document: JSONContent | undefined, bindings: Row[]): JSONContent {
   const plain = documentText;
   if (document && plain(document) === value) return document;
   const content: JSONContent[] = [];
-  const unique = bindings.filter((item) => item.resolved !== false && item.asset_version_id && item.asset_name && bindings.filter((other) => other.asset_name === item.asset_name).length === 1);
+  const unique = bindings.filter((item) => item.resolved !== false && item.asset_id && item.asset_name && bindings.filter((other) => other.asset_name === item.asset_name).length === 1);
   let cursor = 0;
   while (cursor < value.length) {
     const match = unique.map((binding) => ({ binding, index: value.indexOf(String(binding.asset_name), cursor) })).filter((item) => item.index >= 0).sort((a, b) => a.index - b.index || String(b.binding.asset_name).length - String(a.binding.asset_name).length)[0];
@@ -22,8 +24,14 @@ function fieldContent(value: string, document: JSONContent | undefined, bindings
   return { type: "doc", content: [{ type: "paragraph", content }] };
 }
 function AssetToken({ node }: NodeViewProps) {
-  return <NodeViewWrapper as="span" className="document-asset-token" contentEditable={false} title={`${node.attrs.name} · 版本 ${node.attrs.asset_version_id}`}>
-    {node.attrs.media_file_id && <span className="document-token-thumb"><AssetMediaPreview mediaFileId={Number(node.attrs.media_file_id)} assetType={String(node.attrs.asset_type)} kind={node.attrs.asset_type === "voice" ? "audio" : "image"} alt="" compact /></span>}@{node.attrs.name}
+  const bindings = useContext(PreviewBindings);
+  const binding = bindings.find(item => Number(item.asset_id) === Number(node.attrs.asset_id)
+    && (item.asset_version_id ?? null) === (node.attrs.asset_version_id ?? null));
+  // Preview follows the resolved identity without pinning a version into the document.
+  const mediaId = binding ? binding.media_file_id : node.attrs.media_file_id;
+  const voice = (binding?.asset_type ?? node.attrs.asset_type) === "voice";
+  return <NodeViewWrapper as="span" className="document-asset-token" contentEditable={false} title={`${node.attrs.name} · ${node.attrs.asset_version_id ? "指定版本 " + node.attrs.asset_version_id : "当前采用素材"}`}>
+    <span className="document-token-thumb">{voice ? <Volume2 size={15} /> : mediaId && binding?.delivery !== "text" ? <MediaThumbnail mediaId={Number(mediaId)} alt={`${node.attrs.name}引用预览`} className="document-token-image" /> : <FileImage size={15} />}</span><span>{node.attrs.name}</span>
   </NodeViewWrapper>;
 }
 const Mention = Node.create({
@@ -108,7 +116,7 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
     if (bound) insert(bound);
     else { pendingRange.current = query; pendingAsset.current = binding; setQuery(null); onSelectAsset?.(binding, label); }
   };
-  const toolOptions = [{ kind: "shot", name: "添加镜头" }, { kind: "duration", name: "镜头时长" }, { kind: "movement", name: "运镜库" }, { kind: "dialogue", name: "添加对白" }].filter((item) => item.name.includes(query?.text ?? ""));
+  const toolOptions = [{ kind: "shot", name: "添加镜头", icon: Clapperboard }, { kind: "duration", name: "镜头时长", icon: Clock3 }, { kind: "movement", name: "运镜库", icon: Camera }, { kind: "dialogue", name: "添加对白", icon: Mic }].filter((item) => item.name.includes(query?.text ?? ""));
   const chooseTool = (kind: string) => {
     if (!editor || !query) return;
     let sourceShotId: number | null = null;
@@ -120,6 +128,8 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
       if (shotPosition !== null) {
         editor.chain().focus().deleteRange(query).setNodeSelection(shotPosition).run();
         const element = editor.view.nodeDOM(shotPosition) as HTMLElement | null;
+        const picker = element?.querySelector<HTMLDetailsElement>("details");
+        if (picker) picker.open = true;
         element?.querySelector<HTMLInputElement>("input")?.focus();
       }
     } else {
@@ -129,7 +139,7 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
     setQuery(null);
   };
   const count = tab === "tools" ? toolOptions.length : options.length;
-  return <div className="segment-document-field" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setQuery(null); }} onKeyDownCapture={(event) => {
+  return <PreviewBindings.Provider value={bindings}><div className="segment-document-field" onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setQuery(null); }} onKeyDownCapture={(event) => {
     if (!query || event.nativeEvent.isComposing) return;
     if (event.key === "Escape") { event.preventDefault(); setQuery(null); }
     if (["ArrowDown", "ArrowUp"].includes(event.key)) { event.preventDefault(); setSelected((index) => Math.max(0, Math.min(count - 1, index + (event.key === "ArrowDown" ? 1 : -1)))); }
@@ -137,15 +147,15 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
   }}>
     <EditorContent editor={editor} />
     {query && !disabled && <div className="document-mention-menu" style={menuPosition} aria-label={`选择引用 · ${label}`}>
-      {tools && <div className="document-mention-scopes" role="tablist"><button type="button" role="tab" aria-selected={tab === "assets"} onMouseDown={(e) => e.preventDefault()} onClick={() => { setTab("assets"); setSelected(0); }}>资产</button><button type="button" role="tab" aria-selected={tab === "tools"} onMouseDown={(e) => e.preventDefault()} onClick={() => { setTab("tools"); setSelected(0); }}>小工具</button></div>}
-      {tab === "tools" ? <div role="listbox" aria-label="小工具">{toolOptions.map((item, index) => <button type="button" role="option" aria-selected={index === selected} key={item.kind} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseTool(item.kind)}>{item.name}</button>)}</div> : <>
+      {tools && <div className="document-mention-scopes" role="tablist"><button type="button" role="tab" aria-selected={tab === "assets"} onMouseDown={(e) => e.preventDefault()} onClick={() => { setTab("assets"); setSelected(0); }}><FolderOpen size={15} />资产</button><button type="button" role="tab" aria-selected={tab === "tools"} onMouseDown={(e) => e.preventDefault()} onClick={() => { setTab("tools"); setSelected(0); }}><Wrench size={15} />小工具</button></div>}
+      {tab === "tools" ? <div role="listbox" aria-label="小工具">{toolOptions.map((item, index) => <button type="button" role="option" aria-selected={index === selected} key={item.kind} onMouseDown={(e) => e.preventDefault()} onClick={() => chooseTool(item.kind)}><item.icon size={18} /><span>{item.name}</span></button>)}</div> : <>
       <div className="document-mention-scopes"><button type="button" aria-pressed={scope === "episode"} onClick={() => { setScope("episode"); setSelected(0); }}>本集素材</button><button type="button" aria-pressed={scope === "all"} onClick={() => { setScope("all"); setSelected(0); }}>全剧资产</button></div>
-      <div role="listbox" aria-label="素材引用">{options.map((item, index) => <button type="button" role="option" aria-selected={index === Math.min(selected, options.length - 1)} key={`${item.asset_id}-${item.asset_version_id}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
-        <span className="document-mention-thumb">{Boolean(item.media_file_id) && <AssetMediaPreview mediaFileId={Number(item.media_file_id)} assetType={String(item.asset_type)} kind={item.asset_type === "voice" ? "audio" : "image"} alt="" compact />}</span>
-        <span className="document-mention-name" title={String(item.asset_name)}>{String(item.asset_name)}</span>
+      <div role="listbox" aria-label="素材引用">{options.map((item, index) => <button type="button" role="option" data-asset-id={String(item.asset_id)} aria-selected={index === Math.min(selected, options.length - 1)} key={`${item.asset_id}-${item.asset_version_id}`} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(item)}>
+        <span className="document-mention-thumb">{item.asset_type === "voice" ? <Volume2 size={17} /> : item.media_file_id ? <MediaThumbnail mediaId={Number(item.media_file_id)} alt={`${item.asset_name}采用素材预览`} className="document-mention-image" eager /> : <FileImage size={17} />}</span>
+        <span className="document-mention-name" title={String(item.asset_name)}>{String(item.asset_name)}<small>{item.asset_version_id ? `V${item.version ?? item.asset_version_id} · ${item.view_label || "指定版本"}` : "当前采用素材"}</small></span>
       </button>)}</div>
       {!options.length && <p role="status">没有匹配素材</p>}
       </>}
     </div>}
-  </div>;
+  </div></PreviewBindings.Provider>;
 }

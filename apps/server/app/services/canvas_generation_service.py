@@ -95,14 +95,17 @@ async def validate_model(session, model_id, task_type, parameters, *, validate_p
         raise ConflictError("模型输出类型与任务不匹配")
     validate_model_protocol(provider, model)
     if task_type == "audio":
-        from app.services.audio_verification_service import require_verified
-        require_verified(provider, model)
+        from app.services.audio_verification_service import require_ready
+        require_ready(provider, model, parameters)
     if task_type == "image" and is_toapis_model(provider, model) and model.model_id == "gpt-image-2":
         from app.providers import toapis_image
         toapis_image.parameters(model.model_id, {**model.default_params, **parameters})
     if validate_parameters:
+        from app.services.video_configuration import projected_params
+
+        defaults = projected_params(model) if task_type == "video" else model.default_params
         for field, choices in (("aspect_ratio", "aspect_ratios"), ("resolution", "resolutions"), ("duration", "durations")):
-            value, allowed = parameters.get(field), model.default_params.get(choices)
+            value, allowed = parameters.get(field), defaults.get(choices)
             if value not in (None, "default", "模型默认") and isinstance(allowed, list) and value not in allowed:
                 raise ConflictError(f"模型不支持参数 {field}={value}")
     return model
@@ -304,6 +307,17 @@ async def submit_media(session, project, *, node_key, task_type, provider_model_
     )
     refs, assets = await resolve_references(session, project, parameters, node)
     provider = await session.get(Provider, model.provider_id)
+    if task_type == "audio":
+        from app.services.asset_speech_binding import require_node_scopes
+        await require_node_scopes(session, project, node, provider, model,
+                                  parameters.get("voice", model.default_params.get("voice")))
+    if task_type == "audio" and node.node_type == "voice":
+        from app.services.asset_audio_profile import effective_profile
+        from app.services.asset_speech_binding import require_scope
+        from app.services.asset_production_service import ensure_active_link
+        link = await ensure_active_link(session, project.id, asset.id)
+        require_scope(effective_profile(asset, link.production_data).get("speech_preset"), provider, model,
+                      parameters.get("voice", model.default_params.get("voice")))
     video_compilation = None
     if task_type == "video":
         from app.services.canvas_video_compiler import compile_video_submission
@@ -332,7 +346,9 @@ async def submit_media(session, project, *, node_key, task_type, provider_model_
         if len(matches) > 1:
             raise ConflictError("首帧和尾帧各只能选择一个")
         frames[role] = matches[0] if matches else None
-        if matches and model.default_params.get(f"supports_{role}") is False:
+        from app.services.video_configuration import projected_params
+
+        if matches and projected_params(model).get(f"supports_{role}") is False:
             raise ConflictError(f"模型不支持 {role}")
     frozen_context = [
         {key: item.get(key) for key in (
@@ -397,7 +413,7 @@ async def submit_media(session, project, *, node_key, task_type, provider_model_
             music_parameters(model, parameters, prompt, effective_protocol(provider, model))
             speech = {}
         else:
-            speech = speech_parameters(model, parameters, prompt, protocol=effective_protocol(provider, model))
+            speech = speech_parameters(model, parameters, prompt, protocol=effective_protocol(provider, model), provider=provider)
         job = Job(owner_id=project.owner_id, project_id=project.id, provider_id=model.provider_id,
             job_type="audio" if model.model_type == "audio" else "tts", status="queued", provider=provider.name, model=model.model_id,
             payload={"protocol_contract": execution_contract(provider, model), "provider_model_id": model.id, "prompt": prompt, "parameters": {**params, **speech}})

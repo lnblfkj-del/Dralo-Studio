@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import ConflictError, ValidationError
-from app.models import Asset, Episode, Job, Project, ProjectAssetLink, utcnow
+from app.models import Asset, Episode, EpisodeProduction, Job, Project, ProjectAssetLink, utcnow
 from app.models.episode_planning import EpisodePlanningRecord
 from app.schemas.episode_planning import SegmentDetail, VideoCapability
 from app.schemas.episode_references import SourceReferenceBinding
@@ -86,30 +86,38 @@ async def _source_context(session: AsyncSession, episode: Episode):
     assets = []
     for asset, link in rows:
         data = link.production_data or {}
+        from app.services.asset_segment_projection import eligible
+        from app.services.segment_asset_references import identity
+        projected = identity(asset, link)
+        if not eligible(projected, episode):
+            continue
         catalog.append(
             {
                 "asset_id": asset.id,
                 "asset_type": asset.asset_type,
                 "asset_name": asset.name,
-                "aliases": (data.get("profile") or {}).get("aliases") or [],
+                "character_profile": {key: (data.get("profile") or {}).get(key, (asset.attributes or {}).get(key))
+                                      for key in ("character_form", "group_label", "group_size")},
+                "aliases": projected["aliases"],
+                **({"source_scope_lines": sorted({line for usage in projected["usage_records"]
+                     if usage.get("episode_number") == episode.number and not usage.get("needs_review")
+                     and usage.get("script_revision", episode.script_revision) == episode.script_revision
+                     and usage.get("source_excerpt") and usage["source_excerpt"] in (episode.script or "")
+                     and type(usage.get("line_start")) is int and type(usage.get("line_end")) is int
+                     for line in range(usage["line_start"], usage["line_end"] + 1)})}
+                   if projected["character_identity"].get("scope") == "source" else {}),
             }
         )
-        assets.append(
-            {
-                "id": asset.id,
-                "name": asset.name,
-                "type": asset.asset_type,
-                "updated_at": asset.updated_at.isoformat(),
-                "data": data,
-            }
-        )
+        assets.append(projected)
     known = {item["asset_name"] for item in catalog if item["asset_type"] == "character"}
     catalog.extend(
         item
         for item in await project_catalog(session, project.id)
         if item["asset_name"] not in known
     )
-    sources = prepare_sources(episode.script or "", catalog)
+    from app.services.screenplay_interpretation_service import current_interpretations
+    interpretations, _ = await current_interpretations(session, episode)
+    sources = prepare_sources(episode.script or "", catalog, interpretations)
     return sources, _digest(
         {"catalog": catalog, "assets": assets, "settings": project.creation_settings}
     )
@@ -127,6 +135,7 @@ async def create_run(
     background_music: bool,
     reference_bindings: tuple[SourceReferenceBinding, ...] = (),
     expected_input_fingerprint: str | None = None,
+    requirements: str = "",
 ) -> Job:
     if not settings.episode_planning_epoch.strip():
         raise ConflictError("新规划执行命名空间尚未初始化")
@@ -152,6 +161,7 @@ async def create_run(
         "epoch": settings.episode_planning_epoch,
         "reference_bindings": [binding.model_dump(mode="json") for binding in reference_bindings],
         "expected_input_fingerprint": expected_input_fingerprint,
+        "requirements": requirements,
     }
     previous = (
         await session.scalars(
@@ -189,6 +199,7 @@ async def create_run(
         )
         if current != expected_input_fingerprint:
             raise ConflictError("正文、参考素材或模型能力已变化，请重新校验后确认费用")
+    baseline = await capture_production_baseline(session, episode)
     parent = Job(
         owner_id=episode.owner_id,
         project_id=episode.project_id,
@@ -214,6 +225,7 @@ async def create_run(
             else None,
             "expected_total": 1,
             "allow_dispatch": True,
+            "production_baseline": baseline,
         },
         result={"stage": "analyzing_content", "completed": 0, "total": 1},
     )
@@ -232,9 +244,31 @@ async def create_run(
     return parent
 
 
+async def capture_production_baseline(session, episode):
+    production = await session.scalar(select(EpisodeProduction).where(
+        EpisodeProduction.episode_id == episode.id))
+    return {
+        "expected_production_revision": production.revision if production else 0,
+        "expected_active_plan_id": production.active_plan_id if production else None,
+    }
+
+
 async def _new_child(session, parent, target, prompt, *, segment_key=None):
     from app.services.director_output_transport import freeze_job
 
+    if target == TARGET_DETAIL and segment_key is not None:
+        from app.services.segment_asset_references import detail_asset_context
+        record = await session.get(EpisodePlanningRecord, parent.payload["planning_record_id"])
+        plan = read_plan(record)
+        segment = next(segment for segment in plan.segments if segment.key == segment_key)
+        episode = await session.get(Episode, parent.target_id)
+        prompt += await detail_asset_context(session, episode,
+            [unit.model_dump(mode="json") for unit in plan.sources],
+            {key for shot in segment.shots for key in shot.source_keys})
+
+    requirements = parent.payload["request_spec"].get("requirements", "")
+    if requirements.strip():
+        prompt += "\n用户补充要求（不得改变正文事实、删除对白或违反输出结构）：\n" + requirements
     child = await create_text_job(
         session,
         parent.owner_id,
@@ -273,15 +307,16 @@ async def _lock_parent(session, parent_id):
     return parent
 
 
-async def validate_context(session, parent, *, check_current_capability=True, require_latest=True):
+async def validate_context(session, parent, *, check_current_capability=True, require_latest=True, lock_writes=True):
     if parent.deleted_at is not None or parent.status == "cancelled":
         raise ConflictError("规划任务已取消或删除")
     if parent.payload["epoch"] != settings.episode_planning_epoch:
         raise ConflictError("规划执行命名空间已变化，禁止旧任务继续运行")
     # Serialize final writes with a new run or an edit of this episode.
-    await session.execute(
-        update(Episode).where(Episode.id == parent.target_id).values(number=Episode.number)
-    )
+    if lock_writes:
+        await session.execute(
+            update(Episode).where(Episode.id == parent.target_id).values(number=Episode.number)
+        )
     newer = await session.scalar(
         select(Job.id)
         .where(
@@ -314,7 +349,11 @@ async def validate_context(session, parent, *, check_current_capability=True, re
         if check_current_capability
         else VideoCapability.model_validate_json(json.dumps(parent.payload["capability"]))
     )
-    if fingerprint(capability) != parent.payload["capability_fingerprint"]:
+    from app.services.episode_planning_capability import same_specification
+    frozen_capability = VideoCapability.model_validate_json(json.dumps(parent.payload["capability"]))
+    if fingerprint(frozen_capability) != parent.payload["capability_fingerprint"]:
+        raise ConflictError("已保存的模型规格记录不一致，请核对原任务")
+    if not same_specification(capability, frozen_capability):
         raise ConflictError("模型规格已变化，请先检查新规格与当前规划")
     mode = next(m for m in capability.modes if m.key == spec["mode_key"])
     bindings = tuple(
@@ -359,6 +398,8 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
                 for item in parent.payload["request_spec"]["reference_bindings"]
             )
             analysis = bind_analysis(analysis, bindings)
+            from app.services.episode_content_timing import constrain_speech_minima
+            analysis, timing_corrections = constrain_speech_minima(sources, analysis)
             from app.services.episode_audio_timing import calibrate_analysis
             analysis = calibrate_analysis(sources, analysis, parent.payload["reference_snapshot"])
             plan_id = parent.payload.get("planning_record_id")
@@ -409,6 +450,7 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
         return {
             "planning_record_id": record.id,
             "stage": "content_frozen",
+            "timing_corrections": timing_corrections,
             "usage": result.get("usage") or {},
         }
     record = await session.get(EpisodePlanningRecord, parent.payload.get("planning_record_id"))

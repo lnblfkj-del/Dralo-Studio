@@ -42,6 +42,7 @@ class CompatibilityIssue:
 def compatibility_issues(
     plan: FrozenEpisodePlan,
     target: VideoCapability,
+    *, require_materials: bool = True,
 ) -> tuple[CompatibilityIssue, ...]:
     """No calls, inference, truncation or plan mutations; caller selects the route."""
     issues = []
@@ -68,11 +69,19 @@ def compatibility_issues(
         if len(segment.shots) > mode.max_shots:
             reject("shot_count_requires_replan")
         counts = Counter(ref.role for ref in segment.references)
+        if require_materials:
+            required_roles = {
+                "single_image": ("image",),
+                "first_frame": ("first_frame",),
+                "first_last_frame": ("first_frame", "last_frame"),
+            }.get(mode.input_mode, ())
+            if any(counts[role] != 1 for role in required_roles):
+                reject("reference_constraints")
         allowed = {limit.role: limit for limit in mode.reference_limits}
         if (
             set(counts) - set(allowed)
             or any(
-                not limit.minimum <= counts[role] <= limit.maximum
+                not (limit.minimum if require_materials else 0) <= counts[role] <= limit.maximum
                 for role, limit in allowed.items()
             )
             or len(segment.references) > mode.max_total_references
@@ -88,7 +97,7 @@ def compatibility_issues(
 
 
 def validate_frozen_plan(plan: FrozenEpisodePlan) -> None:
-    issues = compatibility_issues(plan, plan.capability)
+    issues = compatibility_issues(plan, plan.capability, require_materials=False)
     if issues:
         raise ValueError("Invalid frozen plan: " + ",".join(i.code for i in issues))
 
@@ -109,9 +118,12 @@ def assert_submission_ready(
     execution_epoch: str,
 ) -> None:
     validate_frozen_plan(plan)
+    if compatibility_issues(plan, current):
+        raise ValueError("视频素材或模型规格尚未满足，请先补齐素材或调整片段")
     if execution_epoch != plan.execution_epoch:
         raise ValueError("Execution epoch changed; stale task cannot submit")
-    if fingerprint(current) != fingerprint(plan.capability):
+    from app.services.episode_planning_capability import same_specification
+    if not same_specification(current, plan.capability):
         raise ValueError("Capability changed; recheck and freeze a new plan")
     if current.verification != "channel_verified":
         raise ValueError("Selected channel capability has not been verified")

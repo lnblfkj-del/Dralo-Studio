@@ -35,6 +35,8 @@ def video_parameters(parameters, *, first=False, last=False, references=0, negat
         value = parameters.get(key)
         if value is None:
             continue
+        if key == "duration" and type(value) is float and value.is_integer():
+            value = int(value)
         if type(value) is not int or (key == "duration" and not 1 <= value <= 30) or (key == "seed" and not -1 <= value <= 2147483647):
             raise ConflictError(f"方舟 {key} 超出本应用基础校验范围，请按模型能力配置")
         result[key] = value
@@ -80,7 +82,10 @@ class ArkVideoProvider(OpenAICompatibleProvider):
         except ValueError as exc:
             raise ProviderError("方舟视频返回无效 JSON 对象") from exc
 
-    async def submit_video(self, *, model, prompt, negative_prompt, first_frame, last_frame, reference_images, parameters):
+    async def submit_video(self, *, model, prompt, negative_prompt, first_frame, last_frame, reference_images, parameters, reference_audios=()):
+        from app.providers.video_reference_audio import validate_reference_audio
+        validate_reference_audio("ark_video_images" if self.image_mode else "ark_video_t2v", model, reference_audios,
+                                 first=bool(first_frame), last=bool(last_frame), images=reference_images, parameters=parameters)
         params = video_parameters(parameters, first=bool(first_frame), last=bool(last_frame), references=len(reference_images), negative_prompt=negative_prompt, image_mode=self.image_mode)
         content = [{"type": "text", "text": prompt}]
         inputs = [(first_frame, "first_frame"), (last_frame, "last_frame"), *((image, "reference_image") for image in reference_images)]
@@ -103,6 +108,11 @@ class ArkVideoProvider(OpenAICompatibleProvider):
             if total > 32_000_000:
                 raise ConflictError("方舟参考图编码合计超过本地 32 MB 安全上限，请减少或压缩图片")
             content.append({"type": "image_url", "image_url": {"url": value}, "role": role})
+        for audio in reference_audios:
+            total += len(audio.content)
+            content.append({"type": "audio_url", "audio_url": {"url": audio.content}, "role": "reference_audio"})
+        if total > 60_000_000:
+            raise ConflictError("视频图像与音频编码合计超过本地 60 MB 安全上限，请减少素材")
         body = await self._request("POST", "/contents/generations/tasks", json={
             "model": model, "content": content, **params,
         })

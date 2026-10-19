@@ -22,18 +22,20 @@ def initialize() -> None:
                 if "standalone_alembic_version" not in tables:
                     raise RuntimeError("Existing database has no standalone revision; refusing to change it")
                 versions = [row[0] for row in connection.execute("SELECT version_num FROM standalone_alembic_version")]
-                if versions != ["ds_r3_0001"]:
+                if versions not in (["ds_r3_0001"], ["ds_r3_0002"]):
                     raise RuntimeError("Unsupported standalone database revision; refusing to change it. R3 requires explicit test-data reset; startup never resets an old database")
-                expected = json.loads((PROJECT_ROOT / "apps/server/migrations/schema-tables.json").read_text(encoding="utf-8"))
+                schema_file = "schema-tables-r3-0001.json" if versions == ["ds_r3_0001"] else "schema-tables.json"
+                expected = json.loads((PROJECT_ROOT / "apps/server/migrations" / schema_file).read_text(encoding="utf-8"))
                 if tables != set(expected) | {"standalone_alembic_version"}:
                     raise RuntimeError("Standalone schema table set does not match its revision")
                 for table, columns in expected.items():
                     quoted = table.replace('"', '""')
                     actual = [row[1] for row in connection.execute(f'PRAGMA table_info("{quoted}")')]
-                    if actual != columns:
+                    if set(actual) != set(columns):
                         raise RuntimeError("Standalone schema columns do not match their revision")
-                install_files(settings.storage_path)
-                return
+                if versions == ["ds_r3_0002"]:
+                    install_files(settings.storage_path)
+                    return
     file.parent.mkdir(parents=True, exist_ok=True)
     config = Config(str(PROJECT_ROOT / "apps/server/alembic.ini"))
     config.set_main_option("script_location", str(PROJECT_ROOT / "apps/server/migrations"))

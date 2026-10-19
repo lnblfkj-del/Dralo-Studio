@@ -148,9 +148,14 @@ def _sound_input_summary(
     ]
     policy = parameters.get("audio_policy") or {}
     capability = policy.get("capability") or {}
+    reference_audio = (voice_guidance or {}).get("audio_reference") or {}
+    for reference in reference_audio.get("references", []):
+        if not any(item["media_file_id"] == reference["media_file_id"] for item in sounds):
+            sounds.append({**{key: reference[key] for key in ("asset_id", "asset_version_id", "media_file_id")},
+                           "role": "voice_reference"})
     return {
         "bindings": sounds,
-        "delivery": "postproduction_evidence" if sounds else "none",
+        "delivery": "reference_audio_planned" if reference_audio.get("references") else "postproduction_evidence" if sounds else "none",
         "native_audio_generation": bool(
             capability.get("output") == "always_on" or parameters.get("generate_audio") or parameters.get("audio")
         ),

@@ -19,7 +19,7 @@ from app.models import (
     VideoSegment,
 )
 from app.services import asset_service
-from app.services.asset_binding_service import binding_role, resolve_asset_binding
+from app.services.asset_binding_service import binding_role
 from app.services.segment_plan_read_service import serialize_plan
 from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED
 
@@ -64,6 +64,7 @@ async def _validated_refs(
     session: AsyncSession,
     episode: Episode,
     refs: dict[str, Any],
+    *, assets=None,
 ) -> dict[str, Any]:
     """Canonicalize E4 asset-view references and reject foreign/stale media IDs."""
     if not isinstance(refs, dict):
@@ -79,6 +80,8 @@ async def _validated_refs(
     project = await session.get(Project, episode.project_id)
     if project is None:
         raise NotFoundError("项目不存在")
+    from app.services.segment_asset_references import pinned_binding, validate_references
+    asset_references = await validate_references(session, project.id, refs.get("asset_references", []), assets=assets)
     for raw in raw_bindings:
         if not isinstance(raw, dict):
             raise ValidationError("资产视图绑定格式无效")
@@ -88,15 +91,8 @@ async def _validated_refs(
         except (KeyError, TypeError, ValueError) as exc:
             raise ValidationError("资产视图绑定缺少资产或版本编号") from exc
         role = binding_role(raw)
-        binding = await resolve_asset_binding(
-            session,
-            project,
-            asset_id=asset_id,
-            adoption_key=raw.get("adoption_key"),
-            asset_version_id=version_id,
-            media_file_id=raw.get("media_file_id"),
-            role=role,
-        )
+        binding = await pinned_binding(session, project, {**raw, "asset_id": asset_id,
+                                                         "asset_version_id": version_id, "role": role}, assets=assets)
         canonical.append({
             **raw,
             **binding,
@@ -141,6 +137,8 @@ async def _validated_refs(
         })
     return {
         **refs,
+        "asset_references": asset_references,
+        "asset_materials": [],
         "asset_bindings": canonical,
         "reference_media_ids": canonical_media,
         "unresolved_assets": unresolved,

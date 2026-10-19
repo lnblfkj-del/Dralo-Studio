@@ -78,6 +78,10 @@ def _candidates_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
         right.get("requirement_type") or right.get("asset_type")
     ):
         return False
+    left_registry = dict(left.get("attributes") or {}).get("extraction_identity")
+    right_registry = dict(right.get("attributes") or {}).get("extraction_identity")
+    if left_registry and right_registry:
+        return left_registry == right_registry
     left_identity, right_identity = _candidate_identity_keys(left), _candidate_identity_keys(right)
     if left_identity.intersection(right_identity):
         return True
@@ -99,8 +103,12 @@ def _candidates_match(left: dict[str, Any], right: dict[str, Any]) -> bool:
 def _candidate_requires_review(candidate: dict[str, Any]) -> bool:
     return bool(
         dict(candidate.get("attributes") or {}).get("needs_review")
+        or dict(candidate.get("attributes") or {}).get("identity_match_status") == "needs_review"
         or any(record.get("needs_review") for record in candidate.get("usage_records") or [])
-        or not str(candidate.get("prompt_anchor") or "").strip()
+        or (
+            dict(candidate.get("attributes") or {}).get("extraction_contract_version") not in {2, 3}
+            and not str(candidate.get("prompt_anchor") or "").strip()
+        )
     )
 
 
@@ -280,6 +288,8 @@ def _classify_character_role(
         return "lead", "asset_breakdown.role_text"
     if _SUPPORTING_ROLE_RE.search(role_text):
         return "supporting", "asset_breakdown.role_text"
+    if any("visible_performer" in row.get("reasons", []) for row in attributes.get("necessity_records", [])):
+        return "extra", "asset_breakdown.visible_performer"
     return "unclassified", "insufficient_role_evidence"
 
 
@@ -343,6 +353,15 @@ def _deduplicate_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _merge_asset_candidate(target: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+    registry_attributes = None
+    if (target.get("attributes", {}).get("extraction_identity")
+            and target.get("attributes", {}).get("extraction_identity")
+            == source.get("attributes", {}).get("extraction_identity")):
+        from app.services.asset_extraction_registry import merge_entries
+
+        registry_attributes = merge_entries(
+            [target, source], kind=target.get("requirement_type", target.get("asset_type")),
+        )["attributes"]
     aliases = list(
         dict.fromkeys(
             [
@@ -361,6 +380,8 @@ def _merge_asset_candidate(target: dict[str, Any], source: dict[str, Any]) -> di
         **dict(source.get("attributes") or {}),
         **dict(target.get("attributes") or {}),
     }
+    if registry_attributes is not None:
+        target["attributes"] = registry_attributes
     target["usage_records"] = _deduplicate_records(
         [
             *(target.get("usage_records") or []),
@@ -437,6 +458,24 @@ def _preserve_candidate_outside_scope(
         if record.get("episode_number") is None
         or int(record.get("episode_number") or 0) in remaining_numbers
     ]
+    attributes = dict(preserved.get("attributes") or {})
+    if attributes.get("extraction_contract_version") in {2, 3}:
+        facts = list(attributes.get("facts") or [])
+        retained = []
+        for fact in facts:
+            match = re.match(r"ep(\d+):", str(fact.get("source_segment_id") or ""))
+            if match is None or int(match.group(1)) in remaining_numbers:
+                retained.append(fact)
+        fields = {fact["field"] for fact in facts if fact.get("quote_verified")}
+        for field in fields:
+            values = {fact["value"] for fact in retained
+                      if fact.get("field") == field and fact.get("quote_verified")}
+            if len(values) == 1:
+                attributes[field] = next(iter(values))
+            else:
+                attributes.pop(field, None)
+        attributes["facts"] = retained
+        preserved["attributes"] = attributes
     preserved["source_assignment_status"] = (
         "episode" if preserved["source_records"] else "unassigned"
     )
@@ -478,6 +517,12 @@ def _merge_candidate_list(candidates: list[dict[str, Any]]) -> list[dict[str, An
                     == (candidate.get("requirement_type") or candidate.get("asset_type"))
                     and matched_id
                     == (entry.get("matched_asset_id") or entry.get("formal_asset_id"))
+                and not (
+                    entry.get("attributes", {}).get("extraction_identity")
+                    and candidate.get("attributes", {}).get("extraction_identity")
+                    and entry["attributes"]["extraction_identity"]
+                    != candidate["attributes"]["extraction_identity"]
+                )
                 ),
                 None,
             )

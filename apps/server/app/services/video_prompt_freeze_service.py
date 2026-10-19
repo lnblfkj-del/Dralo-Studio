@@ -25,6 +25,8 @@ def build_video_prompt_freeze(
     provider: Any, model: Any, *, script: Any, input_contract: dict[str, Any],
     active_prompt: str, voice_guidance: str = "", style_snapshot: dict[str, Any] | None = None,
     selection: str = "existing_prompt",
+    asset_material_snapshot: dict[str, Any] | None = None,
+    voice_reference: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Record the exact prompt selected after style and voice preparation."""
     profile = resolve_model_prompt_profile(provider, model, input_contract["input_mode"])
@@ -36,6 +38,7 @@ def build_video_prompt_freeze(
         "structured_script_sha256": _digest(script) if isinstance(script, dict) else None,
         "input_fingerprint": input_contract.get("fingerprint"),
         "endpoint_fingerprint": profile["endpoint_fingerprint"],
+        "prompt_profile_fingerprint": _digest(profile),
         "route": {
             key: profile[key] for key in ("protocol", "channel_revision", "model_id", "input_mode")
         },
@@ -46,7 +49,9 @@ def build_video_prompt_freeze(
         "candidate_prompt_sha256": None,
         "candidate_status": "no_structured_script",
     }
-    if isinstance(script, dict) and script.get("camera"):
+    if isinstance(script, dict) and script.get("editor_document"):
+        core["candidate_status"] = "authored_document"
+    elif isinstance(script, dict) and script.get("camera"):
         try:
             candidate = compile_model_prompt(
                 script, profile=profile, input_contract=input_contract,
@@ -67,6 +72,10 @@ def build_video_prompt_freeze(
             })
     if selection == "model_compiler" and core["candidate_status"] != "selected":
         raise ConflictError("已启用模型提示词但正式编译结果无效")
+    if asset_material_snapshot is not None:
+        core["asset_material_fingerprint"] = _digest(asset_material_snapshot)
+    if voice_reference is not None:
+        core["voice_reference_fingerprint"] = voice_reference["fingerprint"]
     core["fingerprint"] = _digest(core)
     return core
 
@@ -80,12 +89,21 @@ def select_segment_video_prompt(
     profile = resolve_model_prompt_profile(provider, model, input_contract["input_mode"])
     if not profile["production_enabled"]:
         return existing_prompt, existing_negative_prompt, "existing_prompt"
-    if profile["recipe"] in {"generic", "h3_base", "h3_ref2va"}:
+    if profile["recipe"] in {"h3_base", "h3_ref2va"}:
         raise ConflictError("当前模型提示词未接入可提交的视频适配器")
     if not (profile.get("local_adapter_preflight") or {}).get("passed"):
-        raise ConflictError("当前模型输入模式未通过本地视频适配器预检")
+        raise ConflictError("当前模型输入模式未通过本地视频适配器预检：" + str((profile.get("local_adapter_preflight") or {}).get("reason") or "请检查模型设置"))
     if not isinstance(script, dict) or not script.get("camera"):
         raise ConflictError("模型提示词启用后需要已保存的结构化片段脚本")
+    if script.get("editor_document"):
+        # The legacy semantic summary is intentionally lossy for authored prose.
+        # Input adaptation and prompt freezing still apply to the saved document.
+        candidate = compile_model_prompt(script, profile=profile, input_contract=input_contract)
+        if candidate["submission_plan"] != "single_request" or candidate["blockers"]:
+            raise ConflictError("当前渠道无法承接编辑稿的镜头数量或素材，请调整片段后重试")
+        return existing_prompt, existing_negative_prompt, "existing_prompt"
+    if profile["recipe"] == "generic":
+        raise ConflictError("当前模型提示词未接入可提交的视频适配器")
     candidate = compile_model_prompt(
         script, profile=profile, input_contract=input_contract,
         voice_guidance=voice_guidance,
@@ -118,6 +136,13 @@ def assert_frozen_video_prompt(payload: dict[str, Any], provider: Any, model: An
         raise ConflictError("视频提示词冻结记录已变化, 已停止提交")
     if frozen.get("active_prompt_sha256") != _digest(payload.get("prompt")):
         raise ConflictError("视频提示词在费用确认后发生变化, 已停止提交")
+    if "voice_reference_fingerprint" in frozen:
+        from app.services.video_voice_reference_service import frozen_contract
+        reference = frozen_contract(payload)
+        if not reference or reference.get("fingerprint") != frozen["voice_reference_fingerprint"]:
+            raise ConflictError("参考声线与视频确认快照不一致，已停止提交")
+    if frozen.get("asset_material_fingerprint") is not None and frozen["asset_material_fingerprint"] != _digest(payload.get("asset_material_snapshot")):
+        raise ConflictError("视频参考素材与已确认的版本快照不一致，已停止提交")
     if frozen.get("style_snapshot") != payload.get("style_snapshot"):
         raise ConflictError("项目风格与提示词冻结记录不一致, 已停止提交")
     if frozen.get("input_fingerprint") != (payload.get("video_input_contract") or {}).get("fingerprint"):
@@ -129,3 +154,6 @@ def assert_frozen_video_prompt(payload: dict[str, Any], provider: Any, model: An
 
     if frozen.get("endpoint_fingerprint") != video_prompt_endpoint_fingerprint(provider, model):
         raise ConflictError("视频模型路由与提示词冻结记录不一致, 已停止提交")
+    profile = resolve_model_prompt_profile(provider, model, frozen["route"]["input_mode"])
+    if frozen.get("prompt_profile_fingerprint") != _digest(profile):
+        raise ConflictError("视频模型能力或镜头验收指纹在排队后发生变化，已停止收费提交")

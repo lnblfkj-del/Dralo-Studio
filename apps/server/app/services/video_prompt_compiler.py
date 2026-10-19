@@ -13,6 +13,7 @@ from math import isfinite
 from typing import Any
 
 from app.core.errors import ConflictError, ValidationError
+from app.providers.video_prompt_recipes import prompt_recipe
 from app.services.segment_script_semantics import compile_prompt
 from app.services.video_prompt_timeline import (
     TIMELINE_ROUTES,
@@ -21,10 +22,6 @@ from app.services.video_prompt_timeline import (
 )
 
 COMPILER_VERSION = "video_prompt_compiler.v7"
-H3_SOURCE = "https://github.com/MiniMax-AI/MiniMax-H3/blob/main/.agents/skills/h3-prompt-writing/SKILL.md"
-SEEDANCE_SOURCE = "https://docs.volcengine.com/docs/ark/seedance-2-5-prompt-guide?lang=zh"
-SEEDANCE_2_SOURCE = "https://www.volcengine.com/docs/82379/2222480?lang=zh"
-KLING_SOURCE = "https://ir.kuaishou.com/node/11216/pdf"
 INPUT_MODES = {"text", "first_frame", "first_last_frame", "single_image", "multi_reference"}
 # No Kling/Seedance native multi-shot request field is implemented in current adapters.
 NATIVE_MULTI_SHOT_FIELDS: dict[tuple[str, str], str] = {}
@@ -88,13 +85,16 @@ def validate_video_prompt_certifications(value: Any) -> dict[str, Any]:
 
 
 def video_prompt_endpoint_fingerprint(provider: Any, model: Any) -> str:
-    from app.providers.protocols import effective_base_url, effective_protocol, is_toapis_model
+    from app.providers.protocols import effective_base_url, effective_protocol
     from app.providers.video_contracts import VIDEO_CONTRACTS
+    from app.providers.video_integrations import resolve_video_integration
 
     protocol = effective_protocol(provider, model)
     protocol_version = VIDEO_CONTRACTS.get(protocol)
-    if protocol_version is None and is_toapis_model(provider, model):
-        protocol_version = "toapis.video.v1"
+    if protocol_version is None and protocol in {"openai_compatible", "custom_video"}:
+        integration = resolve_video_integration(provider, model)
+        if integration.client_business_id or protocol == "custom_video":
+            protocol_version = integration.version
     return _hash([provider.id, model.id, protocol, protocol_version,
                   effective_base_url(provider, model), model.model_id])
 
@@ -115,19 +115,6 @@ def resolve_model_prompt_profile(provider: Any, model: Any, input_mode: str) -> 
             "local_adapter_preflight": _probe_adapter_mode(provider, model, input_mode, resolved["recipe"])}
 
 
-def _recipe(protocol: str, model_id: str, mode: str) -> tuple[str, str | None]:
-    lower = model_id.lower()
-    if lower in {"h3", "h3-max", "minimax-h3", "minimax-h3-max"}:
-        return ("h3_ref2va" if mode in {"single_image", "multi_reference"} else "h3_base", H3_SOURCE)
-    if "seedance-2-5" in lower or "seedance-2.5" in lower:
-        return "seedance_2_5", SEEDANCE_SOURCE
-    if "seedance-2-0" in lower or "seedance-2.0" in lower:
-        return "seedance_2_0", SEEDANCE_2_SOURCE
-    if lower.startswith("kling-"):
-        return "kling", KLING_SOURCE
-    return "generic", None
-
-
 def resolve_prompt_profile(
     *, protocol: str, channel_revision: str, model_id: str, input_mode: str,
     certification: dict[str, Any] | None = None,
@@ -137,7 +124,7 @@ def resolve_prompt_profile(
         raise ValidationError("提示词档案缺少协议、渠道版本或模型 ID")
     if input_mode not in INPUT_MODES:
         raise ValidationError("视频输入模式未登记，不能编译提示词")
-    recipe, source = _recipe(protocol, model_id, input_mode)
+    recipe, source = prompt_recipe(protocol, model_id, input_mode)
     route = {
         "protocol": protocol, "channel_revision": channel_revision,
         "model_id": model_id, "input_mode": input_mode,
@@ -176,28 +163,19 @@ def resolve_prompt_profile(
 
 def _probe_adapter_mode(provider: Any, model: Any, mode: str, recipe: str) -> dict[str, Any]:
     """Exercise the registered adapter's local parameter contract; no media or HTTP."""
-    from app.providers.protocols import effective_protocol, is_toapis_model
-    from app.providers.toapis import VIDEO_MODELS
-    from app.providers.video_contracts import VIDEO_CONTRACTS
+    from app.providers.video_integrations import resolve_video_integration
     from app.services.video_input_compiler import compile_video_input
+    from app.services.video_configuration import projected_params
 
-    protocol = effective_protocol(provider, model)
-    toapis = is_toapis_model(provider, model)
-    if recipe.startswith("h3_") and protocol != "minimax_video_v2":
-        return {"passed": False, "reason": "H3 模型与当前官方 V2 视频协议不匹配"}
-    if recipe.startswith("seedance_") and not (
-        protocol in {"ark_video_t2v", "ark_video_images"}
-        or (toapis and model.model_id == "seedance-2-5")
-    ):
-        return {"passed": False, "reason": "Seedance 模型与当前视频协议不匹配"}
-    if recipe == "kling" and not (
-        protocol.startswith("kling_video_")
-        or (toapis and model.model_id in {"kling-v2-6", "kling-v3-omni"})
-    ):
-        return {"passed": False, "reason": "可灵模型与当前视频协议不匹配"}
-    if protocol not in VIDEO_CONTRACTS and not (toapis and model.model_id in VIDEO_MODELS):
-        return {"passed": False, "reason": "当前视频协议没有已注册的模型适配器"}
-    declared = (model.default_params or {}).get("supported_video_input_modes")
+    defaults = projected_params(model)
+    try:
+        integration = resolve_video_integration(provider, model)
+    except ConflictError as exc:
+        return {"passed": False, "reason": exc.message}
+    recipe_error = integration.prompt_recipe_error(model.model_id, recipe)
+    if recipe_error:
+        return {"passed": False, "reason": recipe_error}
+    declared = defaults.get("supported_video_input_modes")
     if isinstance(declared, list) and declared and mode not in declared:
         return {"passed": False, "reason": "当前模型配置未声明此视频输入模式"}
     refs_by_mode = {
@@ -207,10 +185,20 @@ def _probe_adapter_mode(provider: Any, model: Any, mode: str, recipe: str) -> di
         "multi_reference": [{"media_id": 1, "role": "reference_image"},
                             {"media_id": 2, "role": "reference_image"}],
     }
-    durations = (model.default_params or {}).get("durations") or []
-    duration = (model.default_params or {}).get("duration") or (durations[0] if durations else 5)
+    durations = defaults.get("durations") or []
+    duration = defaults.get("duration") or (durations[0] if durations else 5)
+    probe_parameters = {"duration": duration}
+    configured_modes = (defaults.get("episode_planning_capability") or {}).get("modes", [])
+    configured = next((item for item in configured_modes if item.get("input_mode") == mode), None)
+    if configured:
+        rule = configured.get("durations") or {}
+        values = rule.get("values_ms") or []
+        milliseconds = values[0] if values else rule.get("minimum_ms")
+        if milliseconds:
+            probe_parameters["duration"] = milliseconds / 1000
+        probe_parameters.update({key: configured[key] for key in ("aspect_ratio", "resolution") if configured.get(key)})
     try:
-        compiled = compile_video_input(provider, model, refs_by_mode[mode], {"duration": duration},
+        compiled = compile_video_input(provider, model, refs_by_mode[mode], probe_parameters,
                                        preview_only=recipe.startswith("h3_"))
     except (ConflictError, ValueError, TypeError) as exc:
         return {"passed": False, "reason": str(exc)}

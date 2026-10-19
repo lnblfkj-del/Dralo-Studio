@@ -2,10 +2,12 @@
 
 import asyncio
 import logging
+from sqlalchemy.exc import OperationalError
 from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.local_write_session import local_write_session
 from app.core.errors import RemoteVideoTimeoutError
 from app.models import Job, utcnow
 from app.services import job_service, worker_runtime_service
@@ -42,7 +44,7 @@ async def _update_runtime_progress(
     first_chunk_ms: int | None = None,
 ) -> bool:
     """Persist an observable real phase and mirror it to a sequential parent."""
-    async with SessionLocal() as session:
+    async with local_write_session() as session:
         current = await session.get(Job, job_id)
         if (
             current is None
@@ -80,11 +82,27 @@ async def _update_runtime_progress(
 async def heartbeat(job_id: int, worker_id: str) -> None:
     while True:
         await asyncio.sleep(max(1, settings.job_lease_seconds // 3))
-        async with SessionLocal() as session:
-            active = await job_service.renew_lease(session, job_id, worker_id)
-            await session.commit()
+        try:
+            async with local_write_session() as session:
+                active = await job_service.renew_lease(session, job_id, worker_id)
+                await session.commit()
+        except OperationalError as exc:
+            if "database is locked" not in str(exc.orig).lower():
+                raise
+            logger.warning("任务心跳数据库暂忙，将重试 job_id=%s", job_id)
+            continue
         if not active:
             return
+
+
+async def stop_heartbeat(pulse: asyncio.Task) -> None:
+    pulse.cancel()
+    try:
+        await pulse
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        logger.exception("任务心跳已失败，保留原任务处理结果")
 
 
 async def runtime_heartbeat(

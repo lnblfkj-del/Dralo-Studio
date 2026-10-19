@@ -2,18 +2,18 @@
 
 # ruff: noqa: RUF001
 import httpx
-from app.core.outbound_http import outbound_client
 
 from app.core.errors import ConflictError, GenerationFailedError
+from app.core.outbound_http import outbound_client
 
 
-def speech_parameters(model, parameters, prompt, *, protocol=None):
+def speech_parameters(model, parameters, prompt, *, protocol=None, provider=None):
     from app.providers.audio_contracts import AUDIO_PROTOCOLS, native_speech_parameters
     protocol = protocol or getattr(model, "api_protocol", None) or "openai_compatible"
     if protocol in AUDIO_PROTOCOLS:
         if "tts" not in AUDIO_PROTOCOLS[protocol]["types"]:
             raise ConflictError("纯音乐协议不能用于配音")
-        return native_speech_parameters(model, parameters, prompt, protocol)
+        return native_speech_parameters(model, parameters, prompt, protocol, provider=provider)
     defaults = model.default_params
     if any(
         parameters.get(key) is not None
@@ -27,12 +27,12 @@ def speech_parameters(model, parameters, prompt, *, protocol=None):
         )
     ):
         raise ConflictError("当前配音适配仅支持预设音色，不支持变速、参考音色、音乐生成或扩展指令")
-    if "speech" not in model.capabilities or defaults.get("speech_verified") is not True:
-        raise ConflictError("此模型的配音接口及预设音色尚未验证，未提交收费任务")
+    if model.model_type != "tts" or "speech" not in model.capabilities:
+        raise ConflictError("请先设置模型的配音能力")
     voices = defaults.get("voices", [])
     voice = parameters.get("voice", defaults.get("voice"))
     if not isinstance(voices, list) or not isinstance(voice, str) or not voice or voice not in voices:
-        raise ConflictError("请选择此模型已验证的预设音色；参考录音不能用于克隆")
+        raise ConflictError("请选择此模型已登记的预设音色")
     limit = defaults.get("max_input_chars", 4096)
     if type(limit) is not int or not 1 <= len(prompt.strip()) <= min(limit, 100000):
         raise ConflictError("配音文本为空或超过模型长度限制")

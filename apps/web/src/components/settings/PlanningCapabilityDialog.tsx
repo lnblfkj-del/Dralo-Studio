@@ -5,6 +5,7 @@ import * as api from "@/api/planningCapabilities";
 import { toErrorMessage } from "@/api/client";
 import { Button, Dialog } from "@/components/ui";
 import "@/styles/planning-capabilities.css";
+import { emptyPlanningMode } from "./videoSupport";
 
 const roles: [api.ReferenceRole, string][] = [["image", "参考图"], ["first_frame", "首帧"], ["last_frame", "尾帧"], ["audio", "参考音频"], ["video", "参考视频"]];
 const number = (text: string) => text.trim() ? Number(text) : NaN;
@@ -14,22 +15,18 @@ const milliseconds = (text: string) => {
   const value = number(text) * 1000;
   return Math.abs(value - Math.round(value)) < 0.000001 ? Math.round(value) : NaN;
 };
-function emptyPlanningMode(key: string): api.PlanningMode {
-  return { key, input_mode: "", aspect_ratio: "", resolution: "", durations: { kind: "discrete", values_ms: [], minimum_ms: null, maximum_ms: null, step_ms: null },
-    max_shots: 1, reference_limits: [], max_total_references: 0, native_dialogue: false, native_audio: false, bgm_control: "unsupported" };
-}
 
-function ModeFields({ mode, onChange, onDelete, disabled }: {
-  mode: api.PlanningMode; onChange: (mode: api.PlanningMode) => void; onDelete: () => void; disabled: boolean;
+export function ModeFields({ mode, onChange, onDelete, disabled, simple = false, index = 0 }: {
+  mode: api.PlanningMode; onChange: (mode: api.PlanningMode) => void; onDelete: () => void; disabled: boolean; simple?: boolean; index?: number;
 }) {
   const [durationText, setDurationText] = useState(mode.durations.values_ms.map(value => value / 1000).join(", "));
   function edit(patch: Partial<api.PlanningMode>) { onChange({ ...mode, ...patch }); }
   return <fieldset disabled={disabled} className="planning-mode-fields">
-    <legend>{mode.key || "新模式"}</legend>
+    <legend>{simple ? `设置 ${index + 1}` : mode.key || "新模式"}</legend>
     <Button title="删除模式" aria-label={`删除模式 ${mode.key}`} variant="text" icon={<Trash2 size={16} />} onClick={onDelete} disabled={disabled} />
     <div className="planning-spec-grid">
-      <label>模式标识<input aria-label="模式标识" value={mode.key} onChange={e => edit({ key: e.target.value })} /></label>
-      <label>输入模式<select aria-label="输入模式" value={mode.input_mode} onChange={e => edit({ input_mode: e.target.value })}>
+      {!simple && <label>模式标识<input aria-label="模式标识" value={mode.key} onChange={e => edit({ key: e.target.value })} /></label>}
+      <label>生成方式<select aria-label="输入模式" value={mode.input_mode} onChange={e => edit({ input_mode: e.target.value })}>
         <option value="">请选择</option>{["text", "single_image", "multi_reference", "first_frame", "first_last_frame"].map(value => <option key={value} value={value}>{({ text: "纯文本", single_image: "单图", multi_reference: "多参考", first_frame: "首帧", first_last_frame: "首尾帧" })[value as "text"]}</option>)}
       </select></label>
       <label>画幅比例<input aria-label="规划画幅比例" value={mode.aspect_ratio} onChange={e => edit({ aspect_ratio: e.target.value })} /></label>
@@ -42,9 +39,9 @@ function ModeFields({ mode, onChange, onDelete, disabled }: {
         edit({ durations: { ...mode.durations, values_ms: e.target.value.split(/[,，]/).filter(value => value.trim()).map(value => milliseconds(value) ?? NaN) } });
       }} /></label> : ([['minimum_ms', '最短时长'], ['maximum_ms', '最长时长'], ['step_ms', '时长步长']] as const).map(([key, label]) =>
         <label key={key}>{label}（秒）<input aria-label={label} type="number" step="0.001" min="0.001" value={seconds(mode.durations[key])} onChange={e => edit({ durations: { ...mode.durations, [key]: milliseconds(e.target.value) } })} /></label>)}
-      <label>片段镜头上限<input aria-label="片段镜头上限" type="number" min={1} value={Number.isFinite(mode.max_shots) ? mode.max_shots : ""} onChange={e => edit({ max_shots: number(e.target.value) })} /></label>
+      <label>每段最多镜头数<input aria-label="片段镜头上限" type="number" min={1} value={Number.isFinite(mode.max_shots) ? mode.max_shots : ""} onChange={e => edit({ max_shots: number(e.target.value) })} /></label>
       <label>参考总数上限<input aria-label="参考总数上限" type="number" min={0} value={Number.isFinite(mode.max_total_references) ? mode.max_total_references : ""} onChange={e => edit({ max_total_references: number(e.target.value) })} /></label>
-      <label>配乐控制<select aria-label="配乐控制" value={mode.bgm_control} onChange={e => edit({ bgm_control: e.target.value as api.PlanningMode['bgm_control'] })}><option value="unsupported">不支持</option><option value="prompt_preference">提示词偏好</option><option value="parameter">独立参数</option></select></label>
+      <label>背景音乐<select aria-label="配乐控制" value={mode.bgm_control} onChange={e => edit({ bgm_control: e.target.value as api.PlanningMode['bgm_control'] })}><option value="unsupported">不支持</option><option value="prompt_preference">由提示词要求</option><option value="parameter">接口有单独开关</option></select></label>
     </div>
     <div className="planning-spec-switches"><label><input type="checkbox" checked={mode.native_audio} onChange={e => edit({ native_audio: e.target.checked, native_dialogue: e.target.checked && mode.native_dialogue })} />原生声音</label>
       <label><input type="checkbox" checked={mode.native_dialogue} disabled={!mode.native_audio || disabled} onChange={e => edit({ native_dialogue: e.target.checked })} />原生对白</label></div>
@@ -113,7 +110,7 @@ export function PlanningCapabilityDialog({ providerId, modelId, canManage, onClo
     {query.isLoading && <p role="status">正在读取模型规格…</p>}
     {(error || query.error) && <p role="alert">{error || toErrorMessage(query.error)}</p>}
     {state && <div className="planning-spec-form">
-      <p role="status">{state.planning_ready ? "规划规格已登记为渠道实测；视频提交仍需独立提示词认证。" : state.blocking_reason}</p>
+      <p role="status">{state.planning_ready ? "视频设置已完整，可用于片段脚本规划。实际视频生成仍按渠道支持情况检查。" : state.blocking_reason}</p>
       <div className="planning-spec-route"><strong>{state.route.model_id}</strong><span>{state.route.protocol}</span></div>
       <label>验证状态<select aria-label="验证状态" disabled={busy || !canManage} value={verification} onChange={e => { changed(); setVerification(e.target.value as api.Verification); }}><option value="documented">仅文档规格</option><option value="mock_verified">仅模拟验证</option><option value="channel_verified">渠道实测</option></select></label>
       <label>验证证据<textarea aria-label="验证证据" rows={3} disabled={busy || !canManage} value={evidence} onChange={e => { changed(); setEvidence(e.target.value); }} /></label>

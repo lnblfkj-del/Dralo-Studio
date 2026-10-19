@@ -1,0 +1,8 @@
+.audio-current-voice { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; min-height: 36px; font-size: 13px; }
+.audio-current-voice span { overflow-wrap: anywhere; }
+.audio-role-voice { display: grid; gap: 8px; min-width: 0; align-content: start; }
+.audio-role-voice small { overflow-wrap: anywhere; line-height: 1.5; color: var(--app-color-text-muted); }
+.audio-role-voice > button { justify-self: start; }
+.asset-audio-advanced { grid-column: 1 / -1; padding-block: 12px; border-block: 1px solid var(--app-color-border); }
+.asset-audio-advanced > summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.asset-audio-advanced[open] > summary { margin-bottom: 16px; }

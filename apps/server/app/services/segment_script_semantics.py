@@ -8,7 +8,8 @@ from itertools import pairwise
 from typing import Any
 
 from app.core.errors import ValidationError
-from app.services.screenplay_dialogue import LAYOUT as SCREENPLAY_LAYOUT, dialogue_units
+from app.services.screenplay_dialogue import LAYOUT as SCREENPLAY_LAYOUT
+from app.services.screenplay_dialogue import dialogue_units
 
 STRUCTURED_SCRIPT_KEY = "structured_script"
 STRUCTURED_SCRIPT_VERSION = 1
@@ -430,7 +431,9 @@ def normalize_segment(
     raw = parameters.get(STRUCTURED_SCRIPT_KEY)
     if isinstance(raw, dict) and raw.get("editor_document") is not None:
         from app.services.segment_document_service import compile_document
-        script, prompt, duration = compile_document(raw, shot_ids, (item.get("refs") or {}).get("asset_bindings") or [])
+        script, prompt, duration = compile_document(raw, shot_ids,
+            (item.get("refs") or {}).get("asset_bindings") or [],
+            (item.get("refs") or {}).get("asset_references") or [])
         if abs(duration - float(item.get("timeline_duration") or item["generation_duration"])) > 0.05:
             raise ValidationError("正文镜头时长合计与片段时长不一致")
         parameters[STRUCTURED_SCRIPT_KEY] = script
@@ -443,6 +446,7 @@ def normalize_segment(
         else build_structured_script(shot_ids, shots, scenes)
     )
     bindings = (item.get("refs") or {}).get("asset_bindings") or []
+    references = (item.get("refs") or {}).get("asset_references") or []
     documents = script.get("document_fields") or {}
     if not isinstance(documents, dict):
         raise ValidationError("正文编辑数据无效")
@@ -459,7 +463,7 @@ def normalize_segment(
                 binding.get("asset_id") == attrs.get("asset_id")
                 and binding.get("asset_version_id") == attrs.get("asset_version_id")
                 and binding.get("resolved") is not False
-                for binding in bindings
+                for binding in (references if attrs.get("asset_version_id") is None else bindings)
             ):
                 raise ValidationError("正文引用的素材版本尚未绑定，请重新选择素材")
         pending.extend(node.get("content") or [])

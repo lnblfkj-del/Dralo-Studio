@@ -47,12 +47,21 @@ async def create_plan(
     source_type: str = "manual",
     parent_plan_id: int | None = None,
     excluded_shot_ids: list[int] | None = None,
+    delete_receipt: dict[str, Any] | None = None,
+    model_switch_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create and activate an immutable plan version; never creates generation jobs."""
     production = await _production(session, episode)
+    locked = await session.execute(update(type(production)).where(
+        type(production).id == production.id,
+        type(production).revision == expected_production_revision,
+    ).values(revision=type(production).revision).execution_options(synchronize_session=False))
+    if locked.rowcount != 1:
+        raise ConflictError("制作配置已变化，请刷新后重新规划")
+    await session.refresh(production)
     active = await session.get(EpisodeProductionPlan, production.active_plan_id) if production.active_plan_id else None
-    if active and active.source_type == "content_frozen":
-        raise ConflictError("当前片段计划已冻结；请在整集规划中调整模型或重新规划，不能直接增删片段或修改时长")
+    if active and active.source_type == "content_frozen" and parent_plan_id != active.id:
+        raise ConflictError("请从当前片段脚本编辑并保存，不能覆盖已启用的规划结果")
     if production.revision != expected_production_revision:
         raise ConflictError("制作配置已变化，请刷新后重新规划")
     if episode.finalized_script_revision != episode.script_revision:
@@ -64,13 +73,16 @@ async def create_plan(
         parent_plan = await session.get(EpisodeProductionPlan, parent_plan_id)
         if parent_plan is None or parent_plan.episode_id != episode.id:
             raise ValidationError("父片段计划不属于当前分集")
+        if parent_plan_id != production.active_plan_id:
+            raise ConflictError("片段计划已变化，请刷新后保存，当前修改未覆盖新版本")
     capability_contract: dict[str, Any] | None = None
     if provider_model_id is not None:
         model = await session.get(ProviderModel, provider_model_id)
         if model is None or not model.enabled or model.model_type != "video":
             raise ConflictError("视频模型不存在、已停用或类型不正确")
         capability_contract = normalize_video_model(model)
-        validate_parameters(capability_contract, parameters)
+        if status == "confirmed":
+            validate_parameters(capability_contract, parameters)
         # Capabilities are always captured server-side.  A caller cannot weaken
         # the current contract by submitting a fabricated snapshot.
         model_capability_snapshot = capability_contract
@@ -108,6 +120,12 @@ async def create_plan(
                    (parent_plan.parameters or {}).get("excluded_shot_ids", []) if parent_plan else [])
     excluded -= set(submitted)
     parameters = {**parameters, "excluded_shot_ids": sorted(excluded)}
+    parameters.pop("delete_receipt", None)
+    parameters.pop("model_switch_receipt", None)
+    if model_switch_receipt is not None:
+        parameters["model_switch_receipt"] = model_switch_receipt
+    if delete_receipt is not None:
+        parameters["delete_receipt"] = delete_receipt
     if status == "confirmed" and excluded and parameters.get("confirmed_excluded_shot_ids") != sorted(excluded):
         raise ValidationError("时间轴已移除来源镜头，请先确认正文删减范围再生产")
     if excluded_shot_ids is None:
@@ -118,8 +136,11 @@ async def create_plan(
         raise ValidationError("片段计划必须且只能覆盖本集全部分镜")
 
     normalized: list[dict[str, Any]] = []
+    from app.services.segment_asset_references import catalog
+    asset_catalog = await catalog(session, episode.project_id)
     for item in segments:
-        validated_refs = await _validated_refs(session, episode, item.get("refs") or {})
+        validated_refs = await _validated_refs(session, episode, item.get("refs") or {}, assets=asset_catalog)
+        item = {**item, "refs": validated_refs}
         manual_insert = not item["shot_ids"] and (item.get("parameters") or {}).get("manual_insert") is True
         if not item["shot_ids"] and not manual_insert:
             raise ValidationError("空分镜片段必须来自手动插入")
@@ -141,15 +162,17 @@ async def create_plan(
             # Keep frame-identity validation while deferring image budgets to
             # video preflight; saving a script must not discard its asset links.
             _compile_segment_media(validated_refs, dict(item_parameters))
-            validate_parameters(capability_contract, item_parameters)
+            if status == "confirmed":
+                validate_parameters(capability_contract, item_parameters)
             if item_parameters.get("duration") not in (None, generation):
                 raise ValidationError("片段参数 duration 必须与生成时长一致")
-            validate_segment(
-                capability_contract,
-                generation_duration=generation,
-                shot_count=max(1, len(item["shot_ids"])),
-                timeline_duration=timeline,
-            )
+            if status == "confirmed":
+                validate_segment(
+                    capability_contract,
+                    generation_duration=generation,
+                    shot_count=max(1, len(item["shot_ids"])),
+                    timeline_duration=timeline,
+                )
         normalized_item = normalize_segment(
             item,
             list(item["shot_ids"]),
@@ -158,6 +181,10 @@ async def create_plan(
             force_structure=(source_type in AI_SOURCE_TYPES and not manual_insert
                              and not (source_type in {"split", "merge", "add"} and str(item.get("prompt") or "").strip())),
         )
+        authored = ((normalized_item.get("parameters") or {}).get("structured_script") or {}).get("authored_shots")
+        if status == "confirmed" and capability_contract is not None and authored:
+            validate_segment(capability_contract, generation_duration=generation,
+                             shot_count=len(authored), timeline_duration=timeline)
         cameras = ((normalized_item.get("parameters") or {}).get("structured_script") or {}).get("camera", [])
         try:
             explicit_durations = {entry["shot_id"]: float(entry["duration"]) for entry in cameras if "duration" in entry}

@@ -95,7 +95,7 @@ export interface Job {
       worker_elapsed_ms?: number;
     };
   };
-  execution_info?: {recovery: "query_only" | "save_only" | "check_required"; result_expired?: boolean; result_expires_at?: string | null; task_id: string | null; business_id?: string | null; cancel_scope: "local_only"; phase?: "submit" | "poll" | "download"; started_at?: string | null; timeout_seconds?: number | null} | null;
+  execution_info?: {recovery: "query_only" | "save_only" | "check_required"; result_expired?: boolean; result_expires_at?: string | null; task_id: string | null; business_id?: string | null; cancel_scope: "local_only"; phase?: "submit" | "poll" | "download"; started_at?: string | null; timeout_seconds?: number | null; reference_audio_status?: "submitted"; reference_audio_media_ids?: number[]} | null;
   media_processing?: {
     operation: {kind: string; audio_media_id?: number; start?: number; trim_start?: number; trim_end?: number; volume?: number};
     source_media_id?: number; source_hash?: string | null; audio_hash?: string | null; source_duration?: number; output_kind?: string;
@@ -133,7 +133,9 @@ export interface Job {
     billing_behavior: string;
   } | null;
   agent_execution?: {
-    agent: string;
+    agent?: string;
+    execution_kind?: string;
+    executor_key?: string;
     surface: string;
     route_source: string;
     provider_model_id: number;
@@ -169,6 +171,7 @@ export interface Job {
     processed_at?: string;
     model_called?: boolean;
     regeneration_required?: boolean;
+    asset_link_review_required?: boolean;
     last_reprocess_error_code?: string;
     last_reprocess_error_message?: string;
   } | null;

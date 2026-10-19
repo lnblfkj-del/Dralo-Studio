@@ -4,6 +4,7 @@ import { http, toErrorMessage } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import { Dialog } from "@/components/ui/Dialog";
 import { Button } from "@/components/ui/Button";
+import { useConfirmation } from "@/components/ui/useConfirmation";
 import { Building2 } from "lucide-react";
 
 type Space = { id: string; name: string; role: string };
@@ -12,6 +13,7 @@ type Invitation = { id: number; role: string; expires_at: string };
 const roles: Record<string, string> = { owner: "所有者", admin: "管理员", member: "成员", viewer: "只读成员" };
 
 export function WorkspaceControl() {
+  const confirmation = useConfirmation();
   const user = useAuthStore(s => s.user);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -35,11 +37,13 @@ export function WorkspaceControl() {
   };
   const switchTo = (next: string) => {
     if (next === id) return;
-    if (!window.confirm("切换空间将返回工作台，请先保存当前编辑。是否继续？")) return;
-    // A fresh page clears all project caches and in-memory editing state.
-    window.location.assign(`/projects?workspace=${encodeURIComponent(next)}`);
+    confirmation.ask("切换空间将返回工作台，请先保存当前编辑。是否继续？", () => {
+      // A fresh page clears all project caches and in-memory editing state.
+      window.location.assign(`/projects?workspace=${encodeURIComponent(next)}`);
+    });
   };
   return <>
+    {confirmation.dialog}
     <button type="button" className="creator-nav" onClick={() => setOpen(true)} title="工作空间"><Building2 size={18} /><span>工作空间</span></button>
     <Dialog open={open} title="工作空间" busy={busy} maskClosable={false} onClose={() => { setOpen(false); setIssued(""); setToken(""); }}>
       <div style={{ display: "grid", gap: 16, minWidth: 0 }}>
@@ -49,7 +53,7 @@ export function WorkspaceControl() {
         </select></label>
         <section><h3>成员</h3><table style={{ width: "100%" }}><tbody>{members.data?.map(m => <tr key={m.id}>
           <td>{m.display_name || m.username}</td><td>{roles[m.role]}</td><td>{owner && m.role !== "owner" && <Button disabled={busy} onClick={() => {
-            if (window.confirm(`移除成员 ${m.username}？该成员将失去此空间访问权限。`)) void run(async () => { await http.delete(`/workspaces/${id}/members/${m.id}`); await cache.invalidateQueries({ queryKey: ["workspace-members", id] }); });
+            confirmation.ask(`移除成员 ${m.username}？该成员将失去此空间访问权限。`, () => { void run(async () => { await http.delete(`/workspaces/${id}/members/${m.id}`); await cache.invalidateQueries({ queryKey: ["workspace-members", id] }); }); });
           }}>移除</Button>}</td></tr>)}</tbody></table></section>
         {owner && <section><h3>邀请成员</h3><select aria-label="邀请角色" value={role} onChange={e => setRole(e.target.value)} disabled={busy}>
           {["member", "viewer", "admin"].map(r => <option key={r} value={r}>{roles[r]}</option>)}

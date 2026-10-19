@@ -54,7 +54,7 @@ def _references(blocks: tuple[ContentBlock, ...], mode: VideoMode):
     if (
         set(counts) - set(limits)
         or len(refs) > mode.max_total_references
-        or any(not limit.minimum <= counts[role] <= limit.maximum for role, limit in limits.items())
+        or any(counts[role] > limit.maximum for role, limit in limits.items())
     ):
         return None
     return refs
@@ -69,6 +69,8 @@ def frame_boundaries_match(blocks: tuple[ContentBlock, ...], mode: VideoMode) ->
     ]
     if mode.input_mode not in {"first_frame", "first_last_frame"}:
         return not frames
+    if blocks and not any(block.references for block in blocks):
+        return True
     if not blocks or any(
         ref.role not in {"first_frame", "last_frame"}
         for block in blocks

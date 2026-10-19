@@ -66,6 +66,8 @@ async def resolve_asset_binding(
 
     choice: dict[str, Any] | None = None
     if adoption_map_exists:
+        if not adoptions:
+            raise ConflictError(f"资产 {asset.name} 尚未采用素材")
         if adoption_key:
             choice = next((item for item in adoptions if item.get("key") == adoption_key), None)
             if choice is None:

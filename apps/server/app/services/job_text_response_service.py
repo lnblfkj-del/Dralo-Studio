@@ -1,5 +1,6 @@
 """Persist paid text-call state before business result processing."""
 
+import asyncio
 import hashlib
 import logging
 from datetime import timedelta
@@ -7,20 +8,24 @@ from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import delete, select, update
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionLocal
+from app.core.local_write_session import local_write_session
 from app.core.errors import AppError, ConflictError
 from app.models import JOB_STATUS_FAILED, Job, JobTextResponse, utcnow
 
 
 async def mark_submission_started(
     job_id: int, worker_id: str, call_id: int, model_id: str
-) -> None:
-    async with SessionLocal() as session:
+) -> bool:
+    async with local_write_session() as session:
         job = await session.get(Job, job_id)
-        if job is None or job.worker_id != worker_id:
-            return
+        if (job is None or job.worker_id != worker_id or job.status not in {"running", "processing"}
+                or job.lease_expires_at is None
+                or job.lease_expires_at.replace(tzinfo=None) <= utcnow().replace(tzinfo=None)):
+            return False
         previous = dict((job.payload or {}).get("text_submission") or {})
         job.payload = {
             **(job.payload or {}),
@@ -35,6 +40,7 @@ async def mark_submission_started(
             },
         }
         await session.commit()
+        return True
 
 
 async def preserve_response(
@@ -43,14 +49,30 @@ async def preserve_response(
     call_id: int,
     result: dict[str, Any],
 ) -> None:
+    # Retain the already paid result in memory across fresh local transactions.
+    for attempt in range(6):
+        try:
+            await _preserve_response_once(job_id, worker_id, call_id, result)
+            return
+        except OperationalError as exc:
+            if "database is locked" not in str(exc.orig).lower() or attempt == 5:
+                raise
+            await asyncio.sleep(min(0.25 * 2 ** attempt, 4))
+
+
+async def _preserve_response_once(
+    job_id: int, worker_id: str, call_id: int, result: dict[str, Any]
+) -> None:
     text = str(result.get("text") or "")
     usage = result.get("usage") if isinstance(result.get("usage"), dict) else {}
     finish_reason = result.get("finish_reason")
     finish_reason = finish_reason[:100] if isinstance(finish_reason, str) else None
-    async with SessionLocal() as session:
-        await session.execute(
-            delete(JobTextResponse).where(JobTextResponse.expires_at < utcnow())
-        )
+    async with local_write_session() as session:
+        # Acquire the write transaction before reading; avoid WAL snapshot
+        # upgrade conflicts and keep unrelated retention cleanup off this path.
+        await session.execute(update(Job).where(
+            Job.id == job_id, Job.worker_id == worker_id,
+        ).values(progress=Job.progress))
         job = await session.get(Job, job_id)
         if job is None or job.worker_id != worker_id:
             return
@@ -107,6 +129,12 @@ async def preserve_response(
                 "status": "available",
             },
         }
+        await session.commit()
+
+
+async def cleanup_expired_responses() -> None:
+    async with SessionLocal() as session:
+        await session.execute(delete(JobTextResponse).where(JobTextResponse.expires_at < utcnow()))
         await session.commit()
 
 
@@ -192,11 +220,25 @@ async def reprocess_preserved_response(
     actor_id: int,
     *,
     character_name_corrections: dict[str, str] | None = None,
+    asset_link_corrections: dict[str, str] | None = None,
     expected_response_sha256: str | None = None,
+    acknowledge_pending_audio_calls: bool = False,
+    expected_pending_audio_calls: int = 0,
 ) -> Job:
     """Re-run local business processing only; this function has no provider path."""
     from app.core.retired_workflows import require_active_workflow
     require_active_workflow(job.target_type)
+    if asset_link_corrections is not None:
+        from app.models import CreationSession
+        from app.services.asset_extraction_scheduling import lock_breakdown_session
+
+        if character_name_corrections is not None or job.target_type != "script_asset_breakdown_batch":
+            raise ConflictError("资产关联核对仅用于历史资产拆解批次")
+        item = await session.get(CreationSession, job.target_id)
+        if item is None or item.owner_id != job.owner_id:
+            raise ConflictError("创作会话不可用")
+        await lock_breakdown_session(session, item)
+        await session.refresh(job)
     if job.status != JOB_STATUS_FAILED:
         raise ConflictError("仅本地处理失败的任务可以重新处理已保存响应")
     if job.error_code != "RESPONSE_RECEIVED_LOCAL_PROCESSING_FAILED":
@@ -204,13 +246,18 @@ async def reprocess_preserved_response(
     if character_name_corrections is not None and not ((job.payload or {}).get("parameters") or {}).get("long_form_work_id"):
         raise ConflictError("角色对应仅用于分批大纲结果恢复")
     stored = await _latest_response(session, job)
-    if stored is None and job.target_type not in {"episode_content_analysis", "episode_content_detail"}:
+    if stored is None and asset_link_corrections is None and job.target_type not in {"episode_content_analysis", "episode_content_detail"}:
         stored = await _migrate_legacy_payload_response(session, job)
     if stored is None:
         raise ConflictError("已保存模型响应不存在或已清理，不能执行本地重处理")
     if stored.expires_at.replace(tzinfo=None) <= utcnow().replace(tzinfo=None):
         stored.status = "expired"
         raise ConflictError("已保存模型响应已超过保留期限，不能执行本地重处理")
+    if job.target_type == "script_asset_breakdown_batch":
+        submitted_hash = (job.payload.get("text_submission") or {}).get("response_sha256")
+        if (hashlib.sha256(stored.response_text.encode("utf-8")).hexdigest() != stored.response_sha256
+                or (submitted_hash and submitted_hash != stored.response_sha256)):
+            raise ConflictError("已保存资产响应的完整性校验失败，不能恢复或写入候选")
     if job.target_type in {"episode_content_analysis", "episode_content_detail"}:
         submission = (job.payload or {}).get("text_submission") or {}
         if (hashlib.sha256(stored.response_text.encode("utf-8")).hexdigest() != stored.response_sha256
@@ -219,6 +266,22 @@ async def reprocess_preserved_response(
             raise ConflictError("已保存响应的完整性校验失败，不能恢复或覆盖计划")
 
     corrections = None
+    asset_projection = None
+    asset_audit = None
+    if asset_link_corrections is not None:
+        from app.services.asset_extraction_legacy import corrected_response
+
+        asset_projection, pending_audio_calls = await corrected_response(
+            session, job, stored, asset_link_corrections, expected_response_sha256,
+            acknowledge_pending_audio_calls=acknowledge_pending_audio_calls,
+            expected_pending_audio_calls=expected_pending_audio_calls,
+        )
+        asset_audit = {
+            "response_id": stored.id, "response_sha256": stored.response_sha256,
+            "actor_id": actor_id, "reviewed_at": utcnow().isoformat(),
+            "asset_link_corrections": dict(asset_link_corrections), "model_called": False,
+            "pending_audio_calls_approved": pending_audio_calls,
+        }
     if character_name_corrections is not None:
         from app.services.outline_cast_recovery import validate_corrections
         corrections = await validate_corrections(
@@ -234,7 +297,7 @@ async def reprocess_preserved_response(
     recovery_worker = f"local-recovery-{actor_id}-{uuid4().hex[:8]}"
     recovery_job_id = job.id
     result = {
-        "text": stored.response_text,
+        "text": asset_projection if asset_projection is not None else stored.response_text,
         "usage": dict(stored.usage or {}),
         "streaming": stored.streaming,
     }
@@ -294,6 +357,18 @@ async def reprocess_preserved_response(
             from app.services.job_text_finalize_service import finalize_text_result
 
             persisted = await finalize_text_result(session, job, result)
+            from app.services.asset_extraction_partial import settle_partial_batch
+
+            if await settle_partial_batch(session, job, recovery_worker):
+                stored.status = "available"
+                stored.last_error_code = "MODEL_OUTPUT_SCHEMA_INVALID"
+                stored.last_error_message = job.error_message
+                job.payload = {**job.payload, "response_recovery": {
+                    **dict(job.payload.get("response_recovery") or {}), "model_called": False,
+                    "actor_id": actor_id, "response_sha256": stored.response_sha256,
+                }}
+                await session.flush()
+                return job
             persisted = {
                 **persisted,
                 "_response_recovery": {
@@ -301,6 +376,7 @@ async def reprocess_preserved_response(
                     "reprocessed_locally": True,
                     "model_called": False,
                     "character_name_corrections": corrections,
+                    "asset_link_review": asset_audit,
                     "actor_id": actor_id,
                     "response_sha256": stored.response_sha256,
                 },
@@ -321,6 +397,7 @@ async def reprocess_preserved_response(
                     "processed_at": stored.processed_at.isoformat(),
                     "model_called": False,
                     "character_name_corrections": corrections,
+                    "asset_link_review": asset_audit,
                     "actor_id": actor_id,
                     "response_sha256": stored.response_sha256,
                 },
@@ -369,5 +446,13 @@ async def reprocess_preserved_response(
         await session.flush()
         await session.refresh(job)
         await aggregate_parent_job(session, job.id)
+    if asset_audit is not None:
+        job.payload = {
+            **(job.payload or {}),
+            "asset_link_review_history": [
+                *((job.payload or {}).get("asset_link_review_history") or []),
+                {**asset_audit, "outcome": job.status},
+            ],
+        }
     await session.flush()
     return job

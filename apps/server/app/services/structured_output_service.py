@@ -36,7 +36,7 @@ def _diagnostic(value: str, **extra: Any) -> dict[str, Any]:
     }
 
 
-def _scan_top_level(value: str, start: int) -> tuple[int | None, str | None]:
+def _scan_top_level(value: str, start: int, *, max_depth: int | None = None) -> tuple[int | None, str | None]:
     stack: list[str] = []
     in_string = False
     escaped = False
@@ -55,6 +55,8 @@ def _scan_top_level(value: str, start: int) -> tuple[int | None, str | None]:
             in_string = True
         elif character in "{[":
             stack.append(character)
+            if max_depth is not None and len(stack) > max_depth:
+                return None, "nesting_limit"
         elif character in "}]":
             if not stack or stack[-1] != pairs[character]:
                 return None, "mismatched_closer"
@@ -68,7 +70,8 @@ def _scan_top_level(value: str, start: int) -> tuple[int | None, str | None]:
     return None, "missing_top_level"
 
 
-def parse_json_document(text: str, label: str) -> tuple[Any, dict[str, Any]]:
+def parse_json_document(text: str, label: str, *, reject_duplicate_keys: bool = False,
+                        max_depth: int | None = None) -> tuple[Any, dict[str, Any]]:
     """Parse exactly one top-level JSON object/array without fragment recovery."""
     original = str(text or "")
     value = original.strip()
@@ -82,7 +85,12 @@ def parse_json_document(text: str, label: str) -> tuple[Any, dict[str, Any]]:
             details=_diagnostic(original, top_level_closed=False, fenced=bool(fenced)),
         )
     start = min(opener_positions)
-    end, scan_error = _scan_top_level(value, start)
+    end, scan_error = _scan_top_level(value, start, max_depth=max_depth)
+    if scan_error == "nesting_limit":
+        raise ModelOutputSchemaError(
+            f"模型返回的{label}嵌套层级超过限制，原始响应已保留",
+            details=_diagnostic(original, scan_error=scan_error),
+        )
     if scan_error == "mismatched_closer":
         raise ModelOutputSchemaError(
             f"模型返回的{label}括号结构无效，请使用已保存响应重新处理或重新生成",
@@ -119,8 +127,18 @@ def parse_json_document(text: str, label: str) -> tuple[Any, dict[str, Any]]:
             ),
         )
     document = value[start:end]
+    def object_pairs(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ModelOutputSchemaError(
+                    f"模型返回的{label}含重复 JSON 字段，不能选择或覆盖其中一份值",
+                    details={"failure_kind": "duplicate_json_key", "field": key},
+                )
+            result[key] = item
+        return result
     try:
-        decoded = json.loads(document)
+        decoded = json.loads(document, object_pairs_hook=object_pairs) if reject_duplicate_keys else json.loads(document)
     except json.JSONDecodeError as exc:
         raise ModelOutputSchemaError(
             f"模型返回的{label}不是合法 JSON，请使用已保存响应重新处理或重新生成",

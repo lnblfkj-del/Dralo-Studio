@@ -67,6 +67,7 @@ export const AGENT_LABELS: Record<string, string> = {
 };
 
 export const ROUTE_LABELS: Record<string, string> = {
+  asset_extractor: "资产拆解专用模型",
   agent: "Agent 专用模型",
   legacy_agent: "旧版专用配置",
   global_default: "全局默认模型",

@@ -2,13 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AudioLines, CircleAlert, Film, Plus, RefreshCw, Save, X } from "lucide-react";
 import { getEditProject, listVideoEditSources, saveEditProject } from "@/api/editProjects";
-import { listAssets } from "@/api/assets";
-import { listProjectAudioMedia } from "@/api/media";
+import { getProjectAudioLibrary } from "@/api/projectAudio";
 import { toErrorMessage } from "@/api/client";
 import { useDraftBlocker } from "@/components/DraftGuard";
 import { ConfirmDialog } from "@/components/ui/Dialog";
 import { AssemblyAudioWaveform } from "@/components/creator/AssemblyAudioWaveform";
-import { buildMultitrackAudioLibrary } from "@/domain/multitrackAudioLibrary";
 import { makeAudioClip, parseAudioDrag, type AudioTrack } from "@/domain/editProjectAudioDrop";
 import { multitrackEditorCacheKey } from "@/domain/multitrackEditorEntry";
 import { lockedTracksChanged } from "@/domain/editTrackLock";
@@ -53,8 +51,7 @@ export default function MultitrackProjectEditor({ initial, aspectRatio, onClose,
   const guard = useCallback(() => dirty || busy, [dirty, busy]);
   const blocker = useDraftBlocker(guard);
   const videos = useQuery({ queryKey: ["multitrack-sources", project.project_id], queryFn: ({ signal }) => listVideoEditSources(project.project_id, signal) });
-  const assets = useQuery({ queryKey: ["assets", project.project_id], queryFn: () => listAssets(project.project_id), enabled: focus === "music" });
-  const audio = useQuery({ queryKey: ["episode-production", project.project_id, "audio"], queryFn: ({ signal }) => listProjectAudioMedia(project.project_id, signal), enabled: focus === "music" });
+  const audio = useQuery({ queryKey: ["project-audio-library", project.project_id], queryFn: ({ signal }) => getProjectAudioLibrary(project.project_id, signal), enabled: focus === "music" });
   useEffect(() => {
     if (!dirty && !busy) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
@@ -145,12 +142,13 @@ export default function MultitrackProjectEditor({ initial, aspectRatio, onClose,
     const clip = editClipSchema.parse({ clip_id: `subtitle:${crypto.randomUUID()}`, track: "subtitle", lane, timeline_start_frame: frame, source_in_frame: 0, source_out_frame: duration, text: "新字幕" });
     dispatch({ op: "add_clip", clip }); select(clip.clip_id); setFocus("subtitles");
   };
-  const audioItems = buildMultitrackAudioLibrary(assets.data ?? [], audio.data?.items ?? []);
+  const audioItems = audio.data?.items ?? [];
+  const audioSourceFrames=Object.fromEntries(audioItems.filter(item=>item.duration && item.duration>0).map(item=>[String(item.mediaId),Math.round(item.duration!*fps)]));
   const addAudio = (mediaId: number, track: AudioTrack, start: number, lane?: number) => {
     if (blocked) return;
     try {
       if (!audioItems.some((item) => item.mediaId === mediaId && item.available)) throw new Error("声音素材不可用或不属于当前项目");
-      const duration = audio.data?.items.find((media) => media.id === mediaId)?.duration ?? 0;
+      const duration = audioItems.find((media) => media.mediaId === mediaId)?.duration ?? 0;
       const clip = makeAudioClip(draft, mediaId, duration, track, start, lane);
       if (dispatch({ op: "add_clip", clip })) { setSelectedId(clip.clip_id); setFrame(start); }
     } catch (cause) { setError(toErrorMessage(cause)); }
@@ -188,11 +186,11 @@ export default function MultitrackProjectEditor({ initial, aspectRatio, onClose,
     <MultitrackWorkspace title={title ?? project.title} dirty={dirty} saving={busy} aspectRatio={aspectRatio} duration={documentDuration(draft) / fps} focus={focus} onFocus={(value) => { setFocus(value); setInspectorMode(value === "export" ? "export" : "properties"); }} onClose={close} librarySearch={librarySearch} onLibrarySearch={setLibrarySearch}
       status={error ? <div className="independent-editor-status"><span role="alert"><CircleAlert size={14} />{error}</span><button className="multitrack-dismiss-alert" title="关闭提醒" aria-label="关闭剪辑提醒" onClick={() => setError("")}><X size={14} /></button></div> : null}
       headerTools={<div className="independent-editor-tools"><select aria-label="预览性能模式" value={performanceMode} onChange={(event) => { const mode = event.target.value as PerformanceMode; persistPerformanceMode(mode); setPerformanceMode(mode); }}><option value="auto">自动</option><option value="economy">节省</option><option value="balanced">均衡</option><option value="quality">高性能</option></select><button title={attempt.current ? "重试同一次保存" : "保存剪辑"} aria-label="保存剪辑" disabled={!dirty || busy} onClick={() => void save()}><Save size={16} /></button><button title="重新载入剪辑" aria-label="重新载入剪辑" disabled={busy} onClick={() => dirty ? setConfirm("reload") : void reload()}><RefreshCw size={16} /></button></div>}
-      library={<><div className="assembly-media-list">{videos.isPending && <p role="status">正在读取采用视频...</p>}{videos.error && <p role="alert">{toErrorMessage(videos.error)}</p>}{videos.data?.filter((source) => matchesSearch(source.label)).map((source) => <button key={source.video_version_id} disabled={blocked || !source.duration} onClick={() => {
+      library={<><div className="assembly-media-list">{videos.isPending && <p role="status">正在读取采用视频...</p>}{videos.error && <p role="alert">{toErrorMessage(videos.error)}</p>}{videos.data?.length === 0 && <div role="status"><p>暂无已采用的视频，生成的候选需要先采用。</p><button onClick={onClose}>返回片段工作台</button></div>}{videos.data?.filter((source) => matchesSearch(source.label)).map((source) => <button key={source.video_version_id} disabled={blocked || !source.duration} onClick={() => {
         const clip = editClipSchema.parse({ clip_id: `video:${crypto.randomUUID()}`, track: "video", lane: 0, timeline_start_frame: documentDuration(draft), source_in_frame: 0, source_out_frame: Math.round((source.duration ?? 0) * fps), media_file_id: source.media_file_id, video_version_id: source.video_version_id });
         dispatch({ op: "add_clip", clip }); setSelectedId(clip.clip_id);
       }}><span className="assembly-media-icon"><Film size={16} /></span><span className="assembly-media-copy"><b>{source.label}</b><small>{source.duration?.toFixed(2)}s{draft.clips.some((clip) => clip.media_file_id === source.media_file_id) && <em className="multitrack-added-badge">已加入</em>}</small></span><Plus size={16} /></button>)}</div></>}
-      audioLibrary={<MultitrackAudioLibrary addedMediaIds={draft.clips.map((clip) => clip.media_file_id).filter((id): id is number => id != null)} searchValue={librarySearch} projectId={project.project_id} items={audioItems} loading={assets.isPending || audio.isPending} error={assets.error || audio.error ? toErrorMessage(assets.error || audio.error) : undefined} disabled={blocked || !documentDuration(draft)} onAdd={(item, category) => {
+      audioLibrary={<MultitrackAudioLibrary onRefresh={()=>void audio.refetch()} addedMediaIds={draft.clips.map((clip) => clip.media_file_id).filter((id): id is number => id != null)} searchValue={librarySearch} projectId={project.project_id} items={audioItems} loading={audio.isPending} error={audio.error ? toErrorMessage(audio.error) : undefined} disabled={blocked || !documentDuration(draft)} onAdd={(item, category) => {
         const track = category === "BGM" ? "bgm" : category === "环境音" ? "ambience" : category === "音效" ? "sfx" : "dialogue";
         const start = track === "bgm" ? 0 : frame;
         addAudio(item.mediaId, track, start);
@@ -203,7 +201,7 @@ export default function MultitrackProjectEditor({ initial, aspectRatio, onClose,
       inspectorTitle={inspectorMode === "asr" ? "语音字幕" : inspectorMode === "export" ? "导出" : selected?.track === "video" ? `片段 ${String(videoIndex + 1).padStart(2, "0")} · 视频设置` : selected?.track === "subtitle" ? "字幕设置" : selected ? "声音设置" : "条目属性"}
       onDismissInspectorTool={inspectorMode !== "properties" ? () => setInspectorMode("properties") : undefined}
       settings={inspectorMode === "export" ? <MultitrackExportPanel project={project} dirty={dirty} blocked={blocked} /> : inspectorMode === "asr" ? <MultitrackAsrPanel draftDocument={draft} onPrepare={() => save()} project={project} selected={selected} dirty={dirty} blocked={blocked} onApply={(jobId, replace) => void save({ op: "apply_subtitles", job_id: jobId, replace_automatic: replace })} /> : inspector}
-      timeline={<MultitrackProjectTimeline onSelectTrack={(track) => { setSelectedId(null); setFocus(track === "subtitle" ? "subtitles" : track === "video" ? "video" : "music"); setInspectorMode("properties"); }} onAddSubtitle={addSubtitle} onRecognizeSubtitles={() => { setFocus("subtitles"); setInspectorMode("asr"); }} document={draft} onLocksChange={setLockedRows} onError={setError} onRequestSubtitles={(id) => { setSelectedId(id); setFocus("subtitles"); setInspectorMode("asr"); }} canUndo={undoStack.length > 0} canRedo={redoStack.length > 0} onUndo={() => history(false)} onRedo={() => history(true)} sourceFrames={{ ...Object.fromEntries((audio.data?.items ?? []).filter((item) => item.duration && item.duration > 0).map((item) => [String(item.id), Math.round(item.duration! * fps)])), ...project.source_frames }} selectedId={selectedId} disabled={blocked} frame={frame} onFrame={(value) => setFrame(Math.max(0, Math.min(value, Math.max(0, documentDuration(draft) - 1))))} onSelect={select} onCommand={dispatch} onAudioDrop={(raw, track, start, lane) => { const mediaId = parseAudioDrag(raw, project.project_id); if (mediaId === null) setError("仅支持拖入当前项目的可用声音素材"); else addAudio(mediaId, track, start, lane); }} />}
+      timeline={<MultitrackProjectTimeline onSelectTrack={(track) => { setSelectedId(null); setFocus(track === "subtitle" ? "subtitles" : track === "video" ? "video" : "music"); setInspectorMode("properties"); }} onAddSubtitle={addSubtitle} onRecognizeSubtitles={() => { setFocus("subtitles"); setInspectorMode("asr"); }} document={draft} onLocksChange={setLockedRows} onError={setError} onRequestSubtitles={(id) => { setSelectedId(id); setFocus("subtitles"); setInspectorMode("asr"); }} canUndo={undoStack.length > 0} canRedo={redoStack.length > 0} onUndo={() => history(false)} onRedo={() => history(true)} sourceFrames={{...audioSourceFrames,...project.source_frames}} selectedId={selectedId} disabled={blocked} frame={frame} onFrame={(value) => setFrame(Math.max(0, Math.min(value, Math.max(0, documentDuration(draft) - 1))))} onSelect={select} onCommand={dispatch} onAudioDrop={(raw, track, start, lane) => { const mediaId = parseAudioDrag(raw, project.project_id); if (mediaId === null) setError("仅支持拖入当前项目的可用声音素材"); else addAudio(mediaId, track, start, lane); }} />}
     />
     <ConfirmDialog open={confirm !== null} title="放弃未保存的剪辑修改？" message="当前输入将丢失，已保存剪辑和原视频不会变更。" confirmLabel="放弃修改" danger busy={busy} onClose={() => setConfirm(null)} onConfirm={() => { const action = confirm; setConfirm(null); if (action === "close") onClose(); else void reload(); }} />
     {blocker.state === "blocked" && <ConfirmDialog open title="离开剪辑工程？" message={busy ? "保存仍在处理中，请等待完成。" : "未保存的剪辑输入将丢失。"} confirmLabel="放弃修改并离开" danger busy={busy} onClose={() => blocker.reset?.()} onConfirm={() => blocker.proceed?.()} />}

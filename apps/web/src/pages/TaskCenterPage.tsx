@@ -644,7 +644,7 @@ export function TaskCenterPage() {
                 <div><dt>成本估算</dt><dd>{liveJob.pricing_estimate?.amount != null ? `${liveJob.pricing_estimate.currency} ${liveJob.pricing_estimate.amount}（提交时预估）` : formatCost(liveJob.cost_estimate)}</dd></div>
                 <div><dt>所属项目</dt><dd>{liveJob.project_id ? `#${liveJob.project_id}` : "未关联"}</dd></div>
                 <div><dt>父级任务</dt><dd>{liveJob.parent_job_id ? `#${liveJob.parent_job_id}` : "—"}</dd></div>
-                {liveJob.agent_execution && <div><dt>执行入口</dt><dd>{AGENT_LABELS[liveJob.agent_execution.agent] || liveJob.agent_execution.agent} · {liveJob.agent_execution.surface}</dd></div>}
+                {liveJob.agent_execution && <div><dt>执行入口</dt><dd>{liveJob.agent_execution.executor_key === "asset_extractor" ? "资产拆解器" : liveJob.agent_execution.agent ? AGENT_LABELS[liveJob.agent_execution.agent] || liveJob.agent_execution.agent : "业务执行器"} · {liveJob.agent_execution.surface}</dd></div>}
                 {liveJob.agent_execution && <div><dt>模型路由</dt><dd>{ROUTE_LABELS[liveJob.agent_execution.route_source] || liveJob.agent_execution.route_source}</dd></div>}
                 {liveJob.agent_execution?.skill_name && <div><dt>执行 Skill</dt><dd>{liveJob.agent_execution.skill_name} · {liveJob.agent_execution.skill_key}</dd></div>}
               </dl>

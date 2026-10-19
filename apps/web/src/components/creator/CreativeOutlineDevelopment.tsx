@@ -13,7 +13,7 @@ import { Button, Dialog } from "@/components/ui";
 import { readStoredCreationStage, restoreCreationStage, writeStoredCreationStage, type CreationStage } from "@/components/creator/CreationStageNav";
 import { ProjectCreationWorkspace } from "@/components/creator/ProjectCreationWorkspace";
 import { CreationWorkflowProgress } from "./CreationWorkflowProgress";
-import { creationStageForJob, deriveCreationStageAvailability } from "@/components/creator/projectCreationStage";
+import { assetPreparationCompleted, creationStageForJob, deriveCreationStageAvailability } from "@/components/creator/projectCreationStage";
 import { EpisodeScriptWorkspace } from "@/components/creator/EpisodeScriptWorkspace";
 import { EpisodeOutlineWorkspace } from "@/components/creator/EpisodeOutlineWorkspace";
 import { ProductionPreparationWorkspace } from "@/components/creator/ProductionPreparationWorkspace";
@@ -96,7 +96,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
       && hints.every(number => number >= 1 && number <= expected);
     return complete ? null : `${expected} 集${spec.structure === "independent" ? "单集独立" : "独立集 + 长线"}结构需要 ${expected} 个逐集事件，并完整覆盖第 1-${expected} 集；当前只有 ${events.length} 个事件。`;
   }, [session.settings.narrative_spec, story]);
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<CreationStage>(() => restoreCreationStage({
     requested: searchParams.get("tab"),
     stored: readStoredCreationStage(projectId),
@@ -109,6 +109,8 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
   const selectStage = (stage: CreationStage) => {
     restoredStage.current = true;
     setActiveTab(stage);
+    writeStoredCreationStage(projectId, stage);
+    setSearchParams(current => { const next = new URLSearchParams(current); next.set("tab", stage); return next; }, { replace: true });
   };
   const [failedStoryRequest, setFailedStoryRequest] = useState<string | null>(null);
   const readiness = useQuery({
@@ -178,9 +180,6 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
   const visibleStageBusy = contentBusy && generatingStage === visibleStage;
   const outlineBusy = visibleStageBusy && generatingStage === "outline";
   const outlineLocked = outlineArtifact?.status === "confirmed";
-  useEffect(() => {
-    writeStoredCreationStage(projectId, activeTab);
-  }, [projectId, activeTab]);
 
 
   useEffect(() => {
@@ -359,7 +358,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
   useEffect(() => {
     if (restoredStage.current || readiness.isPending) return;
     restoredStage.current = true;
-    setActiveTab(restoreCreationStage({
+    selectStage(restoreCreationStage({
       requested: searchParams.get("tab"),
       stored: readStoredCreationStage(projectId),
       hasStory: Boolean(story),
@@ -377,14 +376,14 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
     outlineConfirmed: outlineLocked,
     hasScripts,
     scriptsConfirmed: Boolean(scriptsConfirmed),
-    prepCompleted: assetBreakdown?.status === "completed",
+    prepCompleted: assetPreparationCompleted(assetBreakdown),
     activeJob: activeJob ?? (activeTarget && activeStatus ? { target_type: activeTarget, status: activeStatus } : null),
   });
   useEffect(() => {
     if (!actionPreview || actionPreview.status !== "pending" || autoReviewedJob.current === actionPreview.trace.job_id) return;
     autoReviewedJob.current = actionPreview.trace.job_id;
     setSelectedOption(actionPreview.recommended_option_index ?? undefined);
-    setActiveTab(agentSection === "outline" ? "outline" : "story");
+    selectStage(agentSection === "outline" ? "outline" : "story");
     setReviewOpen(true);
   }, [actionPreview?.status, actionPreview?.trace.job_id, agentSection]);
   const sourceLabel = session.settings.legacy_recovery ? "旧会话恢复" : session.settings.market_research_run_id ? "市场选题" : "原创构思";
@@ -407,8 +406,8 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
             projectId={projectId}
             sourceMode="original"
             defaultDuration={episodeDuration >= 1 ? episodeDuration : 90}
-            onBack={() => setActiveTab("outline")}
-            onConfirmed={() => setActiveTab("prep")}
+            onBack={() => selectStage("outline")}
+            onConfirmed={() => selectStage("prep")}
           />
         </main>
       </ProjectCreationWorkspace>
@@ -420,7 +419,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
       <ProjectCreationWorkspace projectId={projectId} active="prep" availability={stageAvailability} onSelect={selectStage} sourceLabel={sourceLabel} sourceDetail={session.title} sourceContent={originalIdea}>
         <main className="creative-main">
           <ProductionPreparationWorkspace projectId={projectId} session={session} readiness={readiness.data}
-            sourceMode="original" activeJob={activeJob} onJob={onJob} onOpenStory={() => setActiveTab("story")} />
+            sourceMode="original" activeJob={activeJob} onJob={onJob} onOpenStory={() => selectStage("story")} />
         </main>
       </ProjectCreationWorkspace>
     );
@@ -581,12 +580,12 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
                 {advanceToOutline.isPending ? <TextGenerationIcon size={20} /> : <Sparkles size={15} />}
                 {advanceToOutline.isPending ? "正在提交…" : storyArtifact?.status === "confirmed" ? "生成分集大纲" : "确认设定，生成大纲"}
               </button>}
-              <button type="button" className="creative-form-secondary" onClick={() => setActiveTab("story")}>返回故事设定</button>
+              <button type="button" className="creative-form-secondary" onClick={() => selectStage("story")}>返回故事设定</button>
             </div>
           </section>
         )}
 
-        {!visibleStageBusy && outlineArtifact && activeTab === "outline" && <EpisodeOutlineWorkspace projectId={projectId} session={session} activeJob={activeJob} onJob={onJob} refresh={refresh} onConfirmed={() => setActiveTab("script")} onRequestAgent={() => setRequestOpen(true)} agentTaskStatus={agentSection === "outline" && agentTaskStatus !== "reply" ? agentTaskStatus : null} onReviewAgent={() => setReviewOpen(true)} />}
+        {!visibleStageBusy && outlineArtifact && activeTab === "outline" && <EpisodeOutlineWorkspace projectId={projectId} session={session} activeJob={activeJob} onJob={onJob} refresh={refresh} onConfirmed={() => selectStage("script")} onRequestAgent={() => setRequestOpen(true)} agentTaskStatus={agentSection === "outline" && agentTaskStatus !== "reply" ? agentTaskStatus : null} onReviewAgent={() => setReviewOpen(true)} />}
       </main>
 
       <Dialog open={requestOpen} title="AI 优化全剧大纲" onClose={() => setRequestOpen(false)} busy={requestRevision.isPending} footer={<><Button onClick={() => setRequestOpen(false)}>取消</Button><Button variant="primary" disabled={!revisionRequest.trim() || busy || storyEditing} loadingKind="text" loading={requestRevision.isPending} onClick={async () => {

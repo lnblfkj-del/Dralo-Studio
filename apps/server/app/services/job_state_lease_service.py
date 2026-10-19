@@ -209,10 +209,10 @@ async def claim_next_job(session: AsyncSession, worker_id: str, local_media_only
     )
     candidate_model_id = Job.payload["provider_model_id"].as_integer()
     active_model_id = active_model.payload["provider_model_id"].as_integer()
-    model_active_count = (
-        select(func.count(active_model.id))
+    # Parse large job snapshots once per active model, not once per queued candidate.
+    model_counts = (
+        select(active_model_id.label("model_id"), func.count(active_model.id).label("active_count"))
         .where(
-            active_model_id == candidate_model_id,
             or_(
                 and_(
                     active_model.status.in_(ACTIVE_LEASE_STATUSES),
@@ -225,8 +225,15 @@ async def claim_next_job(session: AsyncSession, worker_id: str, local_media_only
                 ),
             ),
         )
-        .correlate(Job)
-        .scalar_subquery()
+        .group_by(active_model_id)
+        .cte("active_model_counts")
+        .prefix_with("MATERIALIZED", dialect="sqlite")
+    )
+    model_active_count = func.coalesce(
+        select(model_counts.c.active_count)
+        .where(model_counts.c.model_id == candidate_model_id)
+        .scalar_subquery(),
+        0,
     )
     model_limit = (
         select(ProviderModel.effective_concurrency)

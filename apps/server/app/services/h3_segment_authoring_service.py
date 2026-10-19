@@ -121,7 +121,9 @@ async def load_h3_segment_source(
     )
     if not input_contract["ready"]:
         raise ConflictError("H3 输入未就绪: " + "; ".join(input_contract["blockers"]))
-    supported = (model.default_params or {}).get("supported_video_input_modes") or []
+    from app.services.video_configuration import projected_params
+
+    supported = projected_params(model).get("supported_video_input_modes") or []
     if input_contract["input_mode"] not in supported:
         raise ConflictError("此 H3 模型尚未配置并验证当前输入模式")
     profile = resolve_model_prompt_profile(provider, model, input_contract["input_mode"])

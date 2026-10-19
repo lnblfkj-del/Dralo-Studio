@@ -12,7 +12,8 @@ import { CanvasAudioPlayer } from "./CanvasAudioPlayer";
 import { CanvasMediaTools } from "./CanvasMediaTools";
 import { CanvasAdvancedTools } from "./CanvasAdvancedTools";
 import { choices, mediaModels, referenceRoles, referenceHandleTop } from "./mediaCapabilities";
-import { audioAccountReady } from "./audioVerification";
+import { audioAccountReady, audioVoiceReady } from "./audioVerification";
+import {VoiceSelect} from '@/components/audio/VoiceSelect';
 import "@/styles/canvas-media-node.css";
 import { PriceEstimate } from "@/components/settings/PriceEstimate";
 import { CanvasNodeHeading } from "./CanvasNodeHeading";
@@ -66,7 +67,6 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
   const audioLabel = music ? "音乐" : "配音";
   const musicDurationRequired = music && (model?.api_protocol || providers.data?.find(p => p.id === model?.provider_id)?.protocol) === "elevenlabs_music";
   const roles = referenceRoles(model, kind);
-  const voices = choices(model?.default_params.voices);
   const projectRatio = projectAspectRatio && !["default", "模型默认"].includes(projectAspectRatio) ? projectAspectRatio : "";
   const effectiveAspectRatio = data.aspectRatio && !["default", "模型默认"].includes(data.aspectRatio) ? data.aspectRatio : projectRatio;
   const declaredAspectRatios = choices(model?.default_params.aspect_ratios);
@@ -74,7 +74,7 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
   const projectRatioSupported = !projectRatio || !declaredAspectRatios.length || declaredAspectRatios.includes(projectRatio);
   const priceParameters = { ...(effectiveAspectRatio ? {aspect_ratio: effectiveAspectRatio} : {}), ...(data.resolution ? {resolution: data.resolution} : {}), ...(data.duration ? {duration: Number(data.duration)} : {}) };
   const busy = GENERATING_STATUSES.has(data.generationStatus ?? "");
-  const speechReady = kind !== "audio" || (!!model && audioAccountReady(model) && (music ? model.default_params.music_verified === true && model.capabilities.includes("music") && (!musicDurationRequired || Number(data.duration || model.default_params.duration) >= 3 && Number(data.duration || model.default_params.duration) <= 600) : model.default_params.speech_verified === true && model.capabilities.includes("speech") && voices.includes(data.voice ?? "")));
+  const speechReady = kind !== "audio" || (!!model && audioAccountReady(model) && (music ? model.capabilities.includes("music") && (!musicDurationRequired || Number(data.duration || model.default_params.duration) >= 3 && Number(data.duration || model.default_params.duration) <= 600) : audioVoiceReady(model, data.voice ?? "")));
   const allowed = !data.locked && !busy && !!model && hasCanvasPrompt(id, data.content) && speechReady && projectRatioSupported;
   const Icon = kind === "image" ? Image : kind === "video" ? Video : Music;
   const select = (field: "aspectRatio" | "resolution" | "duration", label: string, key: string) => {
@@ -127,11 +127,11 @@ export function CanvasMediaNode({ id, data, selected }: { id: string; data: Canv
       <fieldset disabled={data.locked || busy}>
         <label>生成模型<select aria-label="生成模型" value={data.providerModelId ?? ""} onChange={(e) => update(id, {providerModelId: Number(e.target.value) || undefined, aspectRatio: undefined, resolution: undefined, duration: undefined, voice: undefined})}><option value="">请选择模型</option>{data.providerModelId && !model && <option value={data.providerModelId}>原模型不可用，请重新选择</option>}{models.map((m) => <option key={m.id} value={m.id}>{m.providerName} · {m.name}</option>)}</select></label>
         <div className="canvas-media-fields">{aspectRatioField}{select("resolution", "分辨率", "resolutions")}{kind === "video" && select("duration", "时长（秒）", "durations")}</div>
-        {kind === "audio" && !music && <label>预设音色<select aria-label="预设音色" value={data.voice ?? ""} onChange={(e) => update(id, {voice: e.target.value})}><option value="">选择已验证的音色</option>{voices.map((v) => <option key={v}>{v}</option>)}</select></label>}
+        {kind === "audio" && !music && <VoiceSelect model={model} label="预设音色" value={data.voice ?? ''} onChange={voice=>update(id,{voice})}/>}
         {musicDurationRequired && <label>音乐时长（秒）<input aria-label="音乐时长" type="number" min={3} max={600} step={1} value={data.duration ?? String(model?.default_params.duration ?? "")} onChange={event => update(id, {duration: event.target.value})} /></label>}
         <CanvasPromptInput nodeId={id} aria-label={kind === "audio" ? music ? "音乐描述" : "配音文本" : "生成描述"} value={data.content} rows={3} onFocus={() => useCanvasStore.getState().checkpoint()} onValue={content => update(id, {content})} />
       </fieldset>
-      {kind === "audio" && !speechReady && <small>{music ? "需核验纯器乐接口及账户权限，并填写模型支持的音乐时长。" : "需配置已验证接口及预设音色的 TTS 模型。参考录音不代表可克隆音色。"}</small>}
+      {kind === "audio" && !speechReady && <small>{model && !audioAccountReady(model) ? model.audio_verification?.reason ?? "请补全模型配置" : music ? "请选择音乐模型并填写支持的时长。" : "请选择可用的配音模型和音色。"}</small>}
       {kind !== "audio" && !projectRatioSupported && <small role="alert">当前模型不支持项目画幅 {projectRatio}，请更换支持该比例的模型。</small>}
       {kind === "video" && <div className="canvas-effective-inputs" aria-label="视频实际输入"><strong>本次实际输入 · 模型 {model?.name || "未选择"}</strong>{effectiveInputs.length ? effectiveInputs.map((input) => <span data-delivery={input.delivery} key={`${input.source}:${input.nodeId}`}>{CONNECTION_LABELS[input.purpose]} · {input.title}{input.mediaId ? ` · 素材 #${input.mediaId}` : ""}{input.source === "mention" ? "（@引用）" : ""}{input.delivery === "postprocess" ? " · 后处理" : input.delivery === "ignored" ? " · 不参与生成" : ""}</span>) : <small>暂无连线或 @ 引用；当前仅使用文字描述。</small>}<small>角色/场景/图片固定到本次媒体版本；脚本与导演镜头包编入提示上下文；音轨留给后处理。可输入 @节点标题 或 @{`{节点ID}`} 引用。</small></div>}
       {providers.isError && <small role="alert">模型列表读取失败</small>}

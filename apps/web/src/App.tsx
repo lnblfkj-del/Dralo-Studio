@@ -116,7 +116,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     return <Navigate to="/settings/profile" replace />;
   }
 
-  return <>{children}<Dialog open={sessionEnded} title="当前终端已下线" maskClosable={false} busy onClose={() => undefined}>
+  return <>{children}<Dialog purpose="confirmation" open={sessionEnded} title="当前终端已下线" maskClosable={false} busy onClose={() => undefined}>
     <p role="alert">{error}</p><p>请在新标签页重新登录同一账号，再返回此页恢复；切勿刷新，以免丢失未保存内容。</p>
     <a href="/login" target="_blank" rel="noopener">重新登录</a>
   </Dialog></>;

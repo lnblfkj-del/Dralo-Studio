@@ -10,6 +10,7 @@ from app.core.errors import ModelOutputTruncatedError, TimeoutError_, Validation
 from app.models import MODEL_TYPE_TEXT, Provider, ProviderModel
 
 POLICY_KEY = "_text_execution"
+TIMEOUT_KEYS = ("request_timeout_seconds", "first_byte_timeout_seconds", "stream_idle_timeout_seconds")
 
 _LIMITS = {
     "max_output_tokens": (256, 200_000),
@@ -58,7 +59,7 @@ def validate_defaults(model_type: str, defaults: dict[str, Any]) -> dict[str, An
     ):
         raise ValidationError("流式空闲超时不能超过单次调用总超时")
     output_aliases = [
-        key for key in ("max_tokens", "max_completion_tokens") if key in normalized
+        key for key in ("max_tokens", "max_completion_tokens", "max_output_tokens") if key in normalized
     ]
     if len(output_aliases) > 1:
         raise ValidationError("默认参数不能同时设置 max_tokens 与 max_completion_tokens")
@@ -85,22 +86,28 @@ def resolve(
     configured = dict(defaults.pop(POLICY_KEY, {}) or {})
     requested = dict(requested or {})
     requested_aliases = [
-        key for key in ("max_tokens", "max_completion_tokens") if key in requested
+        key for key in ("max_tokens", "max_completion_tokens", "max_output_tokens") if key in requested
     ]
     default_aliases = [
-        key for key in ("max_tokens", "max_completion_tokens") if key in defaults
+        key for key in ("max_tokens", "max_completion_tokens", "max_output_tokens") if key in defaults
     ]
     if len(requested_aliases) > 1 or len(default_aliases) > 1:
         raise ValidationError("max_tokens 与 max_completion_tokens 不能同时设置")
     protocol = getattr(model, "api_protocol", None) or getattr(provider, "protocol", None)
+    if protocol != "openai_responses" and "max_output_tokens" in default_aliases:
+        raise ValidationError("max_output_tokens 请求参数仅用于 Responses；其他接口请使用对应输出参数或文本执行策略上限")
     reasoning_model = "reasoning" in (getattr(model, "capabilities", None) or [])
-    openai_text_protocol = protocol in {"openai_compatible", "newapi"}
+    openai_text_protocol = protocol in {"openai_compatible", "newapi", "openai_responses"}
     output_key = (
         "max_completion_tokens" if openai_text_protocol and reasoning_model
         else default_aliases[0] if default_aliases else "max_tokens"
     )
+    if protocol == "openai_responses":
+        output_key = "max_output_tokens"
+    elif protocol == "ollama_chat":
+        output_key = "max_tokens"
     requested_output = defaults.get(default_aliases[0]) if default_aliases else None
-    for key in ("max_tokens", "max_completion_tokens"):
+    for key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
         defaults.pop(key, None)
         requested.pop(key, None)
     for key in ("temperature", "reasoning_effort", "maxOutputTokens", "thinking", "thinkingConfig"):

@@ -22,7 +22,7 @@ export interface AgentTool { key: string; name: string; agent: AgentMode; descri
 export interface BusinessExecutorSkill { skill_id: number; key: string; name: string; current_version: number; selected_version: number; available_versions: number[]; enabled: boolean; }
 export interface BusinessExecutorModel { id: number; provider_id: number; provider_name: string; model_id: string; name: string; model_type: string; enabled: boolean; }
 export interface BusinessExecutor {
-  key: "episode_director" | "asset_prompt_generator" | "media_task_orchestrator";
+  key: "asset_extractor" | "episode_director" | "asset_prompt_generator" | "media_task_orchestrator";
   name: string;
   description: string;
   model_type: "text" | null;

@@ -15,6 +15,7 @@ import { getProject, getProjectScriptReadiness, listEpisodes } from "@/api/proje
 import { getAISettings, listProviders } from "@/api/providers";
 import { ASSET_TYPES, AssetCategorySidebar } from "@/components/assets/AssetCategorySidebar";
 import { AssetDetailPanel } from "@/components/assets/AssetDetailPanel";
+import { AssetAudioBatchDialog } from "@/components/assets/AssetAudioBatchDialog";
 import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
 import { ProjectHeader } from "@/components/creator/ProjectHeader";
 import { Button, Dialog } from "@/components/ui";
@@ -223,11 +224,19 @@ export function AssetLibraryPage() {
       <Button variant="primary" controlSize="compact" icon={<Sparkles size={15} />} disabled={(!allFiltered && !selectedIds.length) || (type !== "voice" && !imageModels.length)} onClick={() => { if (type === "voice") { setAudioOpen(true); return; } setRestoreImageBatch(false); setBatchMode("image"); }}>{type === "voice" ? "生成声音" : allFiltered ? "批量生成图片" : selectedItems.some((item) => item.version_count > 0) ? "重新生成图片" : "生成缺失图片"}</Button>
     </div>
 
-    {audioOpen && <Dialog open title="生成声音" size="small" onClose={() => setAudioOpen(false)} footer={<Button onClick={() => setAudioOpen(false)}>关闭</Button>}>
-      <p>{(providers.data ?? []).some((provider) => provider.enabled && provider.models.some((model) => model.enabled && model.model_type === "tts" && model.capabilities.includes("speech") && model.default_params.speech_verified === true)) ? "资产库批量语音生成尚未接通，可在画布中使用已配置的 TTS 模型生成台词。" : "尚未配置并验证可用的 TTS 模型，暂时无法生成角色台词。"}</p>
-      <p>配乐、环境声和音效需要对应的音频生成能力，不能用 TTS 朗读声音描述替代。当前可上传音频素材。</p>
-      <Link to="/settings/providers">查看模型渠道</Link>
-    </Dialog>}
+    {audioOpen && <AssetAudioBatchDialog projectId={projectId} providers={providers.data??[]} scopeKey={JSON.stringify(allFiltered?catalogParams:[...selectedIds].sort((a,b)=>a-b))} onClose={()=>setAudioOpen(false)} onChanged={()=>void reload()} resolveItems={async()=>{
+      if(!allFiltered&&selectedItems.length===selectedIds.length)return selectedItems;
+      const first=await getAssetCatalog(projectId,{...catalogParams,page:1,page_size:100});
+      const rows=[...first.items];
+      for(let next=2;rows.length<first.total;next++){
+        const page=await getAssetCatalog(projectId,{...catalogParams,page:next,page_size:100});
+        if(!page.items.length)throw new Error('资产目录已变化，请重新选择');
+        rows.push(...page.items);
+      }
+      const resolved=allFiltered?rows:rows.filter(row=>selectedIds.includes(row.id));
+      if(!allFiltered&&resolved.length!==selectedIds.length)throw new Error('所选资产已变化，请重新选择');
+      return resolved;
+    }}/>}
     {detail && <AssetDetailPanel key={detail.id} projectId={projectId} item={detail} onClose={() => setDetailId(null)} onCanvas={() => openCanvas(detail)} onChanged={() => void reload()} />}
 
     {createOpen && <CreateAssetDialog projectId={projectId} initialType={type} onClose={() => setCreateOpen(false)} onCreated={(asset) => { setCreateOpen(false); setType(asset.asset_type); setPage(1); setDetailId(asset.id); void reload(); }} />}
@@ -456,7 +465,11 @@ function batchCompletionNotice(job: Job): string {
 
 function summary(item: CatalogItem) {
   if (item.asset_type === "voice") return ({ voice: "角色声音", music: "配乐", ambience: "环境声", sfx: "音效", unclassified: "未分类声音" } as Record<string, string>)[item.profile.audio_usage ?? "unclassified"];
-  if (item.asset_type === "character") return ({ lead: "主角", supporting: "配角", extra: "群演", unclassified: "未分类角色" } as Record<string, string>)[item.profile.character_role ?? "unclassified"];
+  if (item.asset_type === "character") {
+    const role = ({ lead: "主角", supporting: "配角", extra: "群演", unclassified: "未分类角色" } as Record<string, string>)[item.profile.character_role ?? "unclassified"];
+    const form = item.profile.character_form;
+    return form === "fixed_group" ? `${role} · ${item.profile.group_size ?? "待确认"}人组` : form === "crowd" ? `${role} · 人群` : role;
+  }
   return item.description || "暂无资料说明";
 }
 

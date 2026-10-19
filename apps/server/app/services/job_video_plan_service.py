@@ -35,6 +35,7 @@ async def build_episode_video_plan(
     provider_model_id: int,
     parameters: dict[str, Any],
     regenerate: bool,
+    selected_segment_ids: list[int] | None = None,
 ) -> dict[str, Any]:
     """Validate an E5 segment batch without creating jobs or contacting a provider.
 
@@ -78,7 +79,8 @@ async def build_episode_video_plan(
     if plan.source_type == "content_frozen":
         from app.services.episode_planning_video_production import build_plan
 
-        return await build_plan(session, episode, plan, provider_model_id, parameters, regenerate, orchestrator_execution)
+        return await build_plan(session, episode, plan, provider_model_id, parameters, regenerate, orchestrator_execution,
+                                selected_segment_ids=selected_segment_ids)
     if plan.status != "confirmed":
         raise ConflictError("片段脚本尚未确认，请先保存并确认生产计划")
     if plan.source_script_revision != episode.script_revision:
@@ -90,30 +92,6 @@ async def build_episode_video_plan(
         raise NotFoundError("项目不存在")
     from app.services.style_generation_service import project_style_media
     style_media_id = await project_style_media(session, project.id, owner_id, "video")
-    from app.services.asset_service import get_project_asset_readiness
-
-    asset_readiness = await get_project_asset_readiness(session, project)
-    episode_asset_state = next(
-        (
-            item
-            for item in asset_readiness["episodes"]
-            if item["episode_id"] == episode.id
-        ),
-        None,
-    )
-    asset_block_reason: str | None = None
-    if episode_asset_state and episode_asset_state["status"] not in {
-        "ready",
-        "no_requirements",
-    }:
-        missing_names = [
-            issue["asset_name"] for issue in episode_asset_state["issues"][:3]
-        ]
-        if episode_asset_state["status"] == "stale":
-            asset_block_reason = "剧本版本变化后，角色或场景素材尚未复核"
-        else:
-            suffix = f"：{'、'.join(missing_names)}" if missing_names else ""
-            asset_block_reason = f"缺少已确认的角色或场景最终图片{suffix}"
     if plan.provider_model_id is not None and plan.provider_model_id != model.id:
         raise ConflictError("当前片段计划使用了其他视频模型，请重新规划后再生产")
     segments = list(
@@ -127,6 +105,10 @@ async def build_episode_video_plan(
     )
     if not segments:
         raise ConflictError("当前片段计划为空，请重新规划")
+    if selected_segment_ids is not None:
+        if not selected_segment_ids or not set(selected_segment_ids).issubset({s.id for s in segments}):
+            raise NotFoundError("所选片段不属于当前制作稿，请重新选择")
+        segments = [s for s in segments if s.id in selected_segment_ids]
     segment_ids = [segment.id for segment in segments]
     links = list(
         (
@@ -208,11 +190,14 @@ async def build_episode_video_plan(
                 }
             )
             continue
-        if asset_block_reason:
-            blocked.append({**issue, "reason": asset_block_reason})
-            continue
         if segment.id in final_ids and not regenerate:
             skipped.append(segment.id)
+            continue
+        from app.services.segment_video_recovery_service import require_resolved_generation
+        try:
+            await require_resolved_generation(session, segment, project_id, owner_id)
+        except ConflictError as exc:
+            blocked.append({**issue, "reason": exc.message})
             continue
         if any(shot.is_locked for shot in segment_shots):
             blocked.append(
@@ -250,21 +235,8 @@ async def build_episode_video_plan(
             blocked.append({**issue, "reason": "片段资产尚未匹配或未采用可用素材，请先完成引用核对"})
             continue
         try:
-            from app.services.asset_binding_service import binding_role, resolve_asset_binding
-
-            for binding in refs.get("asset_bindings", []):
-                if not isinstance(binding, dict):
-                    raise ValidationError("片段资产绑定格式无效")
-                role = binding_role(binding)
-                await resolve_asset_binding(
-                    session,
-                    project,
-                    asset_id=int(binding["asset_id"]),
-                    adoption_key=binding.get("adoption_key"),
-                    asset_version_id=int(binding["asset_version_id"]),
-                    media_file_id=binding.get("media_file_id"),
-                    role=role,
-                )
+            from app.services.segment_asset_references import resolve_materials
+            refs = await resolve_materials(session, project, refs, segment=segment)
         except (KeyError, TypeError, ValueError, ConflictError, ValidationError) as exc:
             blocked.append({
                 **issue,
@@ -296,7 +268,7 @@ async def build_episode_video_plan(
             audio_capability = segment_parameters["audio_policy"]["capability"]
             if video_contract is not None and audio_capability["verified"]:
                 video_contract = {**video_contract, "supports_audio": audio_capability["output"] != "unsupported"}
-            prompt, omitted_audio = apply_prompt(prompt, (segment.parameters or {}).get("structured_script"), segment_parameters["audio_policy"])
+            prompt, omitted_audio = apply_prompt(prompt, (segment.parameters or {}).get("structured_script"), segment_parameters["audio_policy"], refs)
 
             first_frame, last_frame, reference_ids, _bindings = _compile_segment_media(
                 refs, segment_parameters
@@ -313,7 +285,7 @@ async def build_episode_video_plan(
                 *([{"media_id": last_frame, "role": "last_frame"}] if last_frame else []),
                 *[{"media_id": media_id, "role": "reference_image"} for media_id in reference_ids],
             ]
-            if style_media_id and not any(item["media_id"] == style_media_id for item in media_inputs):
+            if style_media_id and segment_parameters.get("input_mode") != "text" and not any(item["media_id"] == style_media_id for item in media_inputs):
                 media_inputs.append({"media_id": style_media_id, "role": "reference_image",
                                      "purpose": "project_style"})
             voice_guidance = await compile_segment_voice_guidance(
@@ -343,7 +315,9 @@ async def build_episode_video_plan(
                     timeline_duration=segment.timeline_duration,
                     reference_count=len(reference_ids),
                 )
-            effective_parameters = {**(model.default_params or {}), **segment_parameters}
+            from app.services.video_configuration import request_defaults
+
+            effective_parameters = {**request_defaults(model), **segment_parameters}
             from app.providers.protocols import effective_protocol
             if effective_protocol(provider, model) in VIDEO_CONTRACTS:
                 validate_video_parameters(effective_protocol(provider, model), effective_parameters,
@@ -366,19 +340,30 @@ async def build_episode_video_plan(
             )
 
             script = (segment.parameters or {}).get("structured_script")
+            from app.services.video_voice_reference_service import prepare, append_mapping
+            voice_guidance = await prepare(session, project, refs, voice_guidance, provider, model, compiled_input)
             prompt, effective_negative_prompt, selection = select_segment_video_prompt(
                 provider, model, script=script, input_contract=compiled_input,
                 existing_prompt=prompt, existing_negative_prompt=effective_negative_prompt,
                 source_negative_prompt=segment.negative_prompt,
                 voice_guidance=voice_guidance,
             )
+            from app.services.segment_asset_references import material_guidance
+            prompt = append_mapping(prompt, voice_guidance)
+            guidance = material_guidance({**refs, "reference_media_ids": compiled_input["reference_media_ids"]})
+            if guidance:
+                prompt += "\n\n" + guidance
             prompt, style_snapshot = await frozen_video_style_prompt(
                 session, project.id, owner_id, prompt
             )
+            from app.services.segment_asset_references import material_snapshot
+            snapshot = await material_snapshot(session, refs, [item["media_id"] for item in compiled_input["effective_references"]])
             prompt_freeze = build_video_prompt_freeze(
                 provider, model, script=script, input_contract=compiled_input,
                 active_prompt=prompt, voice_guidance=voice_guidance,
                 style_snapshot=style_snapshot, selection=selection,
+                asset_material_snapshot=snapshot,
+                voice_reference=voice_guidance["audio_reference"],
             )
         except (ConflictError, ValidationError) as exc:
             blocked.append(

@@ -65,6 +65,9 @@ async def save_certifications(session, provider_id, model_id, payload):
                 if state["profiles"][mode]["recipe"].startswith("h3_"):
                     raise ValidationError("H3 官方提示词生产提交尚未开放，离线预览不能作为启用依据")
     await assert_no_active_planning(session, provider, model)
+    from app.services.video_version_service import capture
+    await capture(session, provider, model)
     model.video_prompt_certifications = config
+    await capture(session, provider, model)
     await session.flush()
     return read_state(provider, model)

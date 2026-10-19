@@ -35,7 +35,7 @@ async def change_segment_lifecycle(
 ) -> dict[str, Any]:
     """Create a new immutable plan version for manual segment lifecycle changes."""
     current = await get_active_plan(session, episode)
-    if operation in {"insert_before", "insert_after", "delete"}:
+    if operation in {"insert_before", "insert_after"}:
         from app.services.segment_timeline_edit_service import edit_timeline
         return await edit_timeline(
             session, episode, current, operation=operation, segment_id=segment_id,

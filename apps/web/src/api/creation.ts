@@ -199,6 +199,20 @@ export async function confirmScriptAssetBreakdown(
   )).data;
 }
 
+export async function getAssetBreakdownReviewState(projectId: number) {
+  return (await http.get<import("@/types/creation").AssetBreakdownReviewState>(
+    `/projects/${projectId}/creation-session/asset-breakdown/review-state`,
+  )).data;
+}
+
+export async function confirmCompletedAssetCandidates(projectId: number, payload: {
+  candidate_ids: number[]; expected_parent_job_id: number; input_fingerprint: string; expected_signatures: Record<string, string>;
+}) {
+  return (await http.post<Record<string, number>>(
+    `/projects/${projectId}/creation-session/asset-breakdown/confirm-completed`, payload,
+  )).data;
+}
+
 export async function updateScriptAssetCandidate(
   projectId: number,
   candidateId: number,
@@ -208,6 +222,33 @@ export async function updateScriptAssetCandidate(
     `/projects/${projectId}/creation-session/asset-breakdown/candidates/${candidateId}`,
     payload,
   )).data;
+}
+
+export async function resolveAssetEvidence(projectId: number, candidateId: number, payload: {
+  expected_parent_job_id: number; input_fingerprint: string; expected_signature: string;
+  usage_index: number; start: number; end: number;
+}) {
+  return (await http.post<ScriptAssetCandidate>(
+    `/projects/${projectId}/creation-session/asset-breakdown/candidates/${candidateId}/evidence`, payload,
+  )).data;
+}
+
+export async function reviewAssetCandidate(projectId: number, candidateId: number, payload: {
+  expected_parent_job_id: number; input_fingerprint: string; expected_signature: string;
+  accepted_fact_indexes: number[]; field_values: Record<string, string>; reason: string; keep_independent?: boolean; confirm_usage_relation?: boolean;
+}): Promise<ScriptAssetCandidate> {
+  return (await http.post<ScriptAssetCandidate>(`/projects/${projectId}/creation-session/asset-breakdown/candidates/${candidateId}/review`, payload)).data;
+}
+
+export async function reviewAssetCandidatesBatch(projectId: number, items: Array<Parameters<typeof reviewAssetCandidate>[2] & { candidate_id: number }>): Promise<{ saved_count: number; candidates: ScriptAssetCandidate[] }> {
+  return (await http.post<{ saved_count: number; candidates: ScriptAssetCandidate[] }>(`/projects/${projectId}/creation-session/asset-breakdown/review-batch`, { items })).data;
+}
+
+export async function resolveDeferredAsset(projectId: number, payload: {
+  expected_parent_job_id: number; input_fingerprint: string; scope_key: string;
+  job_id: number; index: number; asset_id?: number; disposition?: "link_asset" | "script_only"; reason: string;
+}) {
+  return (await http.post(`/projects/${projectId}/creation-session/asset-breakdown/deferred-review`, payload)).data;
 }
 
 export async function mergeScriptAssetCandidate(

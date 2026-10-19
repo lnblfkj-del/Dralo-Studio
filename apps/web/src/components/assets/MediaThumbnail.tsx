@@ -4,7 +4,7 @@ import { getMediaThumbnailUrl } from "@/api/media";
 import { useAuthStore } from "@/stores/authStore";
 import { useSharedStyleThumbnails } from "./useStyleThumbnailWarmup";
 
-export function MediaThumbnail({ mediaId, alt, className = "style-cover-content", preloadedSource: suppliedSource = "", deferred: suppliedDeferred = false }: { mediaId: number | null | undefined; alt: string; className?: string; preloadedSource?: string; deferred?: boolean }) {
+export function MediaThumbnail({ mediaId, alt, className = "style-cover-content", preloadedSource: suppliedSource = "", deferred: suppliedDeferred = false, eager = false }: { mediaId: number | null | undefined; alt: string; className?: string; preloadedSource?: string; deferred?: boolean; eager?: boolean }) {
   const shared = useSharedStyleThumbnails();
   const preloadedSource = suppliedSource || (mediaId ? shared?.sources.get(mediaId) : "") || "";
   const deferred = suppliedDeferred || (shared?.deferred(mediaId) ?? false);
@@ -39,7 +39,7 @@ export function MediaThumbnail({ mediaId, alt, className = "style-cover-content"
     return () => { abort.abort(); if (owned.startsWith("blob:")) URL.revokeObjectURL(owned); };
   }, [visible, mediaId, actor, ended, attempt, preloadedSource, deferred]);
   return <span ref={element} className={className}>
-    {source && !failed ? <img src={source} alt={alt} loading={preloadedSource ? "eager" : "lazy"} decoding="async" onError={() => setFailed(true)} />
+    {source && !failed ? <img src={source} alt={alt} loading={preloadedSource || eager ? "eager" : "lazy"} decoding="async" onError={() => setFailed(true)} />
       : failed ? <span role="button" tabIndex={0} title="重试加载图片" aria-label={`重试加载${alt}`}
         onClick={event => { event.preventDefault(); event.stopPropagation(); setAttempt(value => value + 1); }}
         onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); setAttempt(value => value + 1); } }}><RefreshCw size={18} /></span>

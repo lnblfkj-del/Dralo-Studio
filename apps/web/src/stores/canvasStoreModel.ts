@@ -55,7 +55,7 @@ export interface CanvasNodePayload extends Record<string, unknown> {
     adopted_version_id?: number | null;
     adoption_key?: string | null;
     voice_media_id: number | null;
-    speech_preset?: {provider_model_id: number; voice: string} | null;
+    speech_preset?: import('@/types/productionContract').SpeechBinding | null;
   };
 }
 

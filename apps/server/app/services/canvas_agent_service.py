@@ -162,7 +162,7 @@ async def append_user_message(
         "capabilities": m.capabilities, "parameters": m.default_params, "pricing": m.pricing}
         for m, p in (await session.execute(select(ProviderModel, Provider).join(Provider).where(
             ProviderModel.enabled.is_(True), Provider.enabled.is_(True), ProviderModel.model_type.in_(["image", "video", "tts"])))).all()
-        if m.model_type != "tts" or m.default_params.get("speech_verified") is True]
+        if m.model_type != "tts" or "speech" in m.capabilities]
     interaction_instruction = (
         "本轮是文本节点提案：只输出适合写入一个画布文本节点的最终内容，不要解释操作步骤。"
         if task_type == "text" and action_mode == "text_node"

@@ -67,9 +67,29 @@ def effective_script(script, policy):
     return derived, omitted
 
 
-def apply_prompt(prompt, script, policy):
+def apply_prompt(prompt, script, policy, refs=None):
     if (policy or {}).get("background_music") is None:
         return prompt, []
+    if isinstance(script, dict) and script.get("editor_document"):
+        # An authored document is the source of truth, not its legacy summary.
+        from app.services.segment_document_service import compile_document
+        from app.services.screenplay_source_parser import AUDIO, split_cue, unwrap
+        authored = deepcopy(script)
+        paragraphs, omitted = [], []
+        for paragraph in authored["editor_document"].get("content", []):
+            nodes = paragraph.get("content", [])
+            plain = all(node.get("type") in {"text", "hardBreak"} for node in nodes)
+            text = "".join("\n" if node.get("type") == "hardBreak" else node.get("text", "") for node in nodes)
+            cue = split_cue(unwrap(text)) if plain else None
+            if policy.get("background_music") is False and cue and AUDIO.get(cue[0].casefold()) == "music":
+                omitted.append({"text": text, "reason": "background_music_disabled"})
+                continue
+            paragraphs.append(paragraph)
+        authored["editor_document"]["content"] = paragraphs
+        refs = refs or {}
+        _, compiled, _ = compile_document(authored, authored.get("source_shot_ids", []),
+            refs.get("asset_bindings") or [], refs.get("asset_references") or [])
+        return compiled + "\n" + instruction(policy), omitted
     from app.services.segment_script_semantics import compile_prompt
     derived, omitted = effective_script(script, policy)
     if not isinstance(derived, dict) or not derived.get("camera"):

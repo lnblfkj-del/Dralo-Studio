@@ -1,4 +1,4 @@
-"""Validated local image bytes and bounded MEAICC presigned uploads."""
+"""Validated local media bytes and bounded MEAICC presigned uploads."""
 import base64
 import binascii
 import hashlib
@@ -48,7 +48,21 @@ def validate_upload_url(value):
 
 
 async def upload_image(adapter, raw, mime):
-    extension = "png" if mime == "image/png" else "jpg"
+    if mime not in {"image/png", "image/jpeg"}:
+        raise ConflictError("MEAICC 图片上传格式无效")
+    return await upload_media(adapter, raw, mime)
+
+
+async def upload_audio(adapter, raw, mime):
+    if mime not in {"audio/wav", "audio/mpeg"}:
+        raise ConflictError("MEAICC 参考声线只开放 MP3/WAV")
+    return await upload_media(adapter, raw, mime)
+
+
+async def upload_media(adapter, raw, mime):
+    extension = {"image/png": "png", "image/jpeg": "jpg", "audio/wav": "wav", "audio/mpeg": "mp3"}.get(mime)
+    if not extension:
+        raise ConflictError("MEAICC 素材上传格式无效")
     filename = hashlib.sha256(raw).hexdigest() + "." + extension
     try:
         async with outbound_client(timeout=adapter.timeout_seconds, proxy=adapter.proxy_url, follow_redirects=False) as client:

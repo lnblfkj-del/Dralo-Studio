@@ -98,6 +98,7 @@ async def list_jobs(
     search: str | None = Query(None, max_length=200),
     sort: Literal["newest", "oldest"] = "newest",
     recycled: bool = False,
+    target_type: str | None = Query(None, max_length=64),
 ) -> JobListOut:
     result = await job_service.list_jobs(
         session,
@@ -110,6 +111,7 @@ async def list_jobs(
         search=search,
         sort=sort,
         recycled=recycled,
+        target_type=target_type,
     )
     return JobListOut(
         items=[JobOut.model_validate(item) for item in result["items"]],
@@ -261,6 +263,52 @@ async def outline_cast_review(job_id: int, session: SessionDep, user: CurrentUse
             or stored is None or stored.expires_at.replace(tzinfo=None) <= utcnow().replace(tzinfo=None)):
         raise ConflictError("该任务没有可核对的已保存失败响应")
     return await review_response(session, job, stored)
+
+
+class AssetLinkCorrectionInput(BaseModel):
+    model_config = {"extra": "forbid"}
+    asset_link_corrections: dict[str, str] = Field(min_length=1, max_length=500)
+    expected_response_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    acknowledge_pending_audio_calls: bool = False
+    expected_pending_audio_calls: int = Field(default=0, ge=0, le=500)
+
+    @field_validator("asset_link_corrections")
+    @classmethod
+    def bounded_paths(cls, value):
+        if any(len(field) > 80 or len(target) > 40 for field, target in value.items()):
+            raise ValueError("资产关联字段路径超过长度限制")
+        return value
+
+
+@router.get("/{job_id}/asset-link-review")
+async def asset_link_review(job_id: int, session: SessionDep, user: CurrentUser):
+    from app.core.errors import PermissionDeniedError
+    from app.services.asset_extraction_legacy import review_response
+    from app.services.job_text_response_service import _latest_response
+    from app.services.permission_service import allowed
+
+    if not allowed(user, "tasks.retry"):
+        raise PermissionDeniedError("无核对已保存任务结果的权限")
+    job = await job_service.get_job(session, job_id, user.id)
+    return await review_response(session, job, await _latest_response(session, job))
+
+
+@router.post("/{job_id}/reprocess-asset-links", response_model=JobOut)
+async def reprocess_asset_links(
+    job_id: int, payload: AssetLinkCorrectionInput, session: SessionDep, user: CurrentUser,
+) -> JobOut:
+    from app.core.errors import PermissionDeniedError
+    from app.services.job_text_response_service import reprocess_preserved_response
+    from app.services.permission_service import allowed
+
+    if not allowed(user, "tasks.retry"):
+        raise PermissionDeniedError("无本地重新处理任务结果的权限")
+    if payload.acknowledge_pending_audio_calls and not allowed(user, "tasks.generate"):
+        raise PermissionDeniedError("无继续声音资产提取模型调用的权限")
+    job = await job_service.get_job(session, job_id, user.id)
+    await reprocess_preserved_response(session, job, user.id, **payload.model_dump())
+    await session.commit()
+    return JobOut.model_validate(job)
 
 
 @router.post("/{job_id}/reprocess-response", response_model=JobOut)

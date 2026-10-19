@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useDraftBlocker } from "@/components/DraftGuard";
-import { Dialog } from "@/components/ui";
+import { Button, Dialog } from "@/components/ui";
 import { toErrorMessage } from "@/api/client";
 import { formPayload, initialValues, type EditorField, type FieldPayload } from "./fields";
 
-function Modal({ title, children, onCancel, busy = false }: { title: string; children: ReactNode; onCancel: () => void; busy?: boolean }) {
-  return <Dialog open className="wb-dialog-shell" title={title} size="medium" busy={busy} onClose={onCancel}>{children}</Dialog>;
+function Modal({ title, children, onCancel, busy = false, confirmation = false }: { title: string; children: ReactNode; onCancel: () => void; busy?: boolean; confirmation?: boolean }) {
+  return <Dialog open purpose={confirmation ? "confirmation" : "content"} className="wb-dialog-shell" title={title} size="medium" busy={busy} onClose={onCancel}>{children}</Dialog>;
 }
 
 export function EditorDialog({ title, fields, data, initial, creating = false, onSave, onSubmit, onClose }: {
@@ -53,7 +53,7 @@ export function EditorDialog({ title, fields, data, initial, creating = false, o
         </label>)}
       </fieldset>
       {error && <p className="wb-error" role="alert">{error}。输入内容已保留。</p>}
-      {confirmingDiscard ? <div className="wb-notice" role="alert"><p>{pending ? "正在保存，请等待请求完成。" : "有未保存的内容，确定放弃修改吗？"}</p><div className="wb-actions"><button type="button" disabled={pending} onClick={() => { setDiscard(false); if (blocker.state === "blocked") blocker.reset(); }}>继续编辑</button><button className="danger" type="button" disabled={pending} onClick={() => { if (blocker.state === "blocked") blocker.proceed(); onClose(); }}>放弃修改</button></div></div>
+      {confirmingDiscard ? <Dialog open purpose="confirmation" title="放弃未保存的修改？" busy={pending} onClose={() => {setDiscard(false); if (blocker.state === "blocked") blocker.reset();}} footer={<><Button disabled={pending} onClick={() => { setDiscard(false); if (blocker.state === "blocked") blocker.reset(); }}>继续编辑</Button><Button variant="danger" disabled={pending} onClick={() => { if (blocker.state === "blocked") blocker.proceed(); onClose(); }}>放弃修改</Button></>}><p>{pending ? "正在保存，请等待请求完成。" : "有未保存的内容，确定放弃修改吗？"}</p></Dialog>
         : <div className="wb-dialog-footer"><span className="wb-muted">{pending ? "正在保存…" : dirty ? "尚未保存" : "保存后写入项目"}</span><button type="button" disabled={pending} onClick={close}>取消</button><button type="submit" className="primary" disabled={pending}>{pending ? "保存中…" : "保存"}</button></div>}
     </form>
   </Modal>;
@@ -67,7 +67,7 @@ export function ConfirmDelete({ name, warning, title, description, pending: exte
   const [error, setError] = useState("");
   const isPending = pending || Boolean(externalPending);
   const inFlight = useRef(false);
-  return <Modal title={title ?? `删除${name ?? "项目"}`} busy={isPending} onCancel={() => { if (!isPending) onClose(); }}>
+  return <Modal confirmation title={title ?? `删除${name ?? "项目"}`} busy={isPending} onCancel={() => { if (!isPending) onClose(); }}>
     <p>{description ?? warning}</p><p className="wb-muted">此操作不可撤销。包含锁定分镜时，服务器会拒绝删除。</p>
     {error && <p className="wb-error" role="alert">{error}</p>}
     <div className="wb-dialog-footer"><button type="button" disabled={isPending} onClick={onClose}>取消</button><button type="button" className="danger" disabled={isPending} onClick={async () => {

@@ -5,6 +5,7 @@ import re
 
 from app.core.errors import ValidationError
 from app.services.screenplay_source_parser import VERSION, bracket_end, parse_sources
+from app.services.screenplay_voice_sources import digest, physical_lines
 
 
 def character_catalog(characters):
@@ -31,23 +32,32 @@ def spoken_char_count(text):
     return len(words)
 
 
-def review_sources(script, catalog):
-    rows = [{"line": i, "text": text.strip()}
-            for i, text in enumerate(script.splitlines(), 1) if text.strip()]
+def review_sources(script, catalog, interpretations=None):
+    positions = physical_lines(script)
+    by_line = {row["line"]: row for row in positions}
+    rows = [{"line": row["line"], "text": row["text"]} for row in positions if row["text"].strip()]
     errors, records = [], []
     try:
-        records = parse_sources(rows, catalog)
+        records = parse_sources(rows, catalog, interpretations)
     except ValidationError as exc:
         line = exc.details["source_line"]
-        errors.append({"line": line, "message": exc.message, **exc.details})
+        errors.append({"line": line, "message": exc.message, **exc.details,
+                       **by_line[line], "severity": "warning" if exc.details.get("resolvable") else "error"})
         # Do not restart parsing after an unknown cue: it may change subsequent
         # group/quote context. The remaining suffix is explicitly unassessed.
-        records = parse_sources([row for row in rows if row["line"] < line], catalog)
+        records = parse_sources([row for row in rows if row["line"] < line], catalog, interpretations)
+    for record in records:
+        if record.get("speaker_kind") == "unbound":
+            line = record["line"]
+            errors.append({**by_line[line], "message": "该声音来源尚未确认，可保留正文并确认来源类型",
+                           "source_line": line, "resolvable": True, "severity": "warning",
+                           "failure_kind": "screenplay_source_ambiguous"})
     covered = {line for record in records for line in record["source_lines"]}
     unresolved = [row["line"] for row in rows if row["line"] not in covered]
     dialogue = [record for record in records if record["kind"] == "dialogue"]
     return {
-        "version": VERSION, "status": "needs_review" if errors else "passed",
+        "version": VERSION, "script_fingerprint": digest(script),
+        "status": "needs_review" if errors else "passed",
         "records": records, "errors": errors, "source_line_count": len(rows),
         "recognized_source_line_count": len(covered), "unresolved_lines": unresolved,
         "coverage_ratio": len(covered) / len(rows) if rows else 1.0,

@@ -100,6 +100,8 @@ def estimate(model, prompt="", parameters=None):
               "pricing_version": version, "rates": rates, "quantity": None,
               "parameters": {k: params[k] for k in ("resolution", "quality", "mode", "audio", "duration", "n", "max_tokens", "max_output_tokens") if k in params},
               "reason": "价格未配置或参数未匹配；未知不等于免费", "estimated_cents": None}
+    if params.get("design_model") or params.get("audio_usage") in {"ambience", "sfx"}:
+        return {**result, "rates": {}, "reason": "音色设计或音效不套用配音单价，实际费用以渠道账单为准"}
     from app.services.audio_quota_service import usage
     result["quota"] = usage(rates.get("quota"), prompt=prompt, duration=params.get("duration"))
     if not rates:

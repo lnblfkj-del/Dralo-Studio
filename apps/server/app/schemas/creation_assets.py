@@ -95,6 +95,92 @@ class ScriptAssetBreakdownRequest(BaseModel):
         return sorted(set(value))
 
 
+class ScriptAssetPartialConfirmRequest(BaseModel):
+    candidate_ids: list[int] = Field(min_length=1, max_length=1000)
+    expected_parent_job_id: int = Field(ge=1)
+    input_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_signatures: dict[str, str] = Field(default_factory=dict, max_length=1000)
+
+
+class ScriptAssetEvidenceChoice(BaseModel):
+    expected_parent_job_id: int = Field(ge=1)
+    input_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_signature: str = Field(min_length=64, max_length=64)
+    usage_index: int = Field(ge=0, le=10000)
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+
+
+class ScriptAssetManualReviewRequest(BaseModel):
+    keep_independent: bool = False
+    confirm_usage_relation: bool = False
+    expected_parent_job_id: int = Field(ge=1)
+    input_fingerprint: str = Field(min_length=1, max_length=128)
+    expected_signature: str = Field(min_length=64, max_length=64)
+    accepted_fact_indexes: list[int] = Field(default_factory=list, max_length=1000)
+    field_values: dict[str, str] = Field(default_factory=dict, max_length=30)
+    reason: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def valid_review_reason(cls, value: str) -> str:
+        if len(value.strip()) < 3:
+            raise ValueError("请填写核对说明")
+        return value.strip()
+
+    @field_validator("accepted_fact_indexes")
+    @classmethod
+    def valid_indexes(cls, value: list[int]) -> list[int]:
+        if any(index < 0 for index in value) or len(set(value)) != len(value):
+            raise ValueError("依据编号必须非负且不能重复")
+        return value
+
+    @field_validator("field_values")
+    @classmethod
+    def valid_values(cls, value: dict[str, str]) -> dict[str, str]:
+        if any(not text.strip() or len(text) > 4000 for text in value.values()):
+            raise ValueError("采用值不能为空或超过 4000 字")
+        return {key: text.strip() for key, text in value.items()}
+
+
+class ScriptAssetBatchReviewItem(ScriptAssetManualReviewRequest):
+    candidate_id: int = Field(ge=1)
+
+
+class ScriptAssetBatchReviewRequest(BaseModel):
+    items: list[ScriptAssetBatchReviewItem] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_candidates(self):
+        if len({item.candidate_id for item in self.items}) != len(self.items):
+            raise ValueError("同一候选不能重复提交")
+        return self
+
+
+class DeferredAssetReviewRequest(BaseModel):
+    expected_parent_job_id: int = Field(ge=1)
+    input_fingerprint: str = Field(min_length=1, max_length=128)
+    scope_key: str = Field(min_length=1, max_length=200)
+    job_id: int = Field(ge=1)
+    index: int = Field(ge=0, le=1000)
+    asset_id: int | None = Field(default=None, ge=1)
+    disposition: Literal["link_asset", "script_only"] = "link_asset"
+    reason: str = Field(min_length=3, max_length=300)
+
+    @model_validator(mode="after")
+    def valid_disposition(self):
+        if (self.disposition == "link_asset") != (self.asset_id is not None):
+            raise ValueError("关联素材需要资产编号；仅保留原文不能携带资产编号")
+        return self
+
+    @field_validator("reason")
+    @classmethod
+    def reviewed_reason(cls, value: str) -> str:
+        if len(value.strip()) < 3:
+            raise ValueError("请填写实际核对说明")
+        return value.strip()
+
+
 class ScriptAssetCandidateUpdate(BaseModel):
     selected: bool | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)

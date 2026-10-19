@@ -51,6 +51,9 @@ def _chinese_number(value: str) -> int | None:
 
 def _heading(line: str) -> tuple[int, str] | None:
     value = line.strip()
+    markdown = re.fullmatch(r"#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?", value)
+    if markdown:
+        value = markdown.group(1)
     if not value or len(value) > 200 or _EPISODE_RANGE.search(value):
         return None
     matched = _EPISODE_HEADING.fullmatch(value)
@@ -68,8 +71,19 @@ def _heading(line: str) -> tuple[int, str] | None:
 def _line_candidates(text: str) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     offset = 0
+    fence: tuple[str, int] | None = None
     for line in text.splitlines(keepends=True):
-        parsed = _heading(line.rstrip("\r\n"))
+        stripped = line.strip()
+        marker = re.match(r"^(`{3,}|~{3,})(.*)$", stripped)
+        if marker:
+            token, tail = marker.groups()
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1] and not tail.strip():
+                fence = None
+            offset += len(line)
+            continue
+        parsed = None if fence else _heading(line.rstrip("\r\n"))
         if parsed:
             candidates.append({"number": parsed[0], "title": parsed[1], "start": offset})
         offset += len(line)

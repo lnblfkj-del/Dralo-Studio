@@ -1,4 +1,5 @@
 import type { ProviderModelType } from "@/types/api";
+import { useState } from "react";
 import { Button } from "@/components/ui";
 import { pricingDraft } from "./pricingDraft";
 
@@ -6,6 +7,8 @@ const rates: Array<[string, string]> = [["input_rate", "输入 / 百万 token"],
 
 export function ModelPricingForm({ value, kind, onChange }: { value: Record<string, unknown>; kind: ProviderModelType; onChange: (value: Record<string, unknown>) => void }) {
   const draft = pricingDraft(value, kind);
+  const [editingNote,setEditingNote]=useState(false);
+  const note=typeof value.source==='string' ? value.source : '';
   function change(key: string, value: unknown) {
     const next = { ...draft, [key]: value };
     if (value === "") delete next[key];
@@ -14,14 +17,14 @@ export function ModelPricingForm({ value, kind, onChange }: { value: Record<stri
   const field = (key: string, title: string) => <label key={key}><span>{title}</span><input aria-label={title} type="number" min="0" step="any" value={String(draft[key] ?? "")} placeholder="未配置（不等于免费）" onChange={e => change(key, e.target.value)} /></label>;
   const rules = draft.rules ?? [];
   const quota = draft.quota as {unit:string;basis:string;rate:string;source:string} | undefined;
-  return <details className="model-pricing-form model-protocol-details">
-    <summary>费用配置（提交前预估）</summary>
+  return <details className="model-pricing-form model-protocol-details" aria-label="费用设置">
+    <summary>费用设置</summary>
     <p>填写当前渠道分组的实际折后单价。金额单位为元或美元，不是分；更换币种不会自动换算。空价格表示未知，0 表示明确免费。</p>
     <div className="model-parameter-pair">
       <label><span>计价币种</span><select aria-label="计价币种" value={draft.currency} onChange={e => change("currency", e.target.value)}><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option></select></label>
       <label><span>计费单位</span><select aria-label="计费单位" value={draft.unit} onChange={e => onChange({ version: 2, currency: draft.currency, unit: e.target.value, source: draft.source ?? "手动配置", rules: [], ...(quota ? {quota} : {}) })}><option value="million_tokens">百万 token（输入 / 输出分开）</option><option value="image">每张图片</option><option value="second">每秒媒体</option><option value="minute">每分钟媒体</option><option value="1000_chars">每千字符</option><option value="request">每次请求</option></select></label>
     </div>
-    <div className="model-parameter-pair">{draft.unit === "million_tokens" ? rates.map(([key, label]) => field(key, label)) : field("rate", "默认单价")}</div>
+    <div className="model-parameter-pair model-pricing-rates">{draft.unit === "million_tokens" ? rates.map(([key, label]) => field(key, label)) : field("rate", "默认单价")}</div>
     {draft.unit === "million_tokens" && <p>输入长度为粗估，输出按模型最大输出配置估算；不预测缓存命中，不是实际扣费或硬性上限。缓存单价先记录，长上下文阶梯价及结算在后续阶段开放。</p>}
     {["second", "minute"].includes(draft.unit) && <div className="model-parameter-pair">{field("minimum_seconds", "最低计费秒数")}{field("step_seconds", "向上取整步长（秒）")}</div>}
     {["tts", "audio"].includes(kind) && <fieldset><legend>订阅额度（不计入现金总额）</legend>
@@ -42,7 +45,9 @@ export function ModelPricingForm({ value, kind, onChange }: { value: Record<stri
       </div>)}
       <Button onClick={() => change("rules", [...rules, { resolution: "", rate: "" }])}>添加条件价格</Button>
     </fieldset>}
-    <label><span>价格来源 / 渠道分组备注</span><input aria-label="价格来源" maxLength={512} value={String(draft.source ?? "")} onChange={e => change("source", e.target.value)} placeholder="例如：控制台实际价格，当前 Key 所属分组" /></label>
+    <div className="model-price-note">
+      {editingNote ? <><label>价格备注（选填）<input aria-label="价格备注" maxLength={512} value={note} autoFocus onChange={e=>change('source',e.target.value)} placeholder="例如：控制台价格，已含渠道折扣" /></label><Button variant="text" controlSize="compact" onClick={()=>setEditingNote(false)}>收起备注</Button></> : <>{note.trim() && <p>{note}</p>}<Button variant="text" controlSize="compact" onClick={()=>setEditingNote(true)}>{note.trim() ? '编辑备注' : '添加备注'}</Button></>}
+    </div>
     <p>价格生效版本在提交时记录；修改配置不会重算历史任务。美元保持原币种，不自动计入人民币总额。</p>
   </details>;
 }

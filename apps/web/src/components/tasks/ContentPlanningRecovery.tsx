@@ -58,7 +58,7 @@ export function ContentPlanningRecovery({ scope, disabled = false, onRecovered, 
     <Button icon={<RotateCcw size={15} />} variant="primary" disabled={disabled || busy || Boolean(confirmation) || !state.data || state.data.active_job_ids.length > 0 || (state.data.new_text_calls_upper_bound === 0 && !state.data.can_finalize_locally && !state.data.failed.some(item => item.can_process_saved))} loading={busy} onClick={() => void retry()}>重试未完成内容</Button>
     {busy && <p role="status">正在处理，请稍候…</p>}
     {(error || state.error) && <p role="alert">{error || toErrorMessage(state.error)} <Button variant="text" disabled={busy} onClick={() => { setError(""); void state.refetch(); }}>重新读取</Button></p>}
-    <Dialog open={Boolean(confirmation)} title="确认新增文本调用" size="small" busy={busy} onClose={() => { if (!busy) setConfirmation(null); }} footer={<>
+    <Dialog purpose="confirmation" open={Boolean(confirmation)} title="确认新增文本调用" size="small" busy={busy} onClose={() => { if (!busy) setConfirmation(null); }} footer={<>
       <Button disabled={busy} onClick={() => setConfirmation(null)}>取消</Button>
       <Button variant="primary" loading={busy} disabled={disabled || busy || (unknown && !acceptUnknown)} onClick={() => void confirm()}>确认重试</Button>
     </>}>

@@ -4,20 +4,16 @@
 """
 
 import json
-from datetime import UTC, datetime
-from decimal import Decimal
+from copy import deepcopy
 from hashlib import sha256
 from typing import Any
 
-from sqlalchemy import String, and_, case, cast, delete, func, or_, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import AppError, ConflictError, NotFoundError, ValidationError
+from app.core.errors import AppError, ConflictError, NotFoundError
 from app.models import (
-    JOB_STATUS_PROCESSING,
     JOB_STATUS_QUEUED,
-    JOB_STATUS_RETRYING,
-    JOB_STATUS_RUNNING,
     JOB_STATUS_SUCCEEDED,
     JOB_TYPE_EXPORT,
     JOB_TYPE_IMAGE,
@@ -31,20 +27,12 @@ from app.models import (
     Project,
     Provider,
     ProviderModel,
-    Scene,
     SegmentVideoVersion,
-    Shot,
-    ShotVideoVersion,
     VideoSegment,
-    VideoSegmentShot,
-    utcnow,
 )
-from app.providers.protocols import execution_contract, is_toapis_model, validate_model_protocol
-from app.providers.video_contracts import VIDEO_CONTRACTS, validate_video_parameters
-from app.services.job_concurrency_service import BATCH_PARENT_TARGETS, TERMINAL_STATUSES
-from app.services.job_pricing_service import _aggregate_video_pricing, _video_model_pair
+from app.providers.protocols import execution_contract, validate_model_protocol
+from app.services.job_concurrency_service import TERMINAL_STATUSES
 from app.services.pricing_service import attach as attach_pricing
-from app.services.pricing_service import estimate as estimate_pricing
 from app.services.team_access import owner_scope
 
 
@@ -56,6 +44,7 @@ async def create_text_job(
     prompt: str,
     project_id: int | None,
     parameters: dict[str, Any],
+    frozen_execution: dict[str, Any] | None = None,
 ) -> Job:
     row = await session.execute(
         select(ProviderModel, Provider)
@@ -79,18 +68,28 @@ async def create_text_job(
             raise NotFoundError("项目不存在")
     from app.services import execution_policy_service, text_model_policy_service
 
-    execution_snapshot = execution_policy_service.current_snapshot()
-    effective_parameters, text_policy = text_model_policy_service.resolve(
-        model, provider, parameters, execution_snapshot
-    )
-    execution_snapshot["text_model"] = text_policy
+    if frozen_execution is None:
+        execution_snapshot = execution_policy_service.current_snapshot()
+        effective_parameters, text_policy = text_model_policy_service.resolve(
+            model, provider, parameters, execution_snapshot
+        )
+        execution_snapshot["text_model"] = text_policy
+        protocol_contract = execution_contract(provider, model)
+    else:
+        if (frozen_execution["provider_model_id"] != model.id
+                or frozen_execution["provider_id"] != provider.id
+                or frozen_execution["model_identifier"] != model.model_id):
+            raise ConflictError("冻结的文本任务路由已失效，未调用模型")
+        execution_snapshot = deepcopy(frozen_execution["execution_policy"])
+        effective_parameters = {**deepcopy(frozen_execution["parameters"]), **parameters}
+        protocol_contract = deepcopy(frozen_execution["protocol_contract"])
     job = Job(
         owner_id=owner_id,
         project_id=project_id,
         provider_id=provider.id,
         job_type=JOB_TYPE_TEXT,
         status=JOB_STATUS_QUEUED,
-        payload={"provider_model_id": model.id, "prompt": prompt, "parameters": effective_parameters, "protocol_contract": execution_contract(provider, model)},
+        payload={"provider_model_id": model.id, "prompt": prompt, "parameters": effective_parameters, "protocol_contract": protocol_contract},
         execution_policy_snapshot=execution_snapshot,
         provider=provider.name,
         model=model.model_id,
@@ -193,6 +192,10 @@ async def create_image_job(
         model=model.model_id,
     )
     attach_pricing(job, model)
+    if (identity_snapshot or {}).get("character_profile", {}).get("character_form") in {"fixed_group", "crowd"}:
+        from app.services.asset_character_representation import GROUP_CONTRACT
+        job.payload = {**job.payload, "asset_generation_contract": GROUP_CONTRACT,
+                       "character_group_snapshot": identity_snapshot["character_profile"]}
     session.add(job)
     await session.flush()
     return job
@@ -212,6 +215,13 @@ async def create_video_job(
     parameters: dict[str, Any],
     h3_reviewed: bool = False,
 ) -> Job:
+    from app.services.planning_capability_admin import lock_catalog
+    from app.services import video_version_service
+
+    candidate = await session.get(ProviderModel, provider_model_id)
+    if candidate is None:
+        raise NotFoundError("模型不存在")
+    await lock_catalog(session, candidate.provider_id, candidate.id)
     row = await session.execute(
         select(ProviderModel, Provider).join(Provider, Provider.id == ProviderModel.provider_id)
         .where(ProviderModel.id == provider_model_id)
@@ -225,6 +235,8 @@ async def create_video_job(
         raise ConflictError("模型渠道或模型已停用")
     if model.model_type != "video":
         raise ConflictError("视频任务只能使用视频模型")
+    from app.services.video_adapter_installation import require_installed
+    await require_installed(session, model, submitting=True)
     from app.providers.protocols import effective_protocol
     if effective_protocol(provider, model) == "minimax_video_v2" and not h3_reviewed:
         raise ConflictError("MiniMax H3 此入口生产提交尚未开放；请先完成片段来源绑定和英文提示词审核")
@@ -249,7 +261,7 @@ async def create_video_job(
     ]
     from app.services.style_generation_service import project_style_media
     style_media_id = await project_style_media(session, project_id, owner_id, "video")
-    if style_media_id and not any(item["media_id"] == style_media_id for item in references):
+    if style_media_id and parameters.get("input_mode") != "text" and not any(item["media_id"] == style_media_id for item in references):
         references.append({"media_id": style_media_id, "role": "reference_image",
                            "purpose": "project_style"})
     compiled = compile_video_input(
@@ -294,6 +306,7 @@ async def create_video_job(
                  **({"object_storage_reference": storage_reference} if storage_reference else {})},
         provider=provider.name, model=model.model_id,
     )
+    await video_version_service.bind(session, job, provider, model)
     quote = attach_pricing(job, model)
     if (
         (model.pricing or {}).get("separate_audio_pricing")

@@ -33,6 +33,7 @@ export interface EpisodeAssetReadiness {
   episode_number: number;
   status: "no_requirements" | "ready" | "incomplete" | "stale";
   required_asset_ids: number[];
+  related_asset_ids?: number[];
   ready_asset_ids: number[];
   missing_asset_ids: number[];
   issues: AssetReadinessIssue[];

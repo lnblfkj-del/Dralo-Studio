@@ -19,6 +19,9 @@ PROVIDER_PROTOCOLS.update({"ark_video_images", "jimeng_video_t2v", "jimeng_video
 PROVIDER_PROTOCOLS.add("minimax_video_v2")
 PROVIDER_PROTOCOLS.add("meaicc_video")
 PROVIDER_PROTOCOLS.add("meaicc_video_images")
+PROVIDER_PROTOCOLS.add("custom_video")
+PROVIDER_PROTOCOLS.update({"openai_responses", "ollama_chat"})
+PROVIDER_PROTOCOLS.add("stepfun_gen")
 PROVIDER_PROTOCOLS.update({"stepfun_tts", "stepfun_music", "minimax_audio_subscription", "elevenlabs_tts", "elevenlabs_music"})
 
 MODEL_TYPE_TEXT = "text"
@@ -27,6 +30,9 @@ MODEL_TYPE_VIDEO = "video"
 MODEL_TYPE_AUDIO = "audio"
 MODEL_TYPE_TTS = "tts"
 MODEL_TYPE_EMBEDDING = "embedding"
+DEFAULT_PROVIDER_TIMEOUT_SECONDS = 500
+DEFAULT_PROVIDER_MAX_CONCURRENCY = 200
+MAX_PROVIDER_CONCURRENCY = 200
 MODEL_TYPES = {
     MODEL_TYPE_TEXT,
     MODEL_TYPE_IMAGE,
@@ -55,9 +61,9 @@ class Provider(IdMixin, TimestampMixin, WorkspaceScoped, Base):
     base_url: Mapped[str] = mapped_column(String(512), nullable=False)
     api_key_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
     api_key_hint: Mapped[str] = mapped_column(String(8), nullable=False)
-    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_PROVIDER_TIMEOUT_SECONDS)
     proxy_url: Mapped[str | None] = mapped_column(String(512))
-    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_PROVIDER_MAX_CONCURRENCY)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -87,6 +93,7 @@ class ProviderModel(IdMixin, TimestampMixin, WorkspaceScoped, Base):
     api_base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     default_params: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    video_config: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     video_prompt_certifications: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     pricing: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     # User-configured ceiling plus a shared adaptive window. Keeping these in the

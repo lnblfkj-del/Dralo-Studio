@@ -1,12 +1,12 @@
 """Compile authored editor documents without interpreting prose as asset names."""
 
-from copy import deepcopy
 import math
+from copy import deepcopy
 
 from app.core.errors import ValidationError
 
 
-def compile_document(raw, shot_ids, bindings):
+def compile_document(raw, shot_ids, bindings, references=()):
     document = raw.get("editor_document")
     if not isinstance(document, dict) or document.get("type") != "doc":
         raise ValidationError("片段正文文档无效")
@@ -39,7 +39,10 @@ def compile_document(raw, shot_ids, bindings):
             elif kind == "hardBreak":
                 text = "\n"
             elif kind == "assetMention":
-                binding = next((b for b in bindings if b.get("asset_id") == attrs.get("asset_id") and b.get("asset_version_id") == attrs.get("asset_version_id") and b.get("resolved") is not False), None)
+                candidates = references if attrs.get("asset_version_id") is None else bindings
+                binding = next((b for b in candidates if b.get("asset_id") == attrs.get("asset_id")
+                                and (attrs.get("asset_version_id") is None or b.get("asset_version_id") == attrs.get("asset_version_id"))
+                                and b.get("resolved") is not False), None)
                 if not binding:
                     raise ValidationError("正文引用的素材版本尚未绑定，请重新选择素材")
                 text = str(binding.get("asset_name") or attrs.get("name") or "")

@@ -40,7 +40,7 @@ class AgentSkill(IdMixin, TimestampMixin, WorkspaceScoped, Base):
 
 
 class AgentSkillVersion(IdMixin, TimestampMixin, WorkspaceScoped, Base):
-    """Skill 的不可变执行快照；已有版本只新增、不覆盖。"""
+    """当前 Skill 的执行快照；升级删除旧目录版本，历史任务使用自身快照。"""
 
     __tablename__ = "agent_skill_versions"
     __table_args__ = (UniqueConstraint("skill_id", "version", name="uq_agent_skill_version"),)

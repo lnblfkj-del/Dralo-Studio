@@ -120,6 +120,7 @@ export interface ScriptAssetCandidate {
   attributes: Record<string, unknown>;
   selected: boolean;
   matched_asset_id: number | null;
+  confirmed_in_current_scope?: boolean;
   usage_records?: Array<{
     episode_number: number;
     scene?: string;
@@ -127,6 +128,10 @@ export interface ScriptAssetCandidate {
     performance?: string;
     timing?: string;
     needs_review?: boolean;
+    alignment_status?: string;
+    alignment_candidates?: Array<{ start: number; end: number; line_start: number; line_end: number; context: string; context_start?: number }>;
+    alignment_candidates_truncated?: boolean;
+    evidence_resolution?: string;
     locator?: { label?: string } | null;
   }>;
   source_records?: Array<{ locator?: { label?: string } | string; episode_number?: number; source_kind?: string }>;
@@ -136,10 +141,16 @@ export interface ScriptAssetCandidate {
 }
 
 export interface ScriptAssetBreakdownState {
+  review_items_by_scope?: Record<string, { job_id: number; episode_numbers: number[]; items: { index: number; name: string; kind: string; declared_necessity?: string[]; field_errors: { field: string; reason: string }[] }[] }>;
+  coverage_status?: "requires_review" | "not_exhaustively_verified";
+  execution_model?: { id: number; provider_name: string; name: string; model_id: string; executor_revision?: number; skill_version?: number };
   parent_job_id?: number;
   completed_batches?: number;
   total_batches?: number;
-  status?: "running" | "awaiting_confirmation" | "completed" | "rejected" | "stale";
+  status?: "running" | "failed" | "awaiting_confirmation" | "completed" | "rejected" | "stale";
+  asset_extraction_contract_version?: number;
+  asset_necessity_policy?: { version: string; sha256: string; independent_audio_types: string[] };
+  confirmation_receipts?: Record<string, { signature: string; formal_asset_id: number; confirmed_at: string }>;
   completed?: boolean;
   candidate_counts?: Record<string, number>;
   selected_count?: number;
@@ -162,6 +173,15 @@ export interface ScriptAssetBreakdownState {
     candidate_id?: number;
     episode_numbers?: number[];
   }>;
+}
+
+export interface AssetBreakdownReviewState {
+  parent_job_id: number | null;
+  input_fingerprint: string;
+  settled_episode_numbers: number[];
+  confirmable_candidate_ids: number[];
+  candidate_signatures: Record<string, string>;
+  scopes: Array<{ scope_key: string; job_id: number | null; episode_numbers: number[]; group: "visual" | "audio"; status: string }>;
 }
 
 export interface OptionalExtractionState {

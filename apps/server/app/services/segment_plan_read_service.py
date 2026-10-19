@@ -5,6 +5,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ConflictError
 from app.models import (
     Asset,
     EpisodeProductionPlan,
@@ -17,6 +18,7 @@ from app.models import (
 )
 from app.services import pricing_service
 from app.services.production_snapshot_service import script_state
+from app.services.segment_editor_projection import editor_parameters
 
 
 async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> dict[str, Any]:
@@ -69,8 +71,8 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
             links_by_segment[link.segment_id].append(link)
         for version in versions:
             versions_by_segment[version.segment_id].append(version)
-    from app.services.segment_video_candidate_service import candidate_evidence
     from app.services.segment_candidate_reuse_service import include_candidate_history
+    from app.services.segment_video_candidate_service import candidate_evidence
 
     await include_candidate_history(session, plan, segments, versions_by_segment)
 
@@ -99,6 +101,26 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
         if plan.provider_model_id is not None
         else None
     )
+    capability_snapshot = plan.model_capability_snapshot or {}
+    if plan.source_type == "content_frozen" and provider_model is not None:
+        from app.services.video_model_contract import normalize
+        try:
+            capability_snapshot = {**capability_snapshot, **normalize(provider_model)}
+        except ConflictError:
+            # Reading an existing script must still work if its model needs setup.
+            pass
+    from app.models import Episode, Project
+    from app.services.segment_asset_references import catalog, resolve_materials
+    episode = await session.get(Episode, plan.episode_id)
+    project = await session.get(Project, episode.project_id)
+    assets = await catalog(session, project.id)
+    refs_by_segment = {segment.id: await resolve_materials(session, project, segment.refs, strict=False, assets=assets)
+                       for segment in segments}
+    # Media availability is a read projection; never turn automatic references
+    # into version-pinned edits when the user saves the script.
+    for segment in segments:
+        refs_by_segment[segment.id]["asset_bindings"] = (segment.refs or {}).get("asset_bindings", [])
+        refs_by_segment[segment.id]["reference_media_ids"] = (segment.refs or {}).get("reference_media_ids", [])
     return {
         "id": plan.id,
         "episode_id": plan.episode_id,
@@ -108,7 +130,7 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
         "status": plan.status,
         "source_script_revision": plan.source_script_revision,
         "provider_model_id": plan.provider_model_id,
-        "model_capability_snapshot": plan.model_capability_snapshot or {},
+        "model_capability_snapshot": capability_snapshot,
         "parameters": plan.parameters or {},
         "total_timeline_duration": plan.total_timeline_duration,
         "total_generation_duration": plan.total_generation_duration,
@@ -128,9 +150,10 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
                 "trim_out": segment.trim_out,
                 "prompt": segment.prompt,
                 "negative_prompt": segment.negative_prompt,
-                "parameters": segment.parameters or {},
+                "parameters": editor_parameters(segment, links_by_segment[segment.id])
+                if plan.source_type == "content_frozen" else segment.parameters or {},
                 "refs": {
-                    **(segment.refs or {}),
+                    **refs_by_segment[segment.id],
                     "unresolved_assets": [
                         raw for raw in (segment.refs or {}).get("unresolved_assets", [])
                         if not isinstance(raw, dict) or (

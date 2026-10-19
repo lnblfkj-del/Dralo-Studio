@@ -6,6 +6,7 @@ from app.api.deps import EpisodeDep, SessionDep
 from app.api.project_episode_planning_routes import router as content_planning_router
 from app.schemas.episode_segments import (
     SegmentContinuityOut,
+    SegmentDeleteRequest,
     SegmentLifecycleRequest,
     SegmentPlanAdjustRequest,
 )
@@ -17,10 +18,27 @@ from app.schemas.project import (
     SegmentVideoVersionSelectRequest,
 )
 from app.services import segment_plan_service
+from app.services.segment_video_options import SegmentOptionsInput, inspect_options
 
 router = APIRouter(tags=["projects"])
 
 router.include_router(content_planning_router)
+
+
+@router.post("/{project_id}/episodes/{episode_id}/production/segment-video-options")
+async def segment_video_options(payload: SegmentOptionsInput, episode: EpisodeDep, session: SessionDep):
+    return await inspect_options(session, episode, payload)
+
+
+@router.post("/{project_id}/episodes/{episode_id}/production/segment-plan/delete",
+             response_model=SegmentProductionPlanOut)
+async def delete_selected_segments(payload: SegmentDeleteRequest, episode: EpisodeDep,
+                                   session: SessionDep) -> SegmentProductionPlanOut:
+    from app.services.segment_batch_edit_service import delete_segments
+
+    plan = await delete_segments(session, episode, **payload.model_dump())
+    await session.commit()
+    return SegmentProductionPlanOut.model_validate(plan)
 
 
 @router.get("/{project_id}/episodes/{episode_id}/production/content-plan/{job_id}")

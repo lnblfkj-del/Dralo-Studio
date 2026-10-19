@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Clapperboard, Image, LoaderCircle, Settings2, Workflow } from "lucide-react";
+import { Boxes, Check, Clapperboard, Image, LoaderCircle, Settings2, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -9,6 +9,7 @@ import type { BusinessExecutor, ModelOption } from "@/types/api";
 import { SettingsButton, SettingsDialog } from "@/components/settings/SettingsPrimitives";
 
 const EXECUTOR_META: Record<BusinessExecutor["key"], { eyebrow: string; icon: LucideIcon }> = {
+  asset_extractor: { eyebrow: "ASSET EXTRACTOR", icon: Boxes },
   episode_director: { eyebrow: "EPISODE DIRECTOR", icon: Clapperboard },
   asset_prompt_generator: { eyebrow: "ASSET PROMPT", icon: Image },
   media_task_orchestrator: { eyebrow: "MEDIA ORCHESTRATOR", icon: Workflow },
@@ -70,7 +71,8 @@ export function BusinessExecutorsPanel({ models, canManage }: Props) {
   if (query.error) return <div className="settings-error" role="alert">{toErrorMessage(query.error)}</div>;
   if (!draft || !query.data?.length) return null;
 
-  const ActiveIcon = EXECUTOR_META[draft.key].icon;
+  const activeMeta = EXECUTOR_META[draft.key] ?? { eyebrow: "BUSINESS EXECUTOR", icon: Settings2 };
+  const ActiveIcon = activeMeta.icon;
   return <section className="business-executors" aria-labelledby="business-executor-title">
     <header className="business-executors-heading">
       <div><small>BUSINESS EXECUTOR LAYER</small><h2 id="business-executor-title">业务执行器</h2><p>无对话运行固定业务流程。它们不扮演 Agent，页面按钮与 Agent 工具调用共享同一执行合同。</p></div>
@@ -79,7 +81,7 @@ export function BusinessExecutorsPanel({ models, canManage }: Props) {
 
     <div className="business-executor-grid">
       {query.data.map((item) => {
-        const meta = EXECUTOR_META[item.key];
+        const meta = EXECUTOR_META[item.key] ?? { eyebrow: "BUSINESS EXECUTOR", icon: Settings2 };
         const Icon = meta.icon;
         return <button key={item.key} type="button" onClick={() => choose(item.key)}>
           <span><Icon size={19} /></span>
@@ -93,7 +95,7 @@ export function BusinessExecutorsPanel({ models, canManage }: Props) {
     <section className="business-executor-config business-executor-config--dialog">
       <header>
         <span className="business-executor-icon"><ActiveIcon size={22} /></span>
-        <div><small>{EXECUTOR_META[draft.key].eyebrow}</small><h3>{draft.name}</h3><p>{draft.description}</p></div>
+        <div><small>{activeMeta.eyebrow}</small><h3>{draft.name}</h3><p>{draft.description}</p></div>
         <label className="settings-switch" title={canManage ? "启用或停用此业务执行器" : "仅管理员可修改"}>
           <input type="checkbox" disabled={!canManage} checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />
           <span />
@@ -103,7 +105,7 @@ export function BusinessExecutorsPanel({ models, canManage }: Props) {
       <div className="business-executor-fields">
         <label>
           <span>执行模型</span>
-          <small>{draft.model_type ? "可由业务页面明确选择覆盖；这里是默认路由。" : "此执行器只编排任务，不独立调用模型。"}</small>
+          <small>{draft.key === "asset_extractor" ? "独立路由，不影响大纲、正文或资产提示词模型。" : draft.model_type ? "可由业务页面明确选择覆盖；这里是默认路由。" : "此执行器只编排任务，不独立调用模型。"}</small>
           <select disabled={!canManage || draft.model_type === null} value={draft.model_id ?? ""} onChange={(event) => setDraft({ ...draft, model_id: event.target.value ? Number(event.target.value) : null })}>
             <option value="">{draft.model_type ? "请选择文本模型" : "无需独立模型"}</option>
             {textModels.map((model) => <option key={model.id} value={model.id}>{model.provider_name} · {model.name}</option>)}
@@ -116,13 +118,18 @@ export function BusinessExecutorsPanel({ models, canManage }: Props) {
         </label>
       </div>
 
+      {draft.key === "asset_extractor" && <div className="business-executor-fields"><label>
+        <span>思考等级</span>
+        <select aria-label="资产拆解思考等级" disabled={!canManage} value={String(draft.parameters.reasoning_effort ?? "inherit")} onChange={(event) => setDraft({ ...draft, parameters: { reasoning_effort: event.target.value } })}>
+          <option value="inherit">继承模型设置</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
+        </select>
+      </label></div>}
+
       <div className="business-executor-skills">
-        <header><div><small>VERSIONED SKILLS</small><h4>固定 Skill 与版本</h4></div><p>历史任务记录执行器修订和 Skill 版本，配置更新不会改写旧任务。</p></header>
+        <header><div><small>LATEST SKILLS</small><h4>最新 Skill</h4></div><p>只保留最新目录版本；历史任务使用已冻结内容。</p></header>
         <div>{draft.skills.map((skill) => <label key={skill.skill_id}>
           <span><strong>{skill.name}</strong><small>{skill.key}</small></span>
-          <select disabled={!canManage} value={skill.selected_version} onChange={(event) => setDraft({ ...draft, skills: draft.skills.map((item) => item.skill_id === skill.skill_id ? { ...item, selected_version: Number(event.target.value) } : item) })}>
-            {skill.available_versions.map((version) => <option key={version} value={version}>V{version}{version === skill.current_version ? " · 当前" : ""}</option>)}
-          </select>
+          <span>V{skill.current_version} · 最新</span>
         </label>)}</div>
       </div>
 

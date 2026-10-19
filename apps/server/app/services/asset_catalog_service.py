@@ -126,7 +126,10 @@ def normalize_asset_view(asset_type: str, view_type: str | None = None, view_lab
     return resolved_type, (view_label or "").strip() or ASSET_VIEW_LABELS[resolved_type]
 
 
-def asset_image_prompt(asset_type: str, prompt: str, view_type: str = "base", *, costume_mode=None, costume_direction="正面") -> str:
+def asset_image_prompt(asset_type: str, prompt: str, view_type: str = "base", *, costume_mode=None, costume_direction="正面", character_profile=None) -> str:
+    from app.services.asset_character_representation import group_prompt, is_group
+    if asset_type == "character" and is_group(character_profile or {}):
+        return group_prompt(prompt, character_profile)
     if asset_type == "costume" and costume_mode == "garment_only":
         from app.services.costume_generation_service import garment_prompt
         return garment_prompt(prompt, costume_direction)
@@ -198,6 +201,14 @@ async def update_asset(session: AsyncSession, asset: Asset, data: dict[str, Any]
         await ensure_slug_available(session, project_id, data["slug"], asset.id)
         link = await get_project_link(session, project_id, asset.id)
         link.local_slug = data["slug"]
+    attributes = dict(data.get("attributes", asset.attributes) or {})
+    if attributes.get("field_trust"):
+        data = dict(data)
+        if "description" in data:
+            attributes["generation_description_source"] = "user"
+        if "prompt_anchor" in data:
+            attributes["generation_prompt_source"] = "user"
+        data["attributes"] = attributes
     for key, value in data.items():
         setattr(asset, key, value)
     await session.flush()

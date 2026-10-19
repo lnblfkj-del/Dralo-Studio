@@ -16,7 +16,13 @@ CONFIG_FIELDS = {"durations", "resolutions", "aspect_ratios", "max_reference_ima
     "max_shots_per_segment", "supports_audio", "supports_dialogue", "native_audio_capability"}
 CONTEXT_FIELDS = {"asset_context", "canvas_request_id", "canvas_request_digest", "source_node_key",
     "execution", "video_compilation", "director_shot_package", "video_input_contract",
-    "video_input_confirmations", "audio_policy", "audio_contract", "voice_guidance"}
+    "video_input_confirmations", "audio_policy", "audio_contract", "voice_guidance",
+    "episode_planning_capability", "planning_record_id", "planning_run_id", "plan_fingerprint",
+    "assembly_fingerprint", "execution_epoch", "timeline_ms", "video_submission_ready",
+    "excluded_shot_ids", "confirmed_excluded_shot_ids", "content_plan_fingerprint",
+    "mode_key", "input_mode", "background_music", "structured_script",
+    "source", "operation", "parent_plan_id", "timeline_selected_lineage_key",
+    "manual_insert", "text_split_review_required"}
 
 
 def video_parameters(parameters, *, first=False, last=False, references=0, negative_prompt=None, image_mode=False):
@@ -73,7 +79,13 @@ class MeaiccVideoProvider(OpenAICompatibleProvider):
         except ValueError as exc:
             raise ProviderError("MEAICC 视频接口未返回有效 JSON；不自动重发") from exc
 
-    async def submit_video(self, *, model, prompt, negative_prompt, first_frame, last_frame, reference_images, parameters):
+    async def submit_video(self, *, model, prompt, negative_prompt, first_frame, last_frame, reference_images, parameters, reference_audios=()):
+        from app.providers.video_reference_audio import (
+            decode_reference_audio,
+            validate_reference_audio,
+        )
+        validate_reference_audio("meaicc_video_images" if self.image_mode else "meaicc_video", model, reference_audios,
+                                 first=bool(first_frame), last=bool(last_frame), images=reference_images, parameters=parameters)
         params = video_parameters(parameters, first=bool(first_frame), last=bool(last_frame),
                                   references=len(reference_images), negative_prompt=negative_prompt,
                                   image_mode=self.image_mode)
@@ -83,17 +95,22 @@ class MeaiccVideoProvider(OpenAICompatibleProvider):
             raise ConflictError("视频提示词不能为空")
         media = []
         if self.image_mode:
-            from app.providers.meaicc_media import decode_image, upload_image
+            from app.providers.meaicc_media import decode_image, upload_audio, upload_image
             images = ([("first_frame", first_frame)] if first_frame else [])
             images += [("reference_image", value) for value in reference_images]
             images += [("last_frame", last_frame)] if last_frame else []
             # Validate every image before transmitting even the first one.
             decoded = [(role, *decode_image(value)) for role, value in images]
+            decoded_audio = [decode_reference_audio(audio.content) for audio in reference_audios]
             urls = {}
             for role, raw, mime in decoded:
                 if raw not in urls:
                     urls[raw] = await upload_image(self, raw, mime)
                 media.append({"type": role, "url": urls[raw]})
+            for raw, mime in decoded_audio:
+                if raw not in urls:
+                    urls[raw] = await upload_audio(self, raw, mime)
+                media.append({"type": "reference_voice", "url": urls[raw]})
         body = await self._request("POST", "/videos", json={"model": model,
             "input": {"prompt": prompt, "media": media}, "parameters": params})
         if str(body.get("status", "")).lower().startswith(("failed", "error")):
@@ -134,6 +151,6 @@ class MeaiccVideoProvider(OpenAICompatibleProvider):
             raise ProviderError("MEAICC 视频尚未完成")
         media = await download_stream(self, self._video_urls[handle.id], content_types={
             "video/mp4", "video/webm", "application/octet-stream", "binary/octet-stream"})
-        if not (len(media) >= 12 and media[4:8] == b"ftyp" or media.startswith(b"\x1a\x45\xdf\xa3")):
+        if not ((len(media) >= 12 and media[4:8] == b"ftyp") or media.startswith(b"\x1a\x45\xdf\xa3")):
             raise ProviderError("MEAICC 下载内容不是可识别的视频容器；保留原任务，不重新生成")
         return media
