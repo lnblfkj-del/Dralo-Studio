@@ -19,7 +19,13 @@ async def costume_identity(session, project_id, asset_id, model, prompt, referen
     attrs = asset.attributes or {}
     profile = ((link.production_data or {}).get("profile") or {}) if link else {}
     explicit = profile.get("character_asset_id")
-    ids = [explicit] if explicit else attrs.get("linked_character_asset_ids") or [attrs.get("linked_character_asset_id")]
+    ids = profile.get("linked_character_asset_ids") or attrs.get("linked_character_asset_ids") or []
+    if profile.get("linked_character_asset_id"):
+        ids = [profile["linked_character_asset_id"]]
+    elif not ids:
+        ids = [attrs.get("linked_character_asset_id")]
+    if explicit:
+        ids = [explicit]
     ids = list(dict.fromkeys(value for value in ids if type(value) is int and value > 0))
     if not ids or project is None:
         raise ConflictError(f"造型 {asset.name} 尚未关联角色，请先关联角色并采用角色图片")
@@ -42,3 +48,23 @@ async def costume_identity(session, project_id, asset_id, model, prompt, referen
     validate_image_inputs(model, {}, refs)
     return ("角色身份约束：保持参考角色的物种、脸部、体型和标志特征；动物角色不得变成人类。"
             "只按后文修改服装、妆容和状态。\n" + "\n".join(identity) + "\n\n造型要求：\n" + prompt), refs
+
+
+async def scene_identity(session, project_id, asset, model, prompt, references):
+    """Anchor subsequent views of one scene to its project-adopted layout."""
+    if asset is None or asset.asset_type != "scene" or not project_id:
+        return prompt, references
+    project = await session.get(Project, project_id)
+    if project is None:
+        return prompt, references
+    try:
+        binding = await resolve_asset_binding(session, project, asset_id=asset.id, expected_kind="image")
+    except ConflictError as exc:
+        if any(label in exc.message for label in ("尚未采用素材", "尚未选择可用版本")):
+            return prompt, references
+        raise
+    if "reference_images" not in (model.capabilities or []):
+        raise ConflictError("该场景已有基准图，生成其他视图需要支持参考图片的模型")
+    refs = list(dict.fromkeys([binding["media_file_id"], *references]))
+    return ("场景空间基准：参考图1是当前场景已采用的空间设计，保持建筑结构、入口、"
+            "关键物件位置及材质一致；只改变要求的机位或光照，不另造地点。\n\n" + prompt), refs

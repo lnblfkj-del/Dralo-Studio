@@ -8,6 +8,7 @@ from app.api.deps import CurrentUser, EpisodeDep, SessionDep
 from app.api.segment_model_switch_routes import router as model_switch_router
 from app.api.segment_selected_video_routes import router as selected_video_router
 from app.api.segment_video_recovery_routes import router as video_recovery_router
+from app.api.video_quality_review_routes import router as quality_review_router
 from app.schemas.job import JobOut
 from app.schemas.project import (
     EpisodeEngineeringPackagePreflightOut,
@@ -49,6 +50,7 @@ router = APIRouter(tags=["projects"])
 router.include_router(selected_video_router)
 router.include_router(video_recovery_router)
 router.include_router(model_switch_router)
+router.include_router(quality_review_router)
 
 
 @router.post(
@@ -128,7 +130,10 @@ async def plan_segment_first_frames(
     session: SessionDep,
     user: CurrentUser,
 ) -> SegmentFirstFramePlanOut:
-    planned = await segment_first_frame_service.plan_batch(
+    from app.services import segment_shot_frame_service
+    service = segment_shot_frame_service if payload.frame_scope == "shots" else segment_first_frame_service
+    options = {"shot_indices": payload.shot_indices, "missing_only": payload.missing_only} if payload.frame_scope == "shots" else {}
+    planned = await service.plan_batch(
         session,
         user.id,
         project_id=episode.project_id,
@@ -137,6 +142,7 @@ async def plan_segment_first_frames(
         provider_model_id=payload.provider_model_id,
         parameters=payload.parameters,
         negative_prompt=payload.negative_prompt,
+        **options,
     )
     return SegmentFirstFramePlanOut.model_validate(planned)
 
@@ -226,7 +232,10 @@ async def start_segment_first_frames(
     session: SessionDep,
     user: CurrentUser,
 ) -> JobOut:
-    job = await segment_first_frame_service.create_batch(
+    from app.services import segment_shot_frame_service
+    service = segment_shot_frame_service if payload.frame_scope == "shots" else segment_first_frame_service
+    options = {"shot_indices": payload.shot_indices, "missing_only": payload.missing_only, "source_fingerprint": payload.source_fingerprint} if payload.frame_scope == "shots" else {}
+    job = await service.create_batch(
         session,
         user.id,
         project_id=episode.project_id,
@@ -239,6 +248,7 @@ async def start_segment_first_frames(
         max_cost_cents=payload.max_cost_cents,
         expected_plan_id=payload.expected_plan_id,
         expected_plan_revision=payload.expected_plan_revision,
+        **options,
     )
     await session.commit()
     return JobOut.model_validate(job)

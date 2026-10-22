@@ -15,6 +15,11 @@ export interface ModelChangeCheck {
   resolutions: string[];
   valid_resolutions: string[];
   compatible_resolutions: string[];
+  resolution_checks?: Array<{
+    resolution: string;
+    changes: ModelChangeCheck["changes"];
+    blocked: ModelChangeCheck["blocked"];
+  }>;
   fingerprint: string;
   changes: Array<{ segment_id: number; order: number; before: number; after: number[] }>;
   blocked: Array<{ segment_id: number; order: number; reason: string }>;

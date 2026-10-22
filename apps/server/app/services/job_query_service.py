@@ -78,11 +78,11 @@ def _job_list_filters(
         filters.append(Job.status.in_(ACTIVE_LEASE_STATUSES))
     elif status == "attention":
         filters.append(or_(
-            Job.status.in_({*ACTIVE_LEASE_STATUSES, JOB_STATUS_QUEUED, JOB_STATUS_RETRYING}),
+            Job.status.in_({*ACTIVE_LEASE_STATUSES, JOB_STATUS_QUEUED, JOB_STATUS_RETRYING, "waiting"}),
             and_(Job.status == JOB_STATUS_FAILED, unresolved_failure),
         ))
     elif status == "queued":
-        filters.append(Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING}))
+        filters.append(Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING, "waiting"}))
     elif status and status != "all":
         filters.append(Job.status == status)
     type_groups = {
@@ -151,7 +151,7 @@ async def list_jobs(
     row = (await session.execute(select(
         func.count(Job.id),
         func.sum(case((Job.status.in_(ACTIVE_LEASE_STATUSES), 1), else_=0)),
-        func.sum(case((Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING}), 1), else_=0)),
+        func.sum(case((Job.status.in_({JOB_STATUS_QUEUED, JOB_STATUS_RETRYING, "waiting"}), 1), else_=0)),
         func.sum(case((Job.status == JOB_STATUS_SUCCEEDED, 1), else_=0)),
         func.sum(case((and_(Job.status == JOB_STATUS_FAILED, unresolved_failure), 1), else_=0)),
         func.sum(case((Job.status == JOB_STATUS_CANCELLED, 1), else_=0)),
@@ -221,6 +221,8 @@ async def job_diagnostic(session: AsyncSession, job: Job) -> dict[str, Any]:
         queue_reason = "remote_processing"
     elif job.status == JOB_STATUS_RETRYING:
         queue_reason = "retry_backoff"
+    elif job.status == "waiting":
+        queue_reason = "asset_dependency_waiting"
     elif job.status == JOB_STATUS_QUEUED:
         compatible = [
             item

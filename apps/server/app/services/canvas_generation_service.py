@@ -399,7 +399,7 @@ async def submit_media(session, project, *, node_key, task_type, provider_model_
     if task_type == "image":
         job = await job_service.create_image_job(session, project.owner_id, project_id=project.id,
             asset_id=node.id, provider_model_id=model.id, prompt=prompt, negative_prompt=None,
-            reference_media_ids=reference_ids, parameters=params)
+            reference_media_ids=reference_ids, parameters=params, bypass_asset_identity=True)
     elif task_type == "audio":
         from app.providers.speech import speech_parameters
         from app.services.canvas_processing_service import executables

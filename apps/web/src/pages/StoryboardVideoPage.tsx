@@ -5,6 +5,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { cancelJob, getJob, retryJob, subscribeToJob } from "@/api/jobs";
+import { listContentRuns } from "@/api/contentPlanning";
 import { getMediaBlobUrl, uploadMedia } from "@/api/media";
 import { deleteSelectedSegments } from "@/api/projectProduction";
 import { applyModelChange, checkModelChange, type ModelChangeApply } from "@/api/modelChange";
@@ -41,6 +42,14 @@ export function useStoryboardVideoModel() {
     exportHistory, engineeringPackages, premiereXmlPackages, jianyingDraftPackages, jianyingDraftPreflight, scenes,
     aiSettings, videoModels, imageModels, plannerModels, activeJob,
   } = useStoryboardVideoWorkspace();
+  const contentPlanningRuns = useQuery({
+    queryKey: ["content-plan-runs", projectId, episodeId],
+    queryFn: () => listContentRuns({ projectId, episodeId }),
+    enabled: validProject && validEpisode,
+    retry: false,
+    refetchOnMount: "always",
+    refetchInterval: 3000,
+  });
   // An active plan owns the execution model; settings are only the no-plan default.
   const videoModelId = segmentPlan.data?.provider_model_id
     ?? (videoModelManuallyChanged ? localVideoModelId : production.data?.settings.video_model_id ?? localVideoModelId);
@@ -49,7 +58,7 @@ export function useStoryboardVideoModel() {
   }, [videoModelId, localVideoModelId, setVideoModelId]);
   const [firstFramePlan, setFirstFramePlan] = useState<SegmentFirstFramePlan | null>(null);
   const modelChangeCapabilities = useQuery({
-    queryKey: ["model-change-capabilities", projectId, episodeId, videoModelId, segmentPlan.data?.id, production.data?.revision,
+    queryKey: ["model-change-capabilities", projectId, episodeId, videoModelId, segmentPlan.data?.id, segmentPlan.data?.revision, production.data?.revision,
       videoModels.find(item => item.id === videoModelId)?.default_params?.episode_planning_capability],
     queryFn: () => checkModelChange(projectId, episodeId, { provider_model_id: videoModelId! }),
     enabled: Boolean(segmentPlan.data && videoModelId && production.data && episode?.finalized_script_revision === episode?.script_revision),
@@ -300,11 +309,12 @@ export function useStoryboardVideoModel() {
     },
   });
   const generateFirstFrames = useMutation({
-    mutationFn: (segmentIds: number[]) => {
-      if (contentUnsavedChanges || sourceStale) throw new Error("请先保存当前片段脚本，再生成首帧");
+    mutationFn: ({ segmentIds, shotIndices }: { segmentIds: number[]; shotIndices?: number[] }) => {
+      if (hasUnsavedChanges || contentUnsavedChanges || sourceStale) throw new Error("请先保存当前修改，再生成镜头画面");
       const imageModelId = aiSettings.data?.default_image_model_id ?? imageModels[0]?.id;
       if (!imageModelId) throw new Error("请先在模型管理中启用图片模型");
       return planSegmentFirstFrames(projectId, episodeId, {
+        frame_scope: "shots", shot_indices: shotIndices, missing_only: !shotIndices?.length,
         segment_ids: segmentIds,
         provider_model_id: imageModelId,
         parameters: {},
@@ -315,9 +325,12 @@ export function useStoryboardVideoModel() {
   const startFirstFrames = useMutation({
     mutationFn: () => {
       if (!firstFramePlan) throw new Error("请先预检首帧生成");
+      if (hasUnsavedChanges || contentUnsavedChanges || sourceStale || firstFramePlan.plan_id !== segmentPlan.data?.id || firstFramePlan.plan_revision !== segmentPlan.data?.revision) throw new Error("脚本已变化，请保存后重新预检首帧生成");
       const maxCostCents = firstFramePlan.pricing_estimate.estimated_cents;
       if (typeof maxCostCents !== "number") throw new Error("费用未知，不能提交真实图片任务");
       return startSegmentFirstFrames(projectId, episodeId, {
+        frame_scope: "shots", shot_indices: firstFramePlan.shot_indices, missing_only: firstFramePlan.missing_only,
+        source_fingerprint: firstFramePlan.source_fingerprint,
         segment_ids: firstFramePlan.segment_ids,
         provider_model_id: firstFramePlan.provider_model_id,
         parameters: firstFramePlan.parameters,
@@ -540,7 +553,7 @@ export function useStoryboardVideoModel() {
     episode, production, segmentPlan, dialogueCuePreview, episodeAssetReadiness, assets,
     audioMedia, exportHistory, engineeringPackages, premiereXmlPackages, jianyingDraftPackages, jianyingDraftPreflight, scenes,
     videoModels, imageModels, plannerModels, activeJob, saveScript,
-    saveProductionSettings, saveHeaderModel, changeModel, modelChangeCapabilities, createEngineeringPackage, createPremiereXmlPackage, createJianyingDraftPackage,
+    saveProductionSettings, saveHeaderModel, changeModel, modelChangeCapabilities, contentPlanningRuns, createEngineeringPackage, createPremiereXmlPackage, createJianyingDraftPackage,
     saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, deleteSegmentsMutation, continuityCheck,
     planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan,
     chooseSegmentVersion, preflightExport, exportEpisode, cancelActiveJob, retryActiveJob, uploadAudio, downloadMedia,

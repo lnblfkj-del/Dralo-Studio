@@ -24,6 +24,7 @@ export const RUNTIME_STAGE_LABELS: Record<string, string> = {
 
 export const STATUS_LABELS: Record<JobStatus, string> = {
   queued: "排队中",
+  waiting: "等待前置资产",
   running: "已领取",
   processing: "生成中",
   downloading: "下载中",
@@ -33,7 +34,7 @@ export const STATUS_LABELS: Record<JobStatus, string> = {
   cancelled: "已取消",
 };
 
-export const ACTIVE = new Set<JobStatus>(["queued", "running", "processing", "downloading", "retrying"]);
+export const ACTIVE = new Set<JobStatus>(["queued", "waiting", "running", "processing", "downloading", "retrying"]);
 const TEXT_TYPES = new Set(["text", "script", "storyboard"]);
 const AUDIO_TYPES = new Set(["audio", "tts"]);
 
@@ -76,6 +77,7 @@ export const ROUTE_LABELS: Record<string, string> = {
 };
 
 export const QUEUE_REASON_LABELS: Record<string, string> = {
+  asset_dependency_waiting: "等待前置资产图片完成后自动继续，不占用模型生成并发。",
   remote_processing: "远端正在生成，本地 Worker 已释放，将按计划继续查询。",
   retry_backoff: "正在等待安全重试时间。",
   no_compatible_worker: "没有兼容的 Worker 可以处理该任务。",

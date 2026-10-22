@@ -196,6 +196,7 @@ async def build_segment_video_plan(
         provider_model_id=provider_model_id,
         parameters=parameters,
         regenerate=True,
+        selected_segment_ids=[segment_id],
     )
     target_blocked = [
         item for item in episode_plan["blocked"] if item.get("segment_id") == segment_id

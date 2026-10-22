@@ -12,7 +12,8 @@ from app.services.script_source_snapshot import script_snapshot_is_current
 
 
 def can_keep_in_script(pending):
-    return pending.get("kind") in {"prop", "music", "ambience", "sound_effect"} and not pending.get("declared_necessity")
+    return ((pending.get("kind") == "character" and pending.get("character_form") in {"crowd", "fixed_group"})
+            or (pending.get("kind") in {"prop", "music", "ambience", "sound_effect"} and not pending.get("declared_necessity")))
 
 
 async def resolve_item(session, item, payload, actor_id):
@@ -54,6 +55,11 @@ async def resolve_item(session, item, payload, actor_id):
                "resolved_at": datetime.now(UTC).isoformat(), "asset_name": asset.name if asset else None,
                "original_item": pending, "episode_numbers": scope["episode_numbers"]}
     receipts[identity] = receipt
+    if payload.disposition == "script_only":
+        breakdown.setdefault("script_only_items", {})[identity] = {
+            "name": pending.get("name"), "kind": pending.get("kind"),
+            "reason": "user_background", "episode_numbers": scope["episode_numbers"],
+        }
     scope["items"] = [row for row in scope["items"] if row["index"] != payload.index]
     if not scope["items"]:
         breakdown["review_items_by_scope"].pop(payload.scope_key)

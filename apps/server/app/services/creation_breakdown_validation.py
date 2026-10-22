@@ -99,6 +99,9 @@ def dialogue_coverage_issues(candidates: list[dict[str, Any]], context: dict[str
         name = record["character_name"]
         number = record["episode_number"]
         matches = _dialogue_candidates(candidates, name)
+        if any(not row.get("selected", True) and any(review.get("background_only") for review in
+               (row.get("attributes") or {}).get("manual_production_reviews", [])) for row in matches):
+            continue
         matched = next((row for row in matches
                         if len(matches) == 1 and row.get("selected", True)
                         and number in (row.get("episode_numbers") or [])), None)

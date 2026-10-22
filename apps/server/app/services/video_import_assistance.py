@@ -29,6 +29,8 @@ request 必须映射 $model 和 $prompt。允许的专用变量见下方列表�
 成功、失败、处理中状态须来自真实响应，类型一致、互不重复。result_url_path 与 download_path 二选一；上传必须同时提供 upload_path 和 upload_url_path。具体上传和鉴权若不能由本结构表达，不能假装补几个字段就可用。
 
 specification.modes 是唯一规格来源。每项明确一种 input_mode、aspect_ratio 和 resolution 的有效组合；不对独立选项做未经确认的全排列。常见 input_mode 为 text、single_image、multi_reference、first_frame、first_last_frame；不能混淆单图参考与必需首帧。
+生成方式与素材必须一致：text 为纯文字，reference_limits 为空且 max_total_references 为 0；single_image 必需 1 张 image；first_frame 必需 1 张 first_frame；first_last_frame 必需 first_frame 和 last_frame 各 1 张；这些固定角色的 minimum 和 maximum 都是 1。multi_reference 的 image.minimum 至少为 1，maximum 按资料填写，不把首尾帧登记为普通参考图。额外参考音频、视频或首帧方式附带的参考图仅在渠道明确支持时登记，并保留混合素材总数上限。
+aspect_ratio 每项只能是一个比例，例如 16:9，不得写成 16:9,9:16。多个画幅或清晰度需逐项列出已确认的组合。相同规格会在界面集中编辑，但不改变实际组合；修改现有配置时保留未变组合的 key，不重新编号。模型规格用于约束后续片段规划和视频预检，不是剧本正文，导入不得要求重写已有片段或删除视频。
 时长 values_ms、minimum_ms、maximum_ms、step_ms 单位是整数毫秒，而 generation_defaults.duration 单位是秒。discrete 必须明确递增无重复档位，并清空范围字段；range 必须最短/最长/步长齐全、整除且不同时填写档位。每种范围最多128档。
 素材角色、最少/最多、独立混合总数、原生声音、人物对白、配乐及镜头限制均须有依据；未知值不能猜成 false、0、1 或示例值。无充分依据无法完成必填字段时继续追问，不编造“可用配置”。人物对白要求原生声音；支持声音不代表能关闭声音。配乐仅提示词要求时用 prompt_preference，不能承诺结果。
 generation_defaults 只包含当前支持组合中的默认值；附加请求参数放 transport_params，脚本偏好放 planning_policy；不写 route、declaration、evidence、pending_settings、verification、endpoint_fingerprint 等服务端状态或成功证据。
@@ -36,6 +38,7 @@ generation_defaults 只包含当前支持组合中的默认值；附加请求参
 
 不发送试生成请求，不自动重试收费提交，不宣称任何组合已实测通过。资料中的任务号仅供理解响应，不能写成生产默认值。示例的路径、状态、5秒、720p、画幅、镜头上限与声音值全部是演示，不代表用户模型支持。
 资料齐全后交付可导入 JSON，并在文件外简短列出已确认资料来源、模型标识和仍需人工核验项；导入后先预览、保存及检查配置，真实生成需要用户另行确认参数和费用。
+收到系统校验错误后，逐项修复指定字段并交付完整 JSON，保留其他规格、映射与 key；不得通过删除独立规格、放宽素材上限、伪造验证状态来消除错误。
 """
     prompt += "\n允许的专用变量：" + "、".join(f"${token}" for token in sorted(TOKENS))
     prompt += "\n\n当前导入 JSON Schema（包括接口映射和精确规格）：\n"

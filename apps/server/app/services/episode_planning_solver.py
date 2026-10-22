@@ -25,6 +25,7 @@ class Candidate:
     duration_ms: int
     block_durations_ms: tuple[int, ...]
     references: tuple[MediaReference, ...]
+    reference_overflow: bool = False
 
 
 @dataclass(frozen=True)
@@ -94,6 +95,9 @@ def _candidates(
     blocks: tuple[ContentBlock, ...],
     mode: VideoMode,
     deadline: float,
+    reference_budget=None,
+    allow_estimate_adjustment=False,
+    allow_reference_overflow=False,
 ) -> tuple[Candidate, ...]:
     candidates = []
     for start in range(len(blocks)):
@@ -109,6 +113,14 @@ def _candidates(
                 continue
             durations = [b.duration("estimated_ms") for b in selected]
             duration = legal_duration(mode.durations, sum(durations))
+            if duration is None and allow_estimate_adjustment and len(selected) == 1:
+                # A prediction is not measured audio. Fit only a single block,
+                # within its stated minimum; never accelerate a group to pack it.
+                rule = mode.durations
+                maximum = rule.values_ms[-1] if rule.kind == "discrete" else rule.maximum_ms
+                if selected[0].duration("minimum_ms") <= maximum:
+                    duration = maximum
+                    durations[0] = maximum
             if duration is None:
                 break
             spare = duration - sum(durations)
@@ -117,13 +129,16 @@ def _candidates(
             refs = _references(selected, mode)
             if refs is None:
                 continue
+            reference_overflow = reference_budget is not None and not reference_budget(selected, mode, duration)
+            if reference_overflow and not allow_reference_overflow:
+                continue
             # Expand only within documented natural performance uncertainty.
             # Never invent a safe trim region in generated media.
             for index in reversed(range(len(selected))):
                 extra = min(spare, selected[index].duration("maximum_ms") - durations[index])
                 durations[index] += extra
                 spare -= extra
-            candidates.append(Candidate(start, end, duration, tuple(durations), refs))
+            candidates.append(Candidate(start, end, duration, tuple(durations), refs, reference_overflow))
     return tuple(candidates)
 
 
@@ -132,13 +147,17 @@ def solve_partition(
     mode: VideoMode,
     *,
     timeout_seconds: float = 2.0,
+    reference_budget=None,
+    allow_estimate_adjustment: bool = False,
+    allow_reference_overflow: bool = False,
 ) -> Partition:
     if not blocks or len(blocks) > 500:
         raise ValueError("Expected 1 to 500 content blocks")
     if not 0 < timeout_seconds <= 10:
         raise ValueError("Solver timeout must be in (0, 10] seconds")
     started = monotonic()
-    candidates = _candidates(blocks, mode, started + timeout_seconds)
+    candidates = _candidates(blocks, mode, started + timeout_seconds, reference_budget,
+                             allow_estimate_adjustment, allow_reference_overflow)
     model = cp_model.CpModel()
     chosen = [model.new_bool_var(f"edge-{i}") for i in range(len(candidates))]
     # A unit flow on this forward-only graph covers every block once in order.
@@ -154,8 +173,13 @@ def solve_partition(
         )
     # Lexicographic dominance is bounded, not a tunable arbitrary weight.
     max_timeline = sum(block.duration("maximum_ms") for block in blocks)
+    # Keep unavoidable overloaded shots isolated. Their existence must not
+    # remove the image budget from the rest of the episode.
+    overflow_weight = (len(blocks) + 1) * (max_timeline + 1)
     model.minimize(
-        sum(chosen[i] * (max_timeline + 1 + c.duration_ms) for i, c in enumerate(candidates))
+        sum(chosen[i] * (max_timeline + 1 + c.duration_ms
+                        + overflow_weight * (c.end - c.start) * int(c.reference_overflow))
+            for i, c in enumerate(candidates))
     )
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 1
@@ -173,7 +197,9 @@ def solve_partition(
         )
     selected = tuple(c for i, c in enumerate(candidates) if solver.boolean_value(chosen[i]))
     return Partition(
-        selected, solver.status_name(status), int((monotonic() - started) * 1000), len(candidates)
+        selected, solver.status_name(status), int((monotonic() - started) * 1000), len(candidates),
+        objective=("minimum_overflow_shots_then_requests_then_performance_slack"
+                   if allow_reference_overflow else "minimum_requests_then_performance_slack"),
     )
 
 

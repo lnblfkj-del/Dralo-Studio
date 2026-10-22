@@ -11,6 +11,7 @@ from app.schemas.asset import (
     AssetCreate,
     AssetGenerateRequest,
     AssetImageBatchRequest,
+    AssetImageBatchPreviewRequest,
     AssetLinkCreate,
     AssetOut,
     AssetPromptProposalRequest,
@@ -25,10 +26,11 @@ from app.schemas.asset import (
     PromptExpandOut,
     PromptExpandRequest,
 )
-from app.schemas.job import JobOut
 from app.schemas.asset_bgm import ApplyAssetBgm
-from app.schemas.voice_design import VoiceDesignAdopt, VoiceDesignRequest
+from app.schemas.asset_consistency import ConsistencyPatch, ConsistencyReset
+from app.schemas.job import JobOut
 from app.schemas.production_contract import AssetProductionOut, AssetProductionPatch
+from app.schemas.voice_design import VoiceDesignAdopt, VoiceDesignRequest
 from app.services import (
     asset_batch_service,
     asset_production_service,
@@ -41,6 +43,28 @@ from app.services import (
 
 router = APIRouter(prefix="/projects/{project_id}/assets", tags=["assets"])
 library_router = APIRouter(prefix="/assets", tags=["asset-library"])
+
+
+@router.get("/consistency")
+async def asset_consistency_graph(project: ProjectDep, session: SessionDep):
+    from app.services.asset_consistency_service import graph
+    return await graph(session, project.id)
+
+
+@router.patch("/{asset_id}/consistency")
+async def patch_asset_consistency(asset_id: int, payload: ConsistencyPatch, project: ProjectDep, session: SessionDep):
+    from app.services.asset_consistency_service import patch_relation
+    result = await patch_relation(session, project.id, asset_id, payload)
+    await session.commit()
+    return result
+
+
+@router.post("/consistency/reset-generated")
+async def reset_asset_designs(payload: ConsistencyReset, project: ProjectDep, session: SessionDep):
+    from app.services.asset_consistency_reset import reset_generated
+    result = await reset_generated(session, project.id, payload.asset_ids)
+    await session.commit()
+    return result
 
 
 # R1 additive endpoints. The original list response remains a list for existing clients.
@@ -339,6 +363,14 @@ async def latest_asset_prompt_proposal(project: ProjectDep, session: SessionDep)
     return JobOut.model_validate(job) if job else None
 
 
+@router.post("/image-batch/preview")
+async def preview_asset_image_batch(
+    payload: AssetImageBatchPreviewRequest, project: ProjectDep, session: SessionDep,
+):
+    from app.services.asset_batch_planning import preview
+    return await preview(session, project, **payload.model_dump())
+
+
 @router.post(
     "/image-batch",
     response_model=JobOut,
@@ -358,6 +390,10 @@ async def create_asset_image_batch(
         generation_mode=payload.generation_mode,
         parameters=payload.parameters,
         request_id=payload.request_id,
+        scope=payload.scope,
+        preview_token=payload.preview_token,
+        prepare_prompts=payload.prepare_prompts,
+        text_model_id=payload.text_model_id,
     )
     await session.commit()
     return JobOut.model_validate(job)

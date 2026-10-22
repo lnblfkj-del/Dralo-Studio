@@ -98,6 +98,22 @@ def analysis_prompt(sources: PlanningSources) -> str:
         "不把连续背景声音或配乐长度重复加到每个动作上。"
         "boundary_after 只在完整行动或语句结束且可自然衔接时为 true，并说明 boundary_basis。"
         "不要虚构参考媒体 ID；references 为 []，实际媒体由系统绑定。"
+        "必须输出 continuity，先通读整场戏，统一人物、场景、道具身份与动作因果，再安排镜头。"
+        "continuity.version 为 narrative-continuity.v1；identities 使用 identity_catalog 中的"
+        "key/name/kind/asset_id，别名不得拆成另一人物。没有独立资产的正文实体可用 source- 开头的稳定 key，asset_id 为 null。"
+        "beats 按 blocks 顺序逐一覆盖，block_key 一一对应，staging 冻结本镜头完整动作演绎与空间衔接，"
+        "明确动作主体、对象与动作先后，不得新增剧情；后续片段细化只调整摄影，不再重写动作。"
+        "changes 记录本镜头正文明确支持的状态：location/posture/injury/costume/condition/holder/presence/lighting。"
+        "identities 中角色与造型关联 character_asset_ids 必须保留目录值；正文已有 speaker_asset_ids 的角色必须包含。"
+        "injury/costume 属于人物，holder 属于道具，lighting 属于场景。"
+        "第一次确定某字段 before 为 null；以后 before 必须等于该实体该字段上次 after。"
+        "未变化的字段自动继承，不要重复初始化；未明确的状态保持未知，不猜测。"
+        "每项变化 source_key 必须属于本 block，evidence 必须逐字摘录对应正文。"
+        "伤势和服装分开记录：身体恢复不代表破衣修复；倒地后不能无依据站起；道具转移必须有交接依据。"
+        "镜头先后必须保持动作因果，换场也不能重置人物身份、伤势或道具归属。"
+        "如果正文有实质因果矛盾、关键动作缺口，无法在不新增剧情的前提下确定衔接，"
+        "放入 continuity.unresolved（source_key、逐字 evidence、具体 problem），不得编造修复。"
+        "普通未交代的细节保持未知即可，不作为 unresolved；没有实质矛盾则 unresolved 为 []。"
         f"source_fingerprint 固定为 {fingerprint(sources)}。\n"
         f"必须各计时一次的来源：{json.dumps(timed, ensure_ascii=False)}\n"
         f"禁止添加 event 但必须保留在 source_keys 的来源：{json.dumps(untimed, ensure_ascii=False)}\n"
@@ -136,6 +152,8 @@ def constrain_speech_minima(sources: PlanningSources, analysis: ContentAnalysis)
 
 
 def validate_analysis(sources: PlanningSources, analysis: ContentAnalysis) -> None:
+    from app.services.narrative_continuity import validate_continuity
+    validate_continuity(sources, analysis)
     if analysis.source_fingerprint != fingerprint(sources):
         raise ValueError("Content analysis belongs to a different script snapshot")
     by_key = {unit.key: unit for unit in sources.units}

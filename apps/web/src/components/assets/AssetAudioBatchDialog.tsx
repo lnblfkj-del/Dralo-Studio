@@ -21,7 +21,7 @@ import '@/styles/asset-audio-batch.css';
 interface Draft {item:CatalogItem;modelId:number;voice:string;text:string;description:string;song:boolean;lyrics:string;duration:string}
 interface Entry {id:number;name:string;request:AssetAudioRequest;jobId?:number;rejected?:boolean}
 const ACTIVE=new Set(['queued','claimed','running','processing','downloading','retrying']);
-const STATUS:Record<string,string>={queued:'排队中',running:'生成中',processing:'处理中',downloading:'保存中',retrying:'恢复中',succeeded:'已生成候选',failed:'生成失败',cancelled:'已取消'};
+const STATUS:Record<string,string>={queued:'排队中',running:'生成中',processing:'处理中',downloading:'保存中',retrying:'恢复中',succeeded:'已生成',failed:'生成失败',cancelled:'已取消'};
 function restore(key:string):Entry[]|null {
   try {const value=JSON.parse(sessionStorage.getItem(key)||'null');return Array.isArray(value)&&value.length&&value.every(row=>Number.isSafeInteger(row.id)&&typeof row.name==='string'&&typeof row.request?.request_id==='string'&&typeof row.request?.prompt==='string'&&Number.isSafeInteger(row.request?.provider_model_id)&&Number.isSafeInteger(row.request?.expected_revision)&&row.request?.parameters&&typeof row.request.parameters==='object')?value:null;}catch{return null;}
 }
@@ -46,6 +46,7 @@ export function AssetAudioBatchDialog({projectId,scopeKey,resolveItems,providers
   const models=providers.filter(provider=>provider.enabled).flatMap(provider=>provider.models.filter(model=>model.enabled&&(audioAccountReady(model)||referenceReady(model,model.api_protocol||provider.protocol))).map(model=>({...model,providerName:provider.name})));
   const loading=useQuery({queryKey:['asset-audio-batch-scope',key],retry:false,refetchOnWindowFocus:false,refetchOnReconnect:false,queryFn:async()=>{
     const items=await resolveItems();
+    if (!items.length) throw new Error('所选资产中没有声音，请选择声音资产后再生成。');
     setDrafts(items.map(item=>{
       const binding=item.profile.speech_preset;
       const candidates=models.filter(model=>supportsAudioUsage(model,protocol(model,providers),item.profile.audio_usage));
@@ -133,9 +134,10 @@ export function AssetAudioBatchDialog({projectId,scopeKey,resolveItems,providers
   </>}>
     <div className="asset-audio-batch">
       {loading.isPending&&<p role="status">正在读取所选声音资产</p>}
+      {!loading.isPending && drafts.length > 0 && !entries && <p>本次生成 {drafts.length} 项声音</p>}
       {(error||loading.error||jobs.error)&&<p role="alert">{error||toErrorMessage(loading.error??jobs.error)}</p>}
       {!models.length&&<p role="alert">没有可用的配音或音乐模型。<Link to="/settings/providers">查看模型渠道</Link></p>}
-      {entries?<><p>已提交 {entries.filter(row=>row.jobId).length} / {entries.length} 项；生成结果保留为候选。</p>{entries.map(row=>{
+      {entries?<><p>已提交 {entries.filter(row=>row.jobId).length} / {entries.length} 项；成功后默认采用最新音频版本，可手动切换。</p>{entries.map(row=>{
         const job=jobs.data?.find(job=>job.id===row.jobId);return <div key={row.id} className="asset-audio-batch-result"><strong>{row.name}</strong><span>{row.jobId?`#${row.jobId} · ${job?STATUS[job.status]??job.status:'已提交'}`:'待核对 / 尚未提交'}</span>{job?.error_message&&<p role="alert">{job.error_message}</p>}</div>;
       })}</>:<fieldset disabled={busy}>
         {drafts.map(row=>{

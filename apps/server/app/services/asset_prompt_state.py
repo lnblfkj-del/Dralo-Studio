@@ -36,12 +36,15 @@ def asset_snapshot(asset, link):
     }
 
 
-def prompt_state(asset, link, job):
+def prompt_state(asset, link, job, consistency_context=None):
     marker = (link.production_data or {}).get("prompt_optimization") or {}
     state = {"status": "pending", "job_id": None, "reason": None}
     if job is None or marker.get("job_id") != job.id:
         return state
     state["job_id"] = job.id
+    if (job.status not in ACTIVE and consistency_context is not None
+            and marker.get("consistency_fingerprint") != consistency_context["fingerprint"]):
+        return {**state, "reason": "关联资产的共同设计已变化，请更新提示词"}
     if job.status in ACTIVE:
         state["status"] = "queued" if job.status == "queued" else "generating"
     elif marker.get("applied_hash") == input_hash(asset_snapshot(asset, link)):

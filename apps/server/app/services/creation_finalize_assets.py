@@ -442,6 +442,10 @@ async def finalize_asset_breakdown(
         result_slot = scope_key or str(batch_index)
         partial_batches = dict(progress.get("partial_batches") or {})
         rejected_items = (job.payload.get("asset_extraction_diagnostics") or {}).get("rejected_items") or []
+        script_only = dict(progress.get("script_only_items") or {})
+        for entry in (job.payload.get("asset_extraction_diagnostics") or {}).get("source_only_items", []):
+            script_only[f"{job.id}:{entry['index']}"] = {**entry, "episode_numbers": sorted(expected_numbers)}
+        progress["script_only_items"] = script_only
         from app.services.asset_extraction_partial import defers_item_review
         deferred = defers_item_review(parameters, job.payload.get("asset_extraction_diagnostics") or {})
         review_scopes = dict(progress.get("review_items_by_scope") or {})

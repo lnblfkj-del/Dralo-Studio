@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -63,7 +64,6 @@ def _opening_frame_description(segment: VideoSegment) -> str:
         return "\n".join(part for part in parts if part) or segment.prompt
     opening: list[str] = []
     in_first_shot = False
-    shot_lines = 0
     for paragraph in document.get("content") or []:
         if not isinstance(paragraph, dict):
             continue
@@ -73,8 +73,9 @@ def _opening_frame_description(segment: VideoSegment) -> str:
             if in_first_shot:
                 break
             in_first_shot = True
-        if in_first_shot and shot_lines >= 2:
-            break
+        if any(isinstance(node, dict) and node.get("type") == "scriptTool"
+               and (node.get("attrs") or {}).get("kind") == "dialogue" for node in nodes):
+            continue
         parts = []
         for node in nodes:
             if not isinstance(node, dict):
@@ -88,16 +89,17 @@ def _opening_frame_description(segment: VideoSegment) -> str:
             elif kind == "scriptTool" and attrs.get("kind") == "shot":
                 parts.append(f"首镜头，{attrs.get('duration', '')}秒")
         line = "".join(parts).strip()
-        if in_first_shot and line.startswith(("环境声", "音效", "配乐")):
-            break
+        if line.startswith(("环境声", "音效", "配乐", "片尾", "结束状态", "原文尚未确定状态")):
+            continue
+        if in_first_shot and re.search(r"\[asset-\d+\]\s*(位置|姿态|服装|持有者|在场状态)[：:]", line):
+            continue
         if not line:
             continue
-        if in_first_shot and shot_lines == 1:
+        if in_first_shot:
             line = line.split("；", 1)[0].split("，镜头", 1)[0]
         opening.append(line)
-        if in_first_shot:
-            shot_lines += 1
-    return "\n".join(opening) if in_first_shot and opening else segment.prompt
+    from app.services.segment_prompt_presentation import readable_prompt
+    return readable_prompt("\n".join(opening) if in_first_shot and opening else segment.prompt)
 
 
 def _frame_prompt(segment: VideoSegment) -> str:
@@ -142,8 +144,8 @@ async def _frame_asset(
     )
 
 
-def _reference_media(segment: VideoSegment) -> list[int]:
-    refs = segment.refs or {}
+def _reference_media(segment: VideoSegment, resolved_refs=None) -> list[int]:
+    refs = resolved_refs if resolved_refs is not None else segment.refs or {}
     bindings = refs.get("asset_bindings") or []
     frame_media = {
         item.get("media_file_id")
@@ -173,7 +175,7 @@ async def _prepare_batch(
     segment_ids: list[int],
     provider_model_id: int,
     parameters: dict[str, Any],
-) -> tuple[Project, Episode, EpisodeProductionPlan, ProviderModel, Provider, list[VideoSegment], dict[int, list[int]], dict[str, Any]]:
+) -> tuple[Project, Episode, EpisodeProductionPlan, ProviderModel, Provider, list[VideoSegment], dict[int, list[int]], dict[int, str], dict[str, Any]]:
     project = await session.get(Project, project_id)
     episode = await session.get(Episode, episode_id)
     if project is None or episode is None or episode.project_id != project_id:
@@ -212,25 +214,28 @@ async def _prepare_batch(
     validate_model_protocol(provider, image_model)
     if not provider.enabled or not image_model.enabled or image_model.model_type != "image":
         raise ConflictError("首帧必须使用已启用的图片模型")
-    references_by_segment = {item.id: _reference_media(item) for item in segments}
+    from app.services.segment_asset_references import catalog, resolve_materials, material_guidance
+    assets = await catalog(session, project.id)
+    references_by_segment = {}
+    prompts_by_segment = {}
+    for item in segments:
+        resolved = await resolve_materials(session, project, item.refs, assets=assets, strict=True, segment=item)
+        references_by_segment[item.id] = _reference_media(item, resolved)
+        guidance = material_guidance({**resolved, "reference_media_ids": references_by_segment[item.id]})
+        prompts_by_segment[item.id] = "\n\n".join(filter(None, (_frame_prompt(item), guidance)))
     if any(references_by_segment.values()) and "reference_images" not in (image_model.capabilities or []):
         raise ConflictError("当前图片模型不支持参考图，无法保持角色与场景一致性")
-    max_references = (image_model.default_params or {}).get("max_reference_images", 4)
-    if type(max_references) is not int or max_references < 1:
-        max_references = 4
-    overflow = next((item for item in segments if len(references_by_segment[item.id]) > max_references), None)
-    if overflow is not None:
-        raise ConflictError(
-            f"片段 {overflow.order:02d} 有 {len(references_by_segment[overflow.id])} 张参考图，"
-            f"超过图片模型上限 {max_references} 张；请调整引用或更换模型"
-        )
     effective = {**(image_model.default_params or {}), **(parameters or {})}
     if not effective.get("resolution"):
         resolutions = effective.get("resolutions")
         if isinstance(resolutions, list) and resolutions and isinstance(resolutions[0], str):
             effective["resolution"] = resolutions[0]
     effective["aspect_ratio"] = (project.creation_settings or {}).get("aspect_ratio") or "16:9"
-    return project, episode, plan, image_model, provider, segments, references_by_segment, effective
+    from app.services.image_model_contract import project_image_references, validate_image_inputs
+    for item in segments:
+        references = await project_image_references(session, project.id, owner_id, references_by_segment[item.id])
+        validate_image_inputs(image_model, effective, references)
+    return project, episode, plan, image_model, provider, segments, references_by_segment, prompts_by_segment, effective
 
 
 async def plan_batch(
@@ -239,10 +244,10 @@ async def plan_batch(
     **kwargs: Any,
 ) -> dict[str, Any]:
     negative_prompt = kwargs.pop("negative_prompt", None)
-    project, episode, plan, model, provider, segments, _references, effective = (
+    project, episode, plan, model, provider, segments, _references, prompts, effective = (
         await _prepare_batch(session, owner_id, **kwargs)
     )
-    quotes = [estimate_pricing(model, _frame_prompt(segment), effective) for segment in segments]
+    quotes = [estimate_pricing(model, prompts[segment.id], effective) for segment in segments]
     pricing = _aggregate_video_pricing(quotes)
     pricing["reason"] = (
         "按各首帧图片提交参数汇总估算，非渠道实际扣费"
@@ -285,7 +290,7 @@ async def create_batch(
         session, owner_id, project_id=project_id, episode_id=episode_id,
         segment_ids=segment_ids, provider_model_id=provider_model_id, parameters=parameters,
     )
-    project, episode, plan, _image_model, _provider, segments, references_by_segment, effective = prepared
+    project, episode, plan, _image_model, _provider, segments, references_by_segment, prompts, effective = prepared
     if plan.id != expected_plan_id or plan.revision != expected_plan_revision:
         raise ConflictError("片段计划已变化，请重新预检首帧生成")
     preview = await plan_batch(
@@ -350,7 +355,7 @@ async def create_batch(
             asset_id=frame_asset.id,
             provider_model_id=provider_model_id,
             prompt=asset_service.asset_image_prompt(
-                "reference", _frame_prompt(segment), "first_frame"
+                "reference", prompts[segment.id], "first_frame"
             ),
             negative_prompt=negative_prompt,
             reference_media_ids=references,
@@ -366,6 +371,7 @@ async def create_batch(
                 "segment_id": segment.id,
                 "lineage_key": segment.lineage_key,
                 "role": "first_frame",
+                "source_fingerprint": _digest({"prompt": segment.prompt, "parameters": segment.parameters, "refs": segment.refs}),
             },
         }
         children.append(child)
@@ -397,6 +403,8 @@ async def bind_completed_frame(
     ):
         return "plan_changed"
     refs = dict(segment.refs or {})
+    if frame.get("source_fingerprint") and frame["source_fingerprint"] != _digest({"prompt": segment.prompt, "parameters": segment.parameters, "refs": segment.refs}):
+        return "candidate_ready"
     bindings = [item for item in refs.get("asset_bindings", []) if isinstance(item, dict)]
     if refs.get("continuity") or any(binding_role(item) == "first_frame" for item in bindings):
         return "candidate_ready"

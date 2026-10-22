@@ -168,6 +168,8 @@ async def _resolve_superseded_failures(session: AsyncSession, succeeded: Job) ->
 async def mark_succeeded(
     session: AsyncSession, job_id: int, worker_id: str, result_data: dict[str, Any]
 ) -> bool:
+    from app.services.asset_batch_scheduler import lock_transition
+    await lock_transition(session, await session.get(Job, job_id))
     result = await session.execute(
         update(Job).execution_options(synchronize_session="fetch")
         .where(execution_authorized())
@@ -197,6 +199,8 @@ async def mark_succeeded(
         return False
     succeeded = await session.get(Job, job_id)
     if succeeded is not None:
+        from app.services.segment_video_auto_adoption import adopt_generated_video
+        await adopt_generated_video(session, succeeded, result_data)
         await _resolve_superseded_failures(session, succeeded)
     from app.services.job_concurrency_service import record_model_success
     await record_model_success(session, job_id)
@@ -215,6 +219,12 @@ async def mark_failed(
     provider_diagnostic: dict[str, Any] | None = None,
 ) -> bool:
     job = await session.scalar(select(Job).where(Job.id == job_id, Job.worker_id == worker_id))
+    from app.services.asset_batch_scheduler import lock_transition
+    await lock_transition(session, job)
+    if job is not None:
+        await session.refresh(job)
+        if job.worker_id != worker_id:
+            return False
     if job is None or job.status not in {
         JOB_STATUS_RUNNING,
         JOB_STATUS_PROCESSING,
@@ -387,6 +397,11 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
     parent = await session.get(Job, child.parent_job_id)
     if parent is None or parent.target_type not in BATCH_PARENT_TARGETS:
         return None
+    if parent.target_type == "asset_image_batch" and (parent.payload or {}).get("asset_image_batch_contract") == "asset-image-batch.v6":
+        from app.services.asset_batch_scheduler import prepare_batch
+        await prepare_batch(session, parent)
+        if parent.status == "cancelled":
+            return parent
     is_v2_extraction = (parent.target_type == "script_asset_breakdown_group"
                         and parent.payload.get("asset_extraction_contract_version") in {2, 3})
     if is_v2_extraction:
@@ -507,6 +522,8 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
         "succeeded": succeeded,
         "failed": failed,
         "cancelled": cancelled,
+        "waiting": sum(item.status == "waiting" for item in children),
+        "blocked": sum((item.payload or {}).get("dependency_state") == "blocked" for item in children),
         "actual_generation_duration": actual_generation_duration,
         "performance": {
             "schema_version": 1,
@@ -519,6 +536,7 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
         "children": [
             {
                 "job_id": item.id,
+                "job_type": item.job_type,
                 "segment_id": item.target_id if item.target_type == "video_segment" else None,
                 "shot_id": item.target_id if item.target_type == "shot" else None,
                 "asset_id": item.target_id if item.target_type == "asset" else None,
@@ -528,6 +546,8 @@ async def aggregate_parent_job(session: AsyncSession, child_job_id: int) -> Job 
                 "segment_order": (item.payload or {}).get("segment_order"),
                 "shot_ids": (item.payload or {}).get("shot_ids", []),
                 "status": item.status,
+                "dependency_state": (item.payload or {}).get("dependency_state"),
+                "prerequisite_asset_ids": (item.payload or {}).get("asset_batch_dependencies", {}).get("asset_ids", []),
                 "progress": item.progress,
                 "error_message": item.error_message,
                 "media_file_id": (item.result or {}).get("media_file_id"),

@@ -235,7 +235,7 @@ export async function resolveAssetEvidence(projectId: number, candidateId: numbe
 
 export async function reviewAssetCandidate(projectId: number, candidateId: number, payload: {
   expected_parent_job_id: number; input_fingerprint: string; expected_signature: string;
-  accepted_fact_indexes: number[]; field_values: Record<string, string>; reason: string; keep_independent?: boolean; confirm_usage_relation?: boolean;
+  accepted_fact_indexes: number[]; field_values: Record<string, string>; reason: string; keep_independent?: boolean; confirm_usage_relation?: boolean; background_only?: boolean;
 }): Promise<ScriptAssetCandidate> {
   return (await http.post<ScriptAssetCandidate>(`/projects/${projectId}/creation-session/asset-breakdown/candidates/${candidateId}/review`, payload)).data;
 }
@@ -298,6 +298,12 @@ export async function recheckScriptAssetBreakdown(projectId: number) {
     `/projects/${projectId}/creation-session/asset-breakdown/recheck`,
   );
   return data;
+}
+
+export async function recheckDeferredAssetItems(projectId: number) {
+  return (await http.post<{ recovered_count: number; remaining_count: number }>(
+    `/projects/${projectId}/creation-session/asset-breakdown/recheck-deferred`,
+  )).data;
 }
 
 export async function fillMissingAudioCandidatePrompts(

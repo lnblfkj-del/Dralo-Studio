@@ -79,6 +79,24 @@ async def candidate_evidence(
     segment: VideoSegment,
     plan: EpisodeProductionPlan,
     version: SegmentVideoVersion,
+    allow_stale: bool = False,
+) -> dict[str, Any]:
+    evidence = await _candidate_evidence(session, segment=segment, plan=plan, version=version)
+    if allow_stale and evidence["status"] == "input_stale":
+        return {
+            **evidence,
+            "adoptable": not (version.is_final and version.segment_id == segment.id),
+            "reason": "视频与当前脚本或生成设置不一致，仍可手动采用已有视频，无需重新生成。",
+        }
+    return evidence
+
+
+async def _candidate_evidence(
+    session: AsyncSession,
+    *,
+    segment: VideoSegment,
+    plan: EpisodeProductionPlan,
+    version: SegmentVideoVersion,
 ) -> dict[str, Any]:
     media = await session.get(MediaFile, version.media_file_id)
     media_status, reason = _media_state(media)

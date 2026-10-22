@@ -4,11 +4,18 @@ import re
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, NotFoundError
 from app.models import Asset, AssetVersion, MediaFile, Project, ProjectAssetLink
+
+SUBJECT_ANATOMY_RULE = (
+    "物种与机体约束优先：下列胸部半身、双臂、鞋履、直立与服装要求仅适用于原文明确的人形角色。"
+    "非人类或非人形主体保持已确认的物种和机体结构，采用其自然姿态；以头部或主体辨识区对应近景，"
+    "其余视图完整展示自然轮廓、尾部、翼、触肢或机械附件，不强制人脸、双足站立或穿衣。"
+    "未说明物种不得从画风推断或擅自改成动物、机器人。"
+)
 
 BASE_IMAGE_REQUIREMENTS = {
     "character": "角色身份正面参考图；单一角色，胸部以上半身正面构图，面部居中且清晰无遮挡，身份、五官、体型、发型与基础服装稳定；中性表情，均匀柔和的影棚光线，浅灰色无缝中性背景；禁止坐姿、戏剧动作、浅景深、逆光光晕、场景化背景、多宫格、拼版、文字、边框、水印或额外人物。",
@@ -88,6 +95,7 @@ def character_reference_prompt(identity_prompt: str, view_key: str) -> str:
     view = character_reference_view(view_key)
     return (
         f"角色身份设定：\n{identity_prompt.strip()}\n\n"
+        f"{SUBJECT_ANATOMY_RULE}\n\n"
         f"本次视图：{view['prompt_suffix']}\n\n"
         f"角色参考资产硬性契约（{CHARACTER_REFERENCE_SHEET_KEY}）：只生成一张横向图片，画面中只能出现同一名角色。"
         "使用四个不重叠的清晰分区，从左到右固定为：半身面部特写、全身正面、全身侧面、全身背面。"
@@ -136,6 +144,8 @@ def asset_image_prompt(asset_type: str, prompt: str, view_type: str = "base", *,
     requirement = DERIVED_IMAGE_REQUIREMENTS.get((asset_type, view_type), BASE_IMAGE_REQUIREMENTS.get(asset_type))
     clean = prompt.strip()
     compiled = f"{clean}\n\n资产视图制作要求：{requirement}" if requirement else clean
+    if asset_type in {"character", "costume"}:
+        compiled = f"{compiled}\n\n{SUBJECT_ANATOMY_RULE}"
     contract = ASSET_REFERENCE_CONTRACTS.get(asset_type)
     if view_type != "base" or contract is None:
         return compiled
@@ -195,6 +205,8 @@ async def create_asset(session: AsyncSession, project: Project, data: dict[str, 
 
 
 async def update_asset(session: AsyncSession, asset: Asset, data: dict[str, Any], project_id: int) -> Asset:
+    from app.services.asset_consistency_service import lock_project
+    await lock_project(session, project_id)
     if asset.project_id != project_id:
         raise ConflictError("复用资产的源资料只可在来源项目编辑；本项目请编辑制作资料副本")
     if "slug" in data and data["slug"] != asset.slug:
@@ -212,6 +224,9 @@ async def update_asset(session: AsyncSession, asset: Asset, data: dict[str, Any]
     for key, value in data.items():
         setattr(asset, key, value)
     await session.flush()
+    await session.execute(update(ProjectAssetLink).where(
+        ProjectAssetLink.project_id == project_id, ProjectAssetLink.asset_id == asset.id,
+    ).values(production_revision=ProjectAssetLink.production_revision + 1).execution_options(synchronize_session=False))
     return asset
 
 

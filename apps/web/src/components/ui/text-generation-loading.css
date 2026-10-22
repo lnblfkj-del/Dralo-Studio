@@ -1,4 +1,9 @@
 .text-generation-icon { display:inline-flex; flex-shrink:0; align-items:center; justify-content:center; vertical-align:middle; background:transparent; }
+.text-generation-skeleton { width:min(760px, 90%); margin-top:30px; display:grid; gap:10px; }
+.text-generation-skeleton i { height:11px; border-radius:8px; background:linear-gradient(90deg, #eceaec, #f7f6f7, #eceaec); background-size:200% 100%; animation:text-generation-shimmer 1.2s linear infinite; }
+.text-generation-skeleton i:nth-child(3n) { width:76%; }
+@keyframes text-generation-shimmer { to { background-position:-200% 0; } }
+@media(prefers-reduced-motion:reduce) { .text-generation-skeleton i { animation:none; } }
 .text-generation-icon > .text-generation-bird { display:block; width:100%; height:100%; object-fit:contain; }
 .text-generation-loading { min-width:0; }
 .chat-thinking:has(.text-generation-icon) { flex-wrap:wrap; }

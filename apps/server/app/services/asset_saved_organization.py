@@ -15,17 +15,51 @@ from app.core.errors import (
     ModelOutputSchemaError,
 )
 from app.models import Job, JobTextResponse
+from app.services.asset_background_policy import VERSION as BACKGROUND_VERSION
 from app.services.asset_extraction_contract import parse_extraction, response_schema
 from app.services.asset_extraction_output import validate_boundary
 from app.services.asset_extraction_registry import candidate_id, project_registry
 from app.services.asset_identity_variants import can_complete, descriptor
+from app.services.asset_json_repair import VERSION as JSON_SYNTAX_VERSION
 from app.services.asset_json_repair import parse_asset_document
+from app.services.asset_quantity_evidence import QUANTITY_EVIDENCE_VERSION
 from app.services.creation_breakdown_planning import (
     AUDIO_REQUIREMENT_TYPES,
     REQUIREMENT_RESULT_KEYS,
 )
 
 VERSION = "asset-output-organization.ar3.v1"
+VALIDATION_VERSION = f"{QUANTITY_EVIDENCE_VERSION}:{JSON_SYNTAX_VERSION}:{BACKGROUND_VERSION}"
+
+
+async def recheck_deferred_items(session, item):
+    """Revalidate saved rejects without re-normalizing unrelated accepted candidates."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    from app.services.asset_extraction_scheduling import lock_breakdown_session
+    from app.services.creation_breakdown_review import _refresh_asset_candidate_counts
+    from app.services.creation_breakdown_sources import _validate_breakdown_story_source
+    from app.services.script_source_snapshot import script_snapshot_is_current
+
+    await lock_breakdown_session(session, item)
+    settings = deepcopy(item.settings)
+    breakdown = settings.get("asset_breakdown") or {}
+    if breakdown.get("asset_extraction_contract_version") != 3 or breakdown.get("status") != "awaiting_confirmation":
+        raise ConflictError("请等待当前拆解完成后重新校验")
+    if not await script_snapshot_is_current(session, item.project_id, breakdown.get("input_fingerprint", "")):
+        raise ConflictError("正式正文已变化，不能使用旧响应恢复候选")
+    await _validate_breakdown_story_source(session, item, breakdown.get("story_source") or {})
+    before = sum(len(scope["items"]) for scope in (breakdown.get("review_items_by_scope") or {}).values())
+    await recover_saved_items(session, item, breakdown)
+    from app.services import asset_service
+
+    _refresh_asset_candidate_counts(breakdown, existing_assets=await asset_service.list_assets(session, item.project_id))
+    settings["asset_breakdown"] = breakdown
+    item.settings = settings
+    flag_modified(item, "settings")
+    await session.flush()
+    remaining = sum(len(scope["items"]) for scope in breakdown.get("review_items_by_scope", {}).values())
+    return {"recovered_count": before - remaining, "remaining_count": remaining}
 
 
 def _unique(rows):
@@ -95,6 +129,7 @@ async def recover_saved_items(session, item, breakdown):
     if breakdown.get("asset_extraction_contract_version") != 3 or not breakdown.get("review_items_by_scope"):
         return
     audit = deepcopy(breakdown.get("output_organization") or {"version": VERSION, "records": {}})
+    audit["validation_version"] = VALIDATION_VERSION
     candidates = deepcopy(breakdown.get("candidates") or [])
     pending = deepcopy(breakdown["review_items_by_scope"])
     attempts = 0
@@ -120,7 +155,8 @@ async def recover_saved_items(session, item, breakdown):
         remaining = []
         for rejected in group["items"]:
             index = rejected["index"]
-            receipt = f"{scope}:{job.id}:{index}:{raw_hash}:{VERSION}"
+            # A failed verdict is reusable only under the same validation rules.
+            receipt = f"{scope}:{job.id}:{index}:{raw_hash}:{VERSION}:{VALIDATION_VERSION}"
             if (receipt in audit["records"] and audit["records"][receipt]["status"] == "unresolved"
                     and audit["records"][receipt].get("choice_sha256") == _choice_hash(candidates)):
                 remaining.append(rejected)
@@ -142,13 +178,26 @@ async def recover_saved_items(session, item, breakdown):
                 # Build on a private list so an ambiguous attachment cannot partially mutate pending results.
                 trial = deepcopy(candidates)
                 targets = [_attach(trial, entry, kind, breakdown) for kind, key in REQUIREMENT_RESULT_KEYS.items() for entry in parsed[key]]
+                from app.services.asset_field_trust import organize_candidate
+                from app.services.creation_breakdown_review import _refresh_candidate_review_state
+
+                affected = {target["candidate_id"] for target in targets if target["status"] != "preserved_user_exclusion"}
+                for candidate in trial:
+                    if candidate["candidate_id"] in affected:
+                        organize_candidate(candidate, breakdown.get("production_context") or {})
+                        _refresh_candidate_review_state(candidate)
             except (ModelOutputSchemaError, ModelOutputBusinessValidationError) as exc:
-                remaining.append(rejected)
+                errors = (exc.details or {}).get("field_errors") or [{"field": f"assets.{index}", "reason": exc.message}]
+                remaining.append({**rejected, "character_form": row.get("character_form"), "error_code": exc.code, "field_errors": errors})
                 audit["records"][receipt] = {"status": "unresolved", "job_id": job.id, "index": index,
                     "raw_sha256": raw_hash, "error_code": exc.code, "message": exc.message, "original_review": rejected}
                 unresolved_attempts.append(receipt)
                 continue
             candidates = trial
+            for entry in diagnostics.get("source_only_items", []):
+                breakdown.setdefault("script_only_items", {})[f"{job.id}:{index}"] = {
+                    **entry, "index": index, "episode_numbers": group["episode_numbers"],
+                }
             audit["records"][receipt] = {"status": "resolved", "job_id": job.id, "index": index,
                 "raw_sha256": raw_hash, "targets": targets, "changes": diagnostics.get("changes", []),
                 "source_only_items": diagnostics.get("source_only_items", []), "model_called": False, "original_review": rejected}

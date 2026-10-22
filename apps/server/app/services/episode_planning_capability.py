@@ -18,6 +18,20 @@ def same_specification(left: VideoCapability, right: VideoCapability) -> bool:
     return left.model_dump(mode="json", exclude=excluded) == right.model_dump(mode="json", exclude=excluded)
 
 
+def accepts_saved_shot_limits(current: VideoCapability, saved: VideoCapability) -> bool:
+    """Increasing a shot ceiling does not invalidate an already requested plan."""
+    saved_modes = {mode.key: mode for mode in saved.modes}
+    if {mode.key for mode in current.modes} != saved_modes.keys():
+        return False
+    if any(mode.max_shots < saved_modes[mode.key].max_shots for mode in current.modes):
+        return False
+    comparable = current.model_copy(update={"modes": tuple(
+        mode.model_copy(update={"max_shots": saved_modes[mode.key].max_shots})
+        for mode in current.modes
+    )})
+    return same_specification(comparable, saved)
+
+
 async def load_capability(session: AsyncSession, model_id: int) -> VideoCapability:
     model = await session.get(ProviderModel, model_id)
     provider = await session.get(Provider, model.provider_id) if model else None

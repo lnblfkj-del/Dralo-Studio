@@ -131,7 +131,7 @@ export interface SelectedVideoInput {
 }
 export type SelectedVideoPlan = EpisodeProductionPlan & { selection_fingerprint: string; selected_segment_ids: number[] };
 export async function planSelectedVideos(projectId: number, episodeId: number, payload: SelectedVideoInput): Promise<SelectedVideoPlan> {
-  return (await http.post<SelectedVideoPlan>(`/projects/${projectId}/episodes/${episodeId}/production/selected-videos/plan`, payload)).data;
+  return (await http.post<SelectedVideoPlan>(`/projects/${projectId}/episodes/${episodeId}/production/selected-videos/plan`, payload, { timeout: 120_000 })).data;
 }
 export async function startSelectedVideos(projectId: number, episodeId: number, payload: SelectedVideoInput & {
   request_id: string; confirmed: true; max_cost_cents: number;
@@ -148,6 +148,7 @@ export async function planEpisodeProduction(
   const { data } = await http.post<EpisodeProductionPlan>(
     `/projects/${projectId}/episodes/${episodeId}/production/plan`,
     payload,
+    { timeout: 120_000 },
   );
   return data;
 }
@@ -173,6 +174,7 @@ export async function planSegmentVideoAttempt(
   const { data } = await http.post<EpisodeProductionPlan>(
     `/projects/${projectId}/episodes/${episodeId}/production/segments/${segmentId}/video/plan`,
     payload,
+    { timeout: 120_000 },
   );
   return data;
 }
@@ -205,6 +207,10 @@ export async function startSegmentFirstFrames(
     provider_model_id: number;
     parameters?: Record<string, unknown>;
     negative_prompt?: string | null;
+    frame_scope?: "shots";
+    shot_indices?: number[] | null;
+    missing_only?: boolean;
+    source_fingerprint?: string | null;
     request_id: string;
     confirmed: true;
     max_cost_cents: number;
@@ -223,6 +229,9 @@ export async function planSegmentFirstFrames(
   projectId: number,
   episodeId: number,
   payload: {
+    frame_scope?: "shots";
+    shot_indices?: number[];
+    missing_only?: boolean;
     segment_ids: number[];
     provider_model_id: number;
     parameters?: Record<string, unknown>;

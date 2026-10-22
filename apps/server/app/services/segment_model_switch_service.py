@@ -10,7 +10,7 @@ from app.services.asset_production_core import fingerprint
 from app.services.episode_planning_capability import load_capability
 from app.services.job_video_batch_helpers import _compile_segment_media
 from app.services.segment_asset_references import catalog, resolve_materials
-from app.services.segment_model_fit import content_needs, fit, matching_modes
+from app.services.segment_model_fit import content_needs, explain_no_match, fit, matching_modes
 from app.services.segment_plan_core_service import get_active_plan
 from app.services.segment_plan_write_service import create_plan
 
@@ -35,9 +35,13 @@ async def preview(session, episode, *, provider_model_id, resolution=None):
     from app.services.style_generation_service import project_style_media
     style = await project_style_media(session, project.id, episode.owner_id, "video")
     for segment in current["segments"]:
-        refs = await resolve_materials(session, project, segment["refs"], strict=False, assets=assets)
-        effective = {**current["parameters"], **segment.get("parameters", {})}
-        first, last, image_ids, bindings = _compile_segment_media(refs, effective)
+        try:
+            refs = await resolve_materials(session, project, segment["refs"], strict=False, assets=assets)
+            effective = {**current["parameters"], **segment.get("parameters", {})}
+            first, last, image_ids, bindings = _compile_segment_media(refs, effective)
+        except ConflictError as exc:
+            requirements.append((segment, {}, content_needs(segment), segment["refs"], exc.message))
+            continue
         images = set(image_ids)
         unresolved = {a["asset_id"] for a in refs.get("asset_references", []) if a.get("material_required") and
                       not any(b.get("asset_id") == a["asset_id"] for b in bindings)}
@@ -45,15 +49,19 @@ async def preview(session, episode, *, provider_model_id, resolution=None):
             images.add(style)
         counts = {"image": len(images) + len(unresolved), "first_frame": int(bool(first or refs.get("continuity"))),
                   "last_frame": int(bool(last))}
-        requirements.append((segment, counts, content_needs(segment), refs))
+        requirements.append((segment, counts, content_needs(segment), refs, None))
     bgm = (production.settings or {}).get("background_music")
 
     def evaluate(chosen):
         items, changes, blocked = [], [], []
         endings = {}
-        for segment, counts, needs, _ in requirements:
+        for segment, counts, needs, _, material_issue in requirements:
+            if material_issue:
+                blocked.append({"segment_id": segment["id"], "order": segment["order"], "reason": material_issue})
+                continue
             modes = matching_modes(capability, ratio, chosen, counts, needs, bgm)
-            parts, reason = fit(segment, modes)
+            parts, reason = fit(segment, modes) if modes else (
+                None, explain_no_match(capability, ratio, chosen, counts, needs, bgm))
             if parts and len(parts) > 1 and (counts["first_frame"] or counts["last_frame"]):
                 reason = "需要拆分，但当前设置包含首尾帧；请先编辑帧用途，不能把同一帧复制给多个片段"
             if reason:
@@ -93,6 +101,10 @@ async def preview(session, episode, *, provider_model_id, resolution=None):
             "provider_model_id": provider_model_id, "resolution": chosen, "aspect_ratio": ratio,
             "requires_resolution_selection": not bool(chosen),
             "resolutions": available, "valid_resolutions": valid, "compatible_resolutions": compatible, "fingerprint": digest,
+            "resolution_checks": [
+                {"resolution": r, "changes": evaluated[r][1], "blocked": evaluated[r][2]}
+                for r in available
+            ],
             "changes": changes, "blocked": blocked, "segment_count": len(items), "model_called": False,
             "items": items, "parameters": parameters, "status": current["status"]}
 

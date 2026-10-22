@@ -1,7 +1,7 @@
 import type { BusinessExecutorModel, BusinessExecutorSkill } from "./agent";
 import type { CanvasWorkflowRun } from "./canvas";
 
-export type JobStatus = "queued" | "running" | "processing" | "downloading" | "retrying" | "succeeded" | "failed" | "cancelled";
+export type JobStatus = "queued" | "waiting" | "running" | "processing" | "downloading" | "retrying" | "succeeded" | "failed" | "cancelled";
 export type AgentActionStatus = "pending" | "applied" | "rejected" | "stale" | "syncing";
 
 export interface AgentActionPreview {

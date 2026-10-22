@@ -70,10 +70,10 @@ export function ModelChangeDialog({ projectId, episodeId, input, modelName, plan
     {plan && <>
       <label>清晰度 <select aria-label="调整后的清晰度" value={attempt?.payload.resolution ?? resolution ?? plan.resolution} disabled={locked || Boolean(attempt) || preview.isFetching} onChange={(event) => { setError(null); setSelection({ key: selectionKey, resolution: event.target.value }); }}>
         {!plan.resolution && <option value="" disabled>请选择清晰度</option>}
-        {plan.resolutions.map(value => <option key={value} value={value}>{formatResolution(value)}{plan.valid_resolutions.includes(value) ? "" : " · 存在不兼容片段"}</option>)}
+        {plan.resolutions.map(value => <option key={value} value={value}>{formatResolution(value)}{!plan.valid_resolutions.includes(value) ? " · 存在不兼容片段" : !plan.compatible_resolutions.includes(value) ? " · 需调整时长或片段数量" : ""}</option>)}
       </select></label>
-      {!plan.resolution ? <p role="alert">新模型不支持当前清晰度，请选择清晰度后检查；原模型和脚本未改变。</p> : <p>画幅 {plan.aspect_ratio} · 调整后 {plan.segment_count} 个片段</p>}
-      {plan.resolution && (plan.changes.length ? <ul>{plan.changes.map(change => <li key={change.segment_id}>片段 {change.order}：{change.before} 秒 → {change.after.join(" + ")} 秒{change.after.length > 1 ? `（拆为 ${change.after.length} 段）` : ""}</li>)}</ul> : <p>片段数量与时长无需调整。</p>)}
+      {!plan.resolution ? <p role="alert">新模型不支持当前清晰度，请选择清晰度后检查；原模型和脚本未改变。</p> : <p>画幅 {plan.aspect_ratio} · {plan.blocked.length ? `${plan.blocked.length} 个片段待处理，尚不能应用` : `调整后 ${plan.segment_count} 个片段`}</p>}
+      {plan.resolution && (plan.changes.length ? <ul>{plan.changes.map(change => <li key={change.segment_id}>片段 {change.order}：{change.before} 秒 → {change.after.join(" + ")} 秒{change.after.length > 1 ? `（拆为 ${change.after.length} 段）` : ""}</li>)}</ul> : !plan.blocked.length && <p>片段数量与时长无需调整。</p>)}
       {plan.blocked.map(item => <p role="alert" key={item.segment_id}>片段 {item.order}：{item.reason} <button disabled={locked || Boolean(attempt) || stale} onClick={() => onLocate(item.segment_id)}>定位片段 {item.order}</button></p>)}
     </>}
     {stale && <p role="alert">当前存在未保存修改或正文已变化，请关闭后处理再检查。</p>}

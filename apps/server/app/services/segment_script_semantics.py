@@ -416,7 +416,8 @@ def compile_prompt(script: dict[str, Any]) -> str:
         lines.append("声音：")
         lines.extend(audio_lines)
     lines.append(f"状态：进入[{script['entry_state']}]；结束[{script['exit_state']}]")
-    return "\n".join(lines)
+    from app.services.segment_prompt_presentation import readable_prompt
+    return readable_prompt("\n".join(lines))
 
 
 def normalize_segment(
@@ -432,8 +433,10 @@ def normalize_segment(
     if isinstance(raw, dict) and raw.get("editor_document") is not None:
         from app.services.segment_document_service import compile_document
         script, prompt, duration = compile_document(raw, shot_ids,
-            (item.get("refs") or {}).get("asset_bindings") or [],
-            (item.get("refs") or {}).get("asset_references") or [])
+            [*((item.get("refs") or {}).get("asset_bindings") or []),
+             *((item.get("refs") or {}).get("document_asset_bindings") or [])],
+            [*((item.get("refs") or {}).get("asset_references") or []),
+             *((item.get("refs") or {}).get("document_asset_references") or [])])
         if abs(duration - float(item.get("timeline_duration") or item["generation_duration"])) > 0.05:
             raise ValidationError("正文镜头时长合计与片段时长不一致")
         parameters[STRUCTURED_SCRIPT_KEY] = script

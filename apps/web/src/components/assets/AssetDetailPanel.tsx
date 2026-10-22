@@ -7,6 +7,7 @@ import { updateAssetVersion, uploadAssetVersion } from "@/api/assets";
 import { toErrorMessage } from "@/api/client";
 import { getAssetProduction, getAssetUsagePage, getAssetVersionPage, patchAssetProduction } from "@/api/productionContract";
 import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
+import { AssetConsistencyEditor } from "@/components/assets/AssetConsistencyEditor";
 import { AssetVersionSplitDialog } from "@/components/assets/AssetVersionSplitDialog";
 import { AssetAudioGenerator } from "@/components/assets/AssetAudioGenerator";
 import {AssetBgmButton} from './AssetBgmButton';
@@ -71,6 +72,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
   const usages = useQuery({ queryKey: ["asset-usage-page", projectId, item.id, 1], queryFn: () => getAssetUsagePage(projectId, item.id, 1) });
   const [tab, setTab] = useState<"profile" | "versions" | "usage">("profile");
   const [editing, setEditing] = useState(false);
+  const [consistencyState, setConsistencyState] = useState({ dirty: false, busy: false });
   const [draft, setDraft] = useState<AssetProfile>(EMPTY_PROFILE);
   const [promptDraft, setPromptDraft] = useState("");
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
@@ -81,7 +83,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
   const [archiveConfirm, setArchiveConfirm] = useState(false);
   const profile = production.data?.profile ?? EMPTY_PROFILE;
   const promptAnchor = production.data?.prompt_anchor ?? "";
-  const dirty = editing && (JSON.stringify(draft) !== JSON.stringify(profile) || promptDraft !== promptAnchor);
+  const dirty = consistencyState.dirty || editing && (JSON.stringify(draft) !== JSON.stringify(profile) || promptDraft !== promptAnchor);
 
   const refresh = async () => {
     await Promise.all([
@@ -154,7 +156,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
   const archived = production.data?.archived ?? item.archived;
 
   return <>
-    <Dialog open className="r5-material-dialog" size="large" title={item.name} accessibleLabel={item.name + "资产详情"} description={(TYPE_LABELS[item.asset_type] ?? item.asset_type) + " · @" + item.slug} closeLabel="关闭资产详情" dirty={dirty} onClose={onClose} busy={save.isPending || adopt.isPending || upload.isPending || archive.isPending || classify.isPending}>
+    <Dialog open className="r5-material-dialog" size="large" title={item.name} accessibleLabel={item.name + "资产详情"} description={(TYPE_LABELS[item.asset_type] ?? item.asset_type) + " · @" + item.slug} closeLabel="关闭资产详情" dirty={dirty} onClose={onClose} busy={consistencyState.busy || save.isPending || adopt.isPending || upload.isPending || archive.isPending || classify.isPending}>
       <div className="r5-detail-preview"><AssetMediaPreview mediaFileId={item.preview_media?.media_file_id} kind={item.preview_media?.kind} assetType={item.asset_type} alt={item.name} /></div>
       <nav className="r5-detail-tabs" aria-label="资产详情页签">
         <button className={tab === "profile" ? "active" : ""} onClick={() => setTab("profile")}>资料</button>
@@ -165,6 +167,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
         {error && <p className="r5-error" role="alert">{toErrorMessage(error)}</p>}
         {archived && <div className="r5-archived-notice" role="status">该资产已从当前项目生产范围归档。历史来源、使用关系和采用版本仍保留；恢复后才能继续修改或新增素材。</div>}
         {tab === "profile" && <ProfileTab projectId={projectId} revision={production.data?.revision ?? 0} item={item} profile={editing ? draft : profile} promptAnchor={editing ? promptDraft : promptAnchor} editing={editing} onChange={setDraft} onPromptChange={setPromptDraft} />}
+        <div hidden={tab !== "profile"}><AssetConsistencyEditor projectId={projectId} assetId={item.id} assetType={item.asset_type} disabled={archived || editing} onChanged={onChanged} onStateChange={setConsistencyState} /></div>
         {tab === "versions" && <section className="r5-version-tab">
           <div className="r5-adoption-key"><label>采用用途<input value={key} onChange={(event) => setKey(event.target.value)} /></label><small>不同用途独立采用，不会覆盖其他造型、视角或音色。</small></div>
           {!archived && <div className="r5-version-upload"><label><span>新素材分类</span><select value={uploadViewType} onChange={(event) => setUploadViewType(event.target.value as AssetViewType)}>{(VIEW_TYPES[item.asset_type] ?? ["base"]).map((value) => <option key={value} value={value}>{VIEW_LABELS[value]}</option>)}</select></label><label className="r5-upload-button"><Upload size={15} />{uploadProgress === null ? "上传新候选" : `上传 ${uploadProgress}%`}<input type="file" disabled={upload.isPending} accept={item.asset_type === "voice" ? "audio/*" : item.asset_type === "video" ? "video/*" : "image/*"} onChange={(event) => { const file = event.target.files?.[0]; if (file) upload.mutate(file); }} /></label></div>}
@@ -188,7 +191,7 @@ export function AssetDetailPanel({ projectId, item, onClose, onCanvas, onChanged
         </section>}
       </div>
       <footer className="r5-detail-footer">
-        {tab === "profile" && !archived && (editing ? <><Button disabled={save.isPending} onClick={() => { setDraft(structuredClone(profile)); setPromptDraft(promptAnchor); setEditing(false); }}>取消</Button><Button variant="primary" icon={<Save size={14} />} loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>保存资料</Button></> : <Button variant="primary" disabled={!production.data} onClick={beginEdit}>编辑资料</Button>)}
+        {tab === "profile" && !archived && (editing ? <><Button disabled={save.isPending} onClick={() => { setDraft(structuredClone(profile)); setPromptDraft(promptAnchor); setEditing(false); }}>取消</Button><Button variant="primary" icon={<Save size={14} />} loading={save.isPending} disabled={!dirty} onClick={() => save.mutate()}>保存资料</Button></> : <Button variant="primary" disabled={!production.data || consistencyState.dirty || consistencyState.busy} onClick={beginEdit}>编辑资料</Button>)}
         <Button icon={<MapPin size={14} />} onClick={onCanvas}>打开画布</Button>
         {archived ? <Button variant="primary" icon={<RotateCcw size={14} />} loading={archive.isPending} disabled={!production.data} onClick={() => archive.mutate(false)}>恢复资产</Button> : <Button variant="danger" icon={<Archive size={14} />} disabled={!production.data || archive.isPending} onClick={() => setArchiveConfirm(true)}>归档</Button>}
       </footer>
@@ -214,8 +217,8 @@ function ProfileTab({ projectId, revision, item, profile, promptAnchor, editing,
     <label className="r5-profile-prompt"><span>资产一致性提示词</span><textarea disabled={!editing} value={promptAnchor} placeholder="尚未填写一致性提示词" onChange={(event) => onPromptChange(event.target.value)} /></label>
     {field("description", "资料说明", true)}
     {item.asset_type === "character" && <>
-      <label><span>角色形式</span><select disabled={!editing} value={profile.character_form ?? "single"} onChange={(event) => onChange({ ...profile, character_form: event.target.value as AssetProfile["character_form"], ...(event.target.value === "single" ? { group_label: null, group_size: null } : {}) })}><option value="single">单人</option><option value="fixed_group">固定小组</option><option value="crowd">背景人群</option></select></label>
-      {profile.character_form && profile.character_form !== "single" && <>{field("group_label", "群体称呼")}<label><span>原文明确人数</span><input type="number" min={2} max={profile.character_form === "fixed_group" ? 12 : 100000} disabled={!editing} value={profile.group_size ?? ""} onChange={(event) => onChange({ ...profile, group_size: event.target.value ? Number(event.target.value) : null })}/></label></>}
+      <label><span>角色形式</span><select disabled={!editing} value={profile.character_form ?? "single"} onChange={(event) => onChange({ ...profile, character_form: event.target.value as AssetProfile["character_form"], ...(event.target.value === "single" ? { group_label: null, group_size: null } : {}) })}><option value="single">单体角色</option><option value="fixed_group">固定小组</option><option value="crowd">背景群体</option></select></label>
+      {profile.character_form && profile.character_form !== "single" && <>{field("group_label", "群体称呼")}<label><span>原文明确数量</span><input type="number" min={2} max={profile.character_form === "fixed_group" ? 12 : 100000} disabled={!editing} value={profile.group_size ?? ""} onChange={(event) => onChange({ ...profile, group_size: event.target.value ? Number(event.target.value) : null })}/></label></>}
     </>}
     {item.asset_type === "character" && <><label><span>角色分类</span><select disabled={!editing} value={profile.character_role} onChange={(event) => onChange({ ...profile, character_role: event.target.value as AssetProfile["character_role"] })}><option value="lead">主角</option><option value="supporting">配角</option><option value="extra">群演</option><option value="unclassified">未分类</option></select></label>{field("age", "年龄")}{field("appearance", "外貌", true)}{field("personality", "性格", true)}{field("goal", "目标", true)}{field("conflict", "冲突", true)}{field("arc", "成长弧", true)}{field("costume", "默认造型说明", true)}{field("voice", "声线", true)}{field("story_state", "当前剧情状态", true)}</>}
     {item.asset_type === "scene" && <>{field("location", "地点 / 空间")}{field("time_of_day", "时间 / 日夜")}{field("weather", "天气")}{field("lighting", "光线", true)}{field("atmosphere", "氛围", true)}{field("environment", "环境变体", true)}{field("story_state", "剧情状态", true)}</>}

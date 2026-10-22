@@ -171,6 +171,7 @@ async def optimize_segment(
         model=parent.model,
         execution_policy_snapshot=deepcopy(parent.execution_policy_snapshot),
         payload={
+            "continuity_required": parent.payload.get("continuity_required", False),
             "production_baseline": await workflow.capture_production_baseline(session, episode),
             **{
                 key: deepcopy(parent.payload[key])

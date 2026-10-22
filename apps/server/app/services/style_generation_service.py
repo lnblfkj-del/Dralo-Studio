@@ -5,6 +5,9 @@ from app.services.team_access import same_team
 
 
 async def project_style_media(session, project_id: int | None, owner_id: int, modality: str) -> int | None:
+    # A style preview is not an identity/scene reference for a video request.
+    if modality == "video":
+        return None
     if not project_id:
         return None
     project = await session.get(Project, project_id)
@@ -35,7 +38,7 @@ async def frozen_video_style_prompt(session, project_id: int, owner_id: int, pro
     if style.negative_prompt:
         prompt += f"\n避免：{style.negative_prompt}"
     return prompt, {"id": style.id, "name": style.name,
-                    "media_id": style.preview_media_id or style.reference_media_id}
+                    "media_id": None}
 
 
 async def apply_project_style(session, job, model):
@@ -52,7 +55,8 @@ async def apply_project_style(session, job, model):
     style = await session.get(StylePreset, int(selected[7:]))
     if not style or not style.enabled or job.job_type not in style.modalities:
         return None
-    snapshot = {"id": style.id, "name": style.name, "media_id": style.preview_media_id or style.reference_media_id}
+    snapshot = {"id": style.id, "name": style.name,
+                "media_id": None if job.job_type == "video" else style.preview_media_id or style.reference_media_id}
     prompt = job.payload["prompt"]
     if style.prompt_suffix:
         prompt += f"\n\n风格要求（{style.name}）：\n{style.prompt_suffix}"

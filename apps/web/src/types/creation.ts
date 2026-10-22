@@ -141,7 +141,8 @@ export interface ScriptAssetCandidate {
 }
 
 export interface ScriptAssetBreakdownState {
-  review_items_by_scope?: Record<string, { job_id: number; episode_numbers: number[]; items: { index: number; name: string; kind: string; declared_necessity?: string[]; field_errors: { field: string; reason: string }[] }[] }>;
+  script_only_items?: Record<string, { name: string; kind: string; reason: string; episode_numbers: number[] }>;
+  review_items_by_scope?: Record<string, { job_id: number; episode_numbers: number[]; items: { index: number; name: string; kind: string; character_form?: string; declared_necessity?: string[]; field_errors: { field: string; reason: string }[] }[] }>;
   coverage_status?: "requires_review" | "not_exhaustively_verified";
   execution_model?: { id: number; provider_name: string; name: string; model_id: string; executor_revision?: number; skill_version?: number };
   parent_job_id?: number;

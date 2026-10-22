@@ -1,4 +1,4 @@
-import { Box, Brush, Image, Map, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Shirt, UserRound, Video } from "lucide-react";
+import { Box, LayoutGrid, Image, Map, Mic2, Music2, PanelLeftClose, PanelLeftOpen, Shirt, UserRound, Video } from "lucide-react";
 
 import type { AssetType } from "@/types/api";
 
@@ -9,7 +9,6 @@ export const ASSET_TYPES: Array<{ key: AssetType; label: string; icon: typeof Us
   { key: "costume", label: "服装 / 造型", icon: Shirt },
   { key: "voice", label: "声音", icon: Music2 },
   { key: "video", label: "视频", icon: Video },
-  { key: "canvas", label: "画布", icon: Brush },
   { key: "reference", label: "镜头帧", icon: Image },
 ];
 
@@ -26,22 +25,25 @@ const SUBTYPES: Partial<Record<AssetType, Array<{ value: string; label: string }
 };
 
 export function AssetCategorySidebar({ type, subtype, counts, collapsed = false, onType, onSubtype, onExtract, onCollapse }: {
-  type: AssetType;
+  type: AssetType | "all";
   subtype: string;
   counts: Record<string, number>;
   collapsed?: boolean;
-  onType: (type: AssetType) => void;
+  onType: (type: AssetType | "all") => void;
   onSubtype: (subtype: string) => void;
   onExtract: () => void;
   onCollapse?: () => void;
 }) {
-  const children = SUBTYPES[type] ?? [];
+  const children = type === "all" ? [] : SUBTYPES[type] ?? [];
   return <aside className={`r5-category-panel ${collapsed ? "collapsed" : ""}`} aria-label="资产分类">
     <header className="r5-panel-heading">
       <div><strong>资产分类</strong></div>
       {onCollapse && <button aria-label={collapsed ? "展开资产分类" : "收起资产分类"} title={collapsed ? "展开资产分类" : "收起资产分类"} onClick={onCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</button>}
     </header>
     <div className="r5-category-list">
+      <div><button title={collapsed ? "全部" : undefined} aria-pressed={type === "all"} className={type === "all" ? "active" : ""} onClick={() => onType("all")}>
+        <LayoutGrid size={16} /><span>全部</span><small>{Object.values(counts).reduce((sum, count) => sum + count, 0)}</small>
+      </button></div>
       {ASSET_TYPES.map(({ key, label, icon: Icon }) => <div key={key}>
         <button title={collapsed ? label : undefined} aria-pressed={type === key && !subtype} className={type === key && !subtype ? "active" : ""} onClick={() => onType(key)}>
           <Icon size={16} /><span>{label}</span><small>{counts[key] ?? 0}</small>

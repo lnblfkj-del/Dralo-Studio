@@ -66,6 +66,7 @@ def parse_batch(text, *, sources, kinds, visual_keys, diagnostics_out, necessity
             errors = [{"field": re.sub(r"^assets\.0(?=\.|$)", f"assets.{index}", str(error.get("field", ""))),
                        "reason": str(error.get("reason", exc.message))[:240]} for error in errors[:12]]
             rejected.append({"index": index, "name": str(row.get("name", ""))[:200] if isinstance(row, dict) else "",
+                             "character_form": row.get("character_form") if isinstance(row, dict) else None,
                              "kind": str(row.get("kind", ""))[:40] if isinstance(row, dict) else "",
                              "declared_necessity": (row.get("necessity") or {}).get("reasons", [])
                              if isinstance(row, dict) and isinstance(row.get("necessity"), dict) else [],

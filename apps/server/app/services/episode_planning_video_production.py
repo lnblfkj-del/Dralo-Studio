@@ -75,15 +75,17 @@ def probe_image(media, protocol=None):
     return len(data)
 
 
-async def context(session, plan, *, resolve_assets=True, selected_segment_ids=None, execution=None):
+async def context(session, plan, *, resolve_assets=True, selected_segment_ids=None, execution=None, lock_parent=True, assets=None):
     if plan is None or plan.source_type != "content_frozen":
         raise ConflictError("冻结计划不存在，请刷新制作台")
     parent = await session.get(Job, plan.parameters.get("planning_run_id"))
     if parent is None:
         raise ConflictError("冻结计划缺少来源任务")
-    parent = await workflow._lock_parent(session, parent.id)
+    if lock_parent:
+        parent = await workflow._lock_parent(session, parent.id)
     projected = await read_projection(
-        session, parent, expected_fingerprint=plan.parameters["assembly_fingerprint"]
+        session, parent, expected_fingerprint=plan.parameters["assembly_fingerprint"],
+        production_plan=plan,
     )
     production = await session.scalar(
         select(EpisodeProduction).where(EpisodeProduction.episode_id == plan.episode_id)
@@ -111,12 +113,12 @@ async def context(session, plan, *, resolve_assets=True, selected_segment_ids=No
     if resolve_assets:
         from app.services.segment_asset_references import catalog, resolve_materials
         project = await session.get(Project, parent.project_id)
-        assets = await catalog(session, project.id)
+        assets = assets if assets is not None else await catalog(session, project.id)
         segments = (await session.scalars(select(VideoSegment).where(VideoSegment.plan_id == plan.id))).all()
         for segment in segments:
             if selected_segment_ids is not None and segment.id not in selected_segment_ids:
                 continue
-            materials[segment.lineage_key] = await resolve_materials(session, project, segment.refs, strict=False, assets=assets)
+            materials[segment.lineage_key] = await resolve_materials(session, project, segment.refs, strict=False, assets=assets, segment=segment)
         material_references = {key: [
             {"media_id": binding["media_file_id"], "role": "image" if binding["role"] == "reference_image" else binding["role"]}
             for binding in refs.get("asset_bindings", []) if binding["media_kind"] == "image"
@@ -140,7 +142,7 @@ async def context(session, plan, *, resolve_assets=True, selected_segment_ids=No
     return parent, model, provider, preview
 
 
-async def prepare_segment(session, plan, segment, parent, model, provider, compiled):
+async def prepare_segment(session, plan, segment, parent, model, provider, compiled, *, assets=None):
     from app.services.segment_material_preflight import require_segment_materials
     await require_segment_materials(session, plan, parent, compiled["segment_key"])
     from app.services.segment_asset_references import (
@@ -149,7 +151,7 @@ async def prepare_segment(session, plan, segment, parent, model, provider, compi
         resolve_materials,
     )
     project = await session.get(Project, parent.project_id)
-    resolved = await resolve_materials(session, project, segment.refs, segment=segment)
+    resolved = await resolve_materials(session, project, segment.refs, segment=segment, assets=assets)
     if compiled["blockers"]:
         raise ConflictError("；".join(compiled["blockers"]))
     if compiled["input_contract"] is None or compiled["prompt"] is None:
@@ -231,7 +233,12 @@ def validate_parameters(parameters, compiled):
 async def build_plan(session, episode, plan, model_id, parameters, regenerate, business_executor, *, selected_segment_ids=None):
     if model_id != plan.provider_model_id:
         raise ConflictError("当前冻结计划属于其他模型，请先检查兼容性并切换规划")
-    parent, model, provider, preview = await context(session, plan, selected_segment_ids=selected_segment_ids)
+    from app.services.segment_asset_references import catalog
+    # Reuse only inside this read-only request; submission resolves current assets again.
+    assets = await catalog(session, episode.project_id)
+    parent, model, provider, preview = await context(
+        session, plan, selected_segment_ids=selected_segment_ids, lock_parent=False, assets=assets,
+    )
     segments = list(
         (
             await session.scalars(
@@ -294,7 +301,7 @@ async def build_plan(session, episode, plan, model_id, parameters, regenerate, b
                 raise ConflictError("该片段已归档或镜头已锁定")
             validate_parameters(parameters, compiled)
             prepared = await prepare_segment(
-                session, plan, segment, parent, model, provider, compiled
+                session, plan, segment, parent, model, provider, compiled, assets=assets,
             )
         except AppError as exc:
             blocked.append(

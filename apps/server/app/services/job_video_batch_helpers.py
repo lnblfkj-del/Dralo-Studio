@@ -62,6 +62,12 @@ def _compile_segment_media(
             if type(value) is int and value > 0
         )
     )
+    shot_frames = (refs.get("shot_frames") or []) if refs.get("use_shot_frames") is not False else []
+    ready_frames = [frame for frame in shot_frames if frame.get("media_file_id")]
+    if ready_frames:
+        if len(ready_frames) != len(shot_frames):
+            raise ConflictError("镜头图尚未齐全，请生成缺失镜头图后重试")
+        reference_media_ids = list(dict.fromkeys([*reference_media_ids, *(f["media_file_id"] for f in ready_frames)]))
     reference_media_ids = [
         media_id
         for media_id in reference_media_ids
@@ -112,8 +118,8 @@ async def _resolve_continuity_input(
         )
     from app.services.segment_video_candidate_service import candidate_evidence
     plan = await session.get(EpisodeProductionPlan, segment.plan_id)
-    evidence = await candidate_evidence(session, segment=source, plan=plan, version=version)
-    if evidence["status"] != "adopted":
+    evidence = await candidate_evidence(session, segment=source, plan=plan, version=version, allow_stale=True)
+    if evidence["status"] not in {"adopted", "input_stale"}:
         raise ConflictError("前序片段的采用视频已失效，请重新生成并采用后再使用尾帧")
     from app.services.media_service import ensure_segment_last_frame
 

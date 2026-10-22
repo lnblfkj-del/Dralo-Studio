@@ -118,6 +118,26 @@ async def _source_context(session: AsyncSession, episode: Episode):
     from app.services.screenplay_interpretation_service import current_interpretations
     interpretations, _ = await current_interpretations(session, episode)
     sources = prepare_sources(episode.script or "", catalog, interpretations)
+    from app.schemas.episode_planning import NarrativeIdentity
+    identities = {}
+    projected_by_id = {item["asset_id"]: item for item in assets}
+    for item in catalog:
+        asset_id = item.get("asset_id")
+        if type(asset_id) is not int or asset_id <= 0:
+            continue
+        kind = {"character": "character", "scene": "scene", "prop": "prop",
+                "costume": "costume", "wardrobe": "costume"}.get(item["asset_type"], "other")
+        projected = projected_by_id.get(asset_id, {})
+        profile = projected.get("profile") or {}
+        character_ids = [profile.get("character_asset_id"), profile.get("linked_character_asset_id"),
+                         *(profile.get("linked_character_asset_ids") or [])]
+        identities[asset_id] = NarrativeIdentity(
+            key=f"asset-{asset_id}", asset_id=asset_id, name=item["asset_name"],
+            kind=kind, aliases=tuple(alias for alias in item.get("aliases", []) if alias.strip()),
+            description=(projected.get("description") or "").strip()[:8000] or None,
+            character_asset_ids=tuple(sorted({value for value in character_ids if type(value) is int and value > 0})),
+        )
+    sources = sources.model_copy(update={"identity_catalog": tuple(identities.values())})
     return sources, _digest(
         {"catalog": catalog, "assets": assets, "settings": project.creation_settings}
     )
@@ -214,6 +234,7 @@ async def create_run(
         payload={
             "request_id": request_id,
             "request_spec": spec,
+            "continuity_required": True,
             "epoch": settings.episode_planning_epoch,
             "sources": sources.model_dump(mode="json"),
             "asset_fingerprint": assets,
@@ -342,6 +363,8 @@ async def validate_context(session, parent, *, check_current_capability=True, re
         raise ConflictError("正文或确认版本已变化，已保存结果不会覆盖新内容")
     await require_preparation(session, episode)
     sources, assets = await _source_context(session, episode)
+    if not parent.payload.get("continuity_required") and "identity_catalog" not in parent.payload["sources"]:
+        sources = sources.model_copy(update={"identity_catalog": ()})
     # A local switch may replace a retired channel, but still validates the
     # frozen source/media and the newly selected channel separately.
     capability = (
@@ -349,11 +372,11 @@ async def validate_context(session, parent, *, check_current_capability=True, re
         if check_current_capability
         else VideoCapability.model_validate_json(json.dumps(parent.payload["capability"]))
     )
-    from app.services.episode_planning_capability import same_specification
+    from app.services.episode_planning_capability import accepts_saved_shot_limits
     frozen_capability = VideoCapability.model_validate_json(json.dumps(parent.payload["capability"]))
     if fingerprint(frozen_capability) != parent.payload["capability_fingerprint"]:
         raise ConflictError("已保存的模型规格记录不一致，请核对原任务")
-    if not same_specification(capability, frozen_capability):
+    if not accepts_saved_shot_limits(capability, frozen_capability):
         raise ConflictError("模型规格已变化，请先检查新规格与当前规划")
     mode = next(m for m in capability.modes if m.key == spec["mode_key"])
     bindings = tuple(
@@ -393,6 +416,9 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
     if job.target_type == TARGET_ANALYSIS:
         try:
             analysis = parse_model_response(text, ContentAnalysis, "内容分析")
+            from app.services.narrative_continuity import normalize_continuity, validate_continuity
+            analysis = normalize_continuity(sources, analysis)
+            validate_continuity(sources, analysis, required=parent.payload.get("continuity_required", False))
             bindings = tuple(
                 SourceReferenceBinding.model_validate_json(json.dumps(item))
                 for item in parent.payload["request_spec"]["reference_bindings"]
@@ -404,6 +430,8 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
             analysis = calibrate_analysis(sources, analysis, parent.payload["reference_snapshot"])
             plan_id = parent.payload.get("planning_record_id")
             if plan_id is None:
+                from app.services.episode_planning_asset_budget import build_asset_budget
+                reference_budget = await build_asset_budget(session, episode, sources, analysis, capability)
                 revision = (
                     await session.scalar(
                         select(func.max(EpisodePlanningRecord.revision)).where(
@@ -426,6 +454,7 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
                     compiler_version=COMPILER_VERSION,
                     editorial_target_ms=parent.payload["editorial_target_ms"],
                     background_music=parent.payload["request_spec"]["background_music"],
+                    reference_budget=reference_budget,
                 )
                 if len(planned.plan.segments) > MAX_DETAILS:
                     raise ValueError("超过本次详细脚本调用数量上限，请核对内容边界")
@@ -451,6 +480,7 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
             "planning_record_id": record.id,
             "stage": "content_frozen",
             "timing_corrections": timing_corrections,
+            "planning_warnings": list(planned.warnings) if plan_id is None else [],
             "usage": result.get("usage") or {},
         }
     record = await session.get(EpisodePlanningRecord, parent.payload.get("planning_record_id"))
@@ -461,6 +491,8 @@ async def finalize_result(session: AsyncSession, job: Job, result: dict) -> dict
         detail = parse_model_response(text, SegmentDetail, "片段详细脚本")
         if detail.segment_key != job.payload.get("segment_key"):
             raise ValueError("Response belongs to another segment")
+        from app.services.narrative_continuity import bind_detail_states
+        detail = bind_detail_states(plan, detail)
         validate_detail(plan, detail)
     except SchemaError as exc:
         raise _schema_failure("片段详细脚本", exc) from exc

@@ -4,6 +4,7 @@
 import re
 
 from app.core.errors import ModelOutputBusinessValidationError
+from app.services.asset_quantity_evidence import label_count_matches
 
 GROUP_CONTRACT = "character-group-reference.v1"
 GROUP_FIELDS = ("character_form", "group_label", "group_size")
@@ -17,19 +18,6 @@ def character_profile(attributes, data=None):
 
 def is_group(profile):
     return profile.get("character_form") in {"fixed_group", "crowd"}
-
-
-def _count(text):
-    digits = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
-    if text.isdecimal():
-        return int(text)
-    if text in digits:
-        return digits[text]
-    if "十" in text and len(text) <= 3:
-        tens, _, ones = text.partition("十")
-        if (not tens or tens in digits) and (not ones or ones in digits):
-            return digits.get(tens, 1) * 10 + digits.get(ones, 0)
-    return None
 
 
 def source_only_crowd(asset, policy, sources):
@@ -72,7 +60,7 @@ def extraction_fields(asset, policy, sources=None):
             raise ModelOutputBusinessValidationError("仅声音或旁白依据不能确认群演出镜，未入库")
     if form == "single":
         if label or count:
-            raise ModelOutputBusinessValidationError("单人角色不能携带群体人数或称呼，未入库")
+            raise ModelOutputBusinessValidationError("单体角色不能携带群体数量或称呼，未入库")
         return {"character_form": "single"}
     verified_quotes = [row.evidence_text for row in asset.occurrences
                        if sources and row.evidence_text in sources[row.source_segment_id]["text"]]
@@ -80,23 +68,10 @@ def extraction_fields(asset, policy, sources=None):
         label = asset.name
         label_source = "source_name_exact"
     if not label or (form == "fixed_group" and (count is None or count > 12)):
-        raise ModelOutputBusinessValidationError("固定小组须有原文人数，群体须有原文称呼，未入库")
+        raise ModelOutputBusinessValidationError("固定小组须有原文明确数量，群体须有原文称呼，未入库")
     quotes = [row.evidence_text for row in asset.occurrences]
     if not any(label in quote for quote in quotes):
         raise ModelOutputBusinessValidationError("群体称呼未命中出场证据，未入库")
-    def count_matches(quote):
-        for match in re.finditer(r"(?<![\d一二两三四五六七八九十百千万数几])([\d一二两三四五六七八九十]+)\s*(?:名|位|个|人)", quote):
-            # A literal group label may already contain its count. Match it at
-            # this exact count span, not after it or elsewhere in the sentence.
-            if (_count(match.group(1)) == count and quote.startswith(label, match.start())
-                    and len(label) > match.end() - match.start()):
-                return True
-            tail = quote[match.end():]
-            position = tail.find(label)
-            if (_count(match.group(1)) == count and 0 <= position <= 100
-                    and not re.search(r"[。！？；\n]|[\d一二两三四五六七八九十]+\s*(?:名|位|个|人)|[与和对]|围住|围攻|攻击|护送|抓住|走向|面对|看向|袭击|迎接", tail[:position])):
-                return True
-        return False
     count_quotes = verified_quotes if sources else quotes
     named_rosters = []
     for quote in count_quotes:
@@ -107,8 +82,8 @@ def extraction_fields(asset, policy, sources=None):
             open_roster = any(label in person and person.strip() not in members for person in people)
             if count is not None and len(members) == count and not open_roster:
                 named_rosters.append(members)
-    if count is not None and not any(count_matches(quote) for quote in count_quotes) and not named_rosters:
-        raise ModelOutputBusinessValidationError("群体人数没有逐字原文依据，未入库")
+    if count is not None and not any(label_count_matches(quote, label, count) for quote in count_quotes) and not named_rosters:
+        raise ModelOutputBusinessValidationError("群体数量缺少明确且属于该主体的原文依据，未入库")
     return {"character_form": form, "group_label": label, "group_size": count,
             **({"group_count_source": "explicit_named_roster.v1", "group_members": named_rosters[0]} if named_rosters else {}),
             **({"group_label_source": label_source} if label_source else {})}
@@ -120,20 +95,20 @@ def group_prompt(prompt, profile):
         return prompt
     fixed = profile.get("character_form") == "fixed_group"
     count = profile.get("group_size")
-    population = (f"画面恰好展示{count}名不同成员，不增减人数；跨镜头沿用这些成员的身份、服装和相互差异。"
+    population = (f"画面恰好展示{count}个不同成员，不增减数量；跨镜头沿用这些成员的身份、外观和相互差异。"
                   if fixed and count else
-                  "画面展示少量可辨识的不同成员作为群体样本，不是现场人数，也不替代正文中的真实人数；"
-                  "前景成员需要固定身份时另建单人资产，大规模背景仅保持群体风格与人口构成。")
+                  "画面展示少量可辨识的不同成员作为群体样本，不是现场数量，也不替代正文中的真实数量；"
+                  "前景成员需要固定身份时另建单体资产，大规模背景仅保持群体风格与成员构成。")
     if not fixed and count:
-        population += f"正文人数为{count}人，不要求这张样本参考图画出所有人。"
+        population += f"正文数量为{count}个成员，不要求这张样本参考图画出所有成员。"
     return (
         prompt.strip() + f"\n\n{marker}：{population}"
-        "本群体契约优先于单人四视图格式；剧情动作只是来源说明，参考图中自然站立，不表演剧情。"
+        "本群体契约优先于单体四视图格式；剧情动作只是来源说明，参考图中保持符合物种或机体结构的自然静态姿态，不表演剧情。"
         "同一连续画面排列不同成员，每位只出现一次，不生成同一成员的正侧背四视图。"
-        "成员共享已确认的群体身份、年代、服装规制和美术风格；"
+        "成员共享已确认的群体身份、年代、外观规制和美术风格；"
         "在已确认物种允许的范围内，脸型、眉眼、发型、身高、体型或外壳细节应各有区别；"
         "允许变化的服装细节可合理区分，禁止复制脸和相邻克隆成员。"
         "年龄、性别、族裔、物种只遵循原文及已确认设计，不无条件添加男女老幼、儿童或人类面孔。"
         "未说明的长相是美术设计建议，不冒充原文事实。"
-        "人物不互相遮挡，从头到脚完整展示，面部可读，均匀光线，中性背景；无主角混入、无文字水印。"
+        "成员不互相遮挡，完整展示轮廓与辨识特征，保留尾部、翼、触肢或机械附件，不强制人形直立或穿衣；均匀光线，中性背景；无主角混入、无文字水印。"
     )

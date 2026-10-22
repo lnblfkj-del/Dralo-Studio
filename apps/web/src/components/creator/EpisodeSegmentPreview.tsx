@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Film } from "lucide-react";
 import { getMediaPlaybackUrl } from "@/api/media";
 import type { EpisodeProductionPlan, Job, VideoSegment } from "@/types/api";
@@ -6,6 +6,8 @@ import { videoJobStatusLabel } from "@/domain/videoJobRecovery";
 import { SegmentVideoRecovery } from "./SegmentVideoRecovery";
 
 interface Props {
+  referenceFrame?: ReactNode;
+  referenceAssets?: ReactNode;
   projectId?: number;
   episodeId?: number;
   segment?: VideoSegment;
@@ -33,7 +35,7 @@ interface Props {
   onNegativePromptChange?: (value: string) => void;
 }
 
-export function EpisodeSegmentPreview({ projectId, episodeId, segment, onChoose, busy, error, onProduction, generationPlan, generationJob, generationBusy = false, generationError, onPlanGeneration, onStartGeneration, onCancelGenerationPlan, generationDuration, durationOptions = [], optionsIssue, optionsBlocked = false, negativePrompt = "", savedPrompt = "", priceLabel, settingsDisabled = false, settingsDirty = false, onGenerationDurationChange, onNegativePromptChange }: Props) {
+export function EpisodeSegmentPreview({ referenceFrame, referenceAssets, projectId, episodeId, segment, onChoose, busy, error, onProduction, generationPlan, generationJob, generationBusy = false, generationError, onPlanGeneration, onStartGeneration, onCancelGenerationPlan, generationDuration, durationOptions = [], optionsIssue, optionsBlocked = false, negativePrompt = "", savedPrompt = "", priceLabel, settingsDisabled = false, settingsDirty = false, onGenerationDurationChange, onNegativePromptChange }: Props) {
   const [chosenId, setChosenId] = useState<number | null>(null);
   const [media, setMedia] = useState<{ id: number; url: string } | null>(null);
   const [failedId, setFailedId] = useState<number | null>(null);
@@ -82,7 +84,9 @@ export function EpisodeSegmentPreview({ projectId, episodeId, segment, onChoose,
     {generationJob?.status === "failed" && generationJob.error_message && <p className="segment-rendering-error" role="alert">{generationJob.error_message}</p>}
     {generationJob?.execution_info?.reference_audio_status === "submitted" && <p role="status">参考音频已提交渠道：{generationJob.execution_info.reference_audio_media_ids?.map((id) => `#${id}`).join("、")}。声线效果待试听核对。</p>}
     {current && <div className="segment-candidate-controls"><label>候选版本<select aria-label="视频候选版本" value={current.id} onChange={(event) => setChosenId(Number(event.target.value))}>{versions.map((version) => <option key={version.id} value={version.id}>V{version.version}{version.is_final ? " · 已采用" : ` · ${version.candidate_status === "ready" ? "可采用" : "候选"}`}</option>)}</select></label><span className={`segment-candidate-state state-${candidateStatus}`}>{statusLabel}</span><button disabled={busy || current.is_final || !serverReady || readyId !== mediaId || failedId === mediaId || !onChoose || !current.input_fingerprint} onClick={() => segment && current.input_fingerprint && onChoose?.(segment.id, current.id, current.input_fingerprint)}>{current.is_final ? "已采用" : "采用为最终版本"}</button></div>}
-    {current && <div className="segment-candidate-evidence"><span>任务 #{current.source_job_id ?? "—"}</span><span>模型 #{current.provider_model_id ?? "—"}</span><span>输入 {current.input_fingerprint ? current.input_fingerprint.slice(0, 10) : "未记录"}</span>{current.adoption_block_reason && <p role="status">{current.adoption_block_reason}</p>}</div>}
+    {current && candidateStatus === "input_stale" && <p className="segment-candidate-notice" role="status">此视频基于旧版脚本或设置生成，仍可查看{serverReady ? "或采用" : ""}。</p>}
+    {current && <details className="segment-candidate-evidence"><summary>版本详情</summary><span>任务 #{current.source_job_id ?? "—"}</span><span>模型 #{current.provider_model_id ?? "—"}</span><span>输入 {current.input_fingerprint ? current.input_fingerprint.slice(0, 10) : "未记录"}</span>{current.adoption_block_reason && <p role="status">{current.adoption_block_reason}</p>}</details>}
+    {referenceFrame}
     {segment && <section className="segment-generation-settings" aria-label="视频生成设置">
       <header><strong>生成设置</strong><span>{settingsDirty ? "保存脚本后重新预检" : priceLabel}</span></header>
       <label>生成时长<select aria-label={`片段 ${segment.order} 生成时长`} disabled={settingsDisabled || !durationOptions.length} value={selectedDuration} onChange={(event) => onGenerationDurationChange?.(Number(event.target.value))}>
@@ -91,6 +95,7 @@ export function EpisodeSegmentPreview({ projectId, episodeId, segment, onChoose,
       </select></label>
       {optionsIssue && <p role="status">{optionsIssue}</p>}
       <details><summary>高级设置</summary>
+        {referenceAssets}
         <label>负向提示词<textarea aria-label={`片段 ${segment.order} 负向 Prompt`} disabled={settingsDisabled} value={negativePrompt} onChange={(event) => onNegativePromptChange?.(event.target.value)} /></label>
         <details className="segment-saved-prompt"><summary>查看生成提示词{settingsDirty ? "（待重新编译）" : ""}</summary><pre>{savedPrompt}</pre></details>
       </details>

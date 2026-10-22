@@ -76,6 +76,10 @@ async def retry_job(session: AsyncSession, job: Job) -> Job:
     from app.services.long_form_workflow import validate_job
     await validate_job(session, job)
     from app.services import job_state_service
+    parent = await session.get(Job, job.parent_job_id) if job.parent_job_id else job
+    if parent and (parent.payload or {}).get("asset_image_batch_contract") == "asset-image-batch.v6":
+        from app.services.asset_batch_scheduler import retry
+        return await retry(session, job)
     if job.status not in {JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
         raise ConflictError("仅失败或已取消的任务可以重试")
     if job.target_type in {"episode_content_planning", "episode_content_analysis", "episode_content_detail"}:

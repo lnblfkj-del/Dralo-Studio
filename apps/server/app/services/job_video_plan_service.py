@@ -62,7 +62,7 @@ async def build_episode_video_plan(
     from app.services import business_executor_service
 
     orchestrator_execution = await business_executor_service.resolve_execution(
-        session, "media_task_orchestrator"
+        session, "media_task_orchestrator", initialize=False,
     )
     model, provider = await _video_model_pair(session, provider_model_id)
     if production is None or production.active_plan_id is None:

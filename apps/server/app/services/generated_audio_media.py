@@ -31,3 +31,22 @@ async def inspect_audio(data, active=None):
             "-i", str(path), "-map", "0:a:0", "-f", "null", "-",
         ], timeout=60, active=active)
         return {"duration": duration}
+
+
+async def reference_sample(data):
+    """Bound reference samples without changing pitch or stretching short audio."""
+    await inspect_audio(data)
+    ffmpeg, _ = processing.executables()
+    with tempfile.TemporaryDirectory(prefix="voice-sample-", dir=settings.storage_path.resolve()) as directory:
+        source = Path(directory) / "source.mp3"
+        output = Path(directory) / "sample.wav"
+        await finish_storage_io(write_storage_bytes, settings, source, data)
+        await processing.command([
+            ffmpeg, "-v", "error", "-i", str(source), "-t", "5",
+            "-map", "0:a:0", "-vn", "-c:a", "pcm_s16le", str(output),
+        ], timeout=60, output=output)
+        info = await processing.probe(output)
+        duration = float(info.get("duration") or 0)
+        if not info.get("has_audio") or not math.isfinite(duration) or not 0 < duration <= 5.001:
+            raise ConflictError("参考声线截取失败，原始响应已保留")
+        return {"audio_bytes": output.read_bytes(), "duration": duration}

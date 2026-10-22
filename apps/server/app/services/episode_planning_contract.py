@@ -110,6 +110,15 @@ def validate_detail(plan: FrozenEpisodePlan, detail: SegmentDetail) -> None:
         shot.key for shot in segment.shots
     ):
         raise ValueError("Response must fill exactly the frozen segment shots")
+    from app.services.narrative_continuity import segment_context
+    context = segment_context(plan, detail.segment_key)
+    if context and (detail.entry_state != context["entry_state"]
+                    or detail.exit_state != context["exit_state"]):
+        raise ValueError(f"片段 {detail.segment_key} 的入场/出场状态偏离整场戏规划，请使用冻结状态")
+    if context:
+        staging = {beat["block_key"]: beat["staging"] for beat in context["beats"]}
+        if any(shot.action != staging[shot.key] for shot in detail.shots):
+            raise ValueError(f"片段 {detail.segment_key} 的动作偏离整场戏规划，请使用冻结动作")
 
 
 def assert_submission_ready(

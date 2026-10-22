@@ -13,6 +13,15 @@ from app.services.job_state_result_service import aggregate_parent_job
 from app.services.shot_lifecycle import SHOT_STATUS_SUPERSEDED
 
 async def cancel_job(session: AsyncSession, job: Job) -> Job:
+    parent = await session.get(Job, job.parent_job_id) if job.parent_job_id else job
+    if parent and (parent.payload or {}).get("asset_image_batch_contract") == "asset-image-batch.v6":
+        from app.services.asset_consistency_service import lock_project
+        from app.services.asset_batch_scheduler import lock_transition
+        await lock_transition(session, job)
+        await lock_project(session, parent.project_id)
+        await session.refresh(parent)
+        if job.id != parent.id:
+            await session.refresh(job)
     if job.status in TERMINAL_STATUSES:
         raise ConflictError("任务已结束，无法取消")
     changed = await session.execute(update(Job).where(

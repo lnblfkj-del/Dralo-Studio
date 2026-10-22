@@ -103,4 +103,5 @@ def compile_document(raw, shot_ids, bindings, references=()):
                   audio={"music": [], "ambience": [], "sound_effects": []},
                   camera=[{"shot_id": sid, "duration": weights[sid], "shot_size": "正文", "camera_angle": "正文", "camera_movement": "正文"} for sid in shot_ids],
                   performances=[{"shot_id": sid, "subject": "正文", "expression": "正文", "action": "正文"} for sid in shot_ids])
-    return script, "\n\n".join(lines).strip(), total
+    from app.services.segment_prompt_presentation import readable_prompt
+    return script, readable_prompt("\n\n".join(lines).strip()), total

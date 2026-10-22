@@ -300,6 +300,10 @@ export function ScriptAssetWorkflow({
     mutationFn: () => creationApi.recheckScriptAssetBreakdown(projectId),
     onSuccess: refresh,
   });
+  const recheckDeferred = useMutation({
+    mutationFn: () => creationApi.recheckDeferredAssetItems(projectId),
+    onSuccess: refresh,
+  });
   const acknowledgeSources = useMutation({
     mutationFn: () => creationApi.acknowledgeFormalScriptCandidateReviews(projectId),
     onSuccess: refresh,
@@ -349,15 +353,22 @@ export function ScriptAssetWorkflow({
       {scopeReview.data.scopes.map(scope => <div key={scope.scope_key}><span>第 {scope.episode_numbers.join("、")} 集</span><span>{scope.group === "visual" ? (necessaryOnly ? "必要资产" : "视觉资产") : "声音资产"}</span><strong data-state={scope.status}>{({ succeeded: "已完成", failed: "待恢复", queued: "排队中", running: "生成中", processing: "保存中", retrying: "恢复中", waiting: "等待视觉结果", cancelled: "已取消" } as Record<string, string>)[scope.status] ?? "待核对"}</strong></div>)}
     </div></details>}
     {scopeReview.isError && <p role="alert">范围进度读取失败，暂不可局部入库。<Button onClick={() => void scopeReview.refetch()}>重新读取</Button></p>}
-    {deferredCount > 0 && <section className="script-asset-notice warning" aria-label="待核对素材">
-      <div><strong>{deferredCount} 项素材待核对，有效候选已保留</strong>
-        <details onToggle={event => { if (event.currentTarget.open) setShowDeferred(true); }}><summary>查看待核对项</summary>
-          {showDeferred && <DeferredAssetReview projectId={projectId} breakdown={breakdown} refresh={refresh} disabled={Boolean(sourceBlocked || busy)} />}
-        </details>
-      </div>
-      <Button icon={<Check size={14} />} disabled={sourceBlocked || !partialCandidates.length || scopeReview.isFetching} onClick={openPartialConfirm}>确认有效候选（{partialCandidates.length} 项）</Button>
-      <Link to={`/projects/${projectId}/assets`}>补建素材</Link>
+    {deferredCount > 0 && <section className="asset-deferred-section" aria-label="待核对素材">
+      <header className="asset-deferred-section__header">
+      <div><strong>待核对素材 <span>{deferredCount}</span></strong><p>有效候选已保留</p></div>
+      <div className="asset-deferred-section__actions">
+      <Button icon={<RotateCcw size={14} />} loading={recheckDeferred.isPending}
+        disabled={sourceBlocked || busy || breakdown.status !== "awaiting_confirmation"}
+        title="使用已保存结果重新校验，不调用模型、不产生生成费用"
+        onClick={() => recheckDeferred.mutate()}>重新校验已保存结果</Button>
+      <Button icon={<Check size={14} />} disabled={sourceBlocked || recheckDeferred.isPending || !partialCandidates.length || scopeReview.isFetching} onClick={openPartialConfirm}>确认有效候选（{partialCandidates.length} 项）</Button>
+      </div></header>
+      <details onToggle={event => { if (event.currentTarget.open) setShowDeferred(true); }}><summary>查看待核对项</summary>
+        {showDeferred && <DeferredAssetReview projectId={projectId} breakdown={breakdown} refresh={refresh} disabled={Boolean(sourceBlocked || busy)} />}
+      </details>
     </section>}
+    {recheckDeferred.error && <p role="alert">{toErrorMessage(recheckDeferred.error)}</p>}
+    {recheckDeferred.isSuccess && <p role="status">已处理 {recheckDeferred.data.recovered_count} 项，剩余 {recheckDeferred.data.remaining_count} 项待核对。</p>}
 
     {(breakdown.status === "awaiting_confirmation" || (partial && candidates.length > 0)) && <div className="script-asset-review">
       <header><div><h3>资产拆解结果</h3><p>{partial ? "提取尚未完成，已完成的结果保留。" : `${candidates.length} 项候选 · ${readyCount} 项可入库 · ${issueCandidates.length} 项待决定 · ${excludedCount} 项排除或合并`}</p></div></header>

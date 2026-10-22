@@ -3,8 +3,8 @@
 from copy import deepcopy
 from datetime import UTC, datetime
 
-from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.errors import ConflictError
 from app.services.asset_extraction_review import candidate_signature
@@ -17,6 +17,16 @@ FIELDS = {"age", "appearance", "costume", "hair", "makeup", "injury", "stage", "
 
 def apply_decision(candidate, payload, actor_id, *, context=None):
     attrs = candidate.setdefault("attributes", {})
+    if payload.background_only:
+        if (candidate.get("asset_type") != "character" or attrs.get("character_form") not in {"crowd", "fixed_group"}
+                or payload.keep_independent or payload.accepted_fact_indexes or payload.field_values or payload.confirm_usage_relation):
+            raise ConflictError("仅群体角色可以按背景群演处理，请勿同时提交其他修改")
+        candidate["selected"] = False
+        attrs.setdefault("manual_production_reviews", []).append({
+            "background_only": True, "actor_id": actor_id, "reason": payload.reason,
+            "reviewed_at": datetime.now(UTC).isoformat(),
+        })
+        return
     facts = attrs.get("facts") or []
     conflicts = set(attrs.get("fact_conflicts") or [])
     identity_conflicts = attrs.get("identity_fact_conflicts") or {}
@@ -141,7 +151,10 @@ async def _resolve_candidate(session, item, breakdown, candidate_id, payload, ac
 
 
 async def resolve_many(session, item, entries, actor_id):
-    from app.services.creation_breakdown_review import _asset_breakdown_for_review, _refresh_asset_candidate_counts
+    from app.services.creation_breakdown_review import (
+        _asset_breakdown_for_review,
+        _refresh_asset_candidate_counts,
+    )
     await lock_breakdown_session(session, item)
     await _asset_breakdown_for_review(session, item, _locked=True)
     settings = deepcopy(item.settings)

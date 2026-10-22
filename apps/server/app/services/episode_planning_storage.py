@@ -24,15 +24,26 @@ def validate_analysis_snapshot(plan: FrozenEpisodePlan, analysis: ContentAnalysi
         return
     if analysis is None or fingerprint(analysis) != plan.content_analysis_fingerprint:
         raise ValueError("Frozen content analysis missing or changed")
-    sources = PlanningSources(script_fingerprint=plan.script_fingerprint, units=plan.sources)
+    sources = PlanningSources(script_fingerprint=plan.script_fingerprint, units=plan.sources,
+                              identity_catalog=plan.identity_catalog)
+    if plan.continuity != analysis.continuity:
+        raise ValueError("Frozen continuity differs from the scene analysis")
     if content_timing(sources, analysis, plan.timing.editorial_target_ms) != plan.timing:
         raise ValueError("Frozen content estimate changed")
     shots = [shot for segment in plan.segments for shot in segment.shots]
     if [shot.key for shot in shots] != [block.key for block in analysis.blocks]:
         raise ValueError("Frozen shot structure differs from analysis")
+    modes = {mode.key: mode for mode in plan.capability.modes}
+    single_shot_limits = {}
+    for segment in plan.segments:
+        rule = modes[segment.mode_key].durations
+        maximum = rule.values_ms[-1] if rule.kind == "discrete" else rule.maximum_ms
+        if len(segment.shots) == 1 and segment.requested_duration_ms == maximum:
+            single_shot_limits[segment.shots[0].key] = maximum
     for shot, block in zip(shots, analysis.blocks, strict=True):
+        estimate = "minimum_ms" if block.duration("estimated_ms") > single_shot_limits.get(shot.key, float("inf")) else "estimated_ms"
         if shot.source_keys != block.source_keys or not block.duration(
-            "estimated_ms"
+            estimate
         ) <= shot.end_ms - shot.start_ms <= block.duration("maximum_ms"):
             raise ValueError("Frozen performance timing differs from analysis")
     blocks = {block.key: block for block in analysis.blocks}
@@ -147,5 +158,7 @@ def prepare_saved_detail(
     detail = SegmentDetail.model_validate_json(response.raw_response)
     if detail.segment_key != response.segment_key:
         raise ValueError("Response targets a different segment")
+    from app.services.narrative_continuity import bind_detail_states
+    detail = bind_detail_states(plan, detail)
     validate_detail(plan, detail)
     return detail

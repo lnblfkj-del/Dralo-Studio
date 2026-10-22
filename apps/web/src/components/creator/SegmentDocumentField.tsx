@@ -3,6 +3,7 @@ import { EditorContent, Node, mergeAttributes, useEditor, NodeViewWrapper, React
 import StarterKit from "@tiptap/starter-kit";
 import { MediaThumbnail } from "@/components/assets/MediaThumbnail";
 import { ScriptTool } from "./SegmentScriptTool";
+import { SegmentScriptPresentation } from "./SegmentScriptPresentation";
 import { documentText } from "@/domain/segmentDocument";
 import { Camera, Clapperboard, Clock3, FileImage, FolderOpen, Mic, Volume2, Wrench } from "lucide-react";
 
@@ -31,7 +32,7 @@ function AssetToken({ node }: NodeViewProps) {
   const mediaId = binding ? binding.media_file_id : node.attrs.media_file_id;
   const voice = (binding?.asset_type ?? node.attrs.asset_type) === "voice";
   return <NodeViewWrapper as="span" className="document-asset-token" contentEditable={false} title={`${node.attrs.name} · ${node.attrs.asset_version_id ? "指定版本 " + node.attrs.asset_version_id : "当前采用素材"}`}>
-    <span className="document-token-thumb">{voice ? <Volume2 size={15} /> : mediaId && binding?.delivery !== "text" ? <MediaThumbnail mediaId={Number(mediaId)} alt={`${node.attrs.name}引用预览`} className="document-token-image" /> : <FileImage size={15} />}</span><span>{node.attrs.name}</span>
+    <span className="document-token-thumb">{voice ? <Volume2 size={15} /> : mediaId ? <MediaThumbnail mediaId={Number(mediaId)} alt={`${node.attrs.name}引用预览`} className="document-token-image" /> : <FileImage size={15} />}</span><span>{node.attrs.name}</span>
   </NodeViewWrapper>;
 }
 const Mention = Node.create({
@@ -61,8 +62,9 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
   const pendingRange = useRef<{ from: number; to: number } | null>(null);
   const pendingAsset = useRef<Row | null>(null);
   const applied = useRef<number | null>(null);
+  const projectedDocument = useRef(JSON.stringify(fieldContent(value, document, bindings)));
   const editor = useEditor({
-    extensions: [StarterKit.configure({ heading: false, blockquote: false, bulletList: false, orderedList: false, codeBlock: false, horizontalRule: false }), Mention, ScriptTool],
+    extensions: [StarterKit.configure({ heading: false, blockquote: false, bulletList: false, orderedList: false, codeBlock: false, horizontalRule: false }), Mention, ScriptTool, ...(tools ? [SegmentScriptPresentation] : [])],
     content: fieldContent(value, document, bindings),
     editable: !disabled,
     editorProps: { attributes: { role: "textbox", "aria-label": label, "aria-multiline": "true" } },
@@ -93,7 +95,13 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
   }
   useEffect(() => { editor?.setEditable(!disabled, false); }, [disabled, editor]);
   useEffect(() => {
-    if (editor && documentText(editor.getJSON()) !== value && !editor.isFocused) editor.commands.setContent(fieldContent(value, document, bindings), { emitUpdate: false });
+    if (!editor || editor.isFocused) return;
+    const content = fieldContent(value, document, bindings);
+    const signature = JSON.stringify(content);
+    if (documentText(editor.getJSON()) !== value || signature !== projectedDocument.current) {
+      editor.commands.setContent(content, { emitUpdate: false });
+      projectedDocument.current = signature;
+    }
   }, [document, editor, value, bindings]);
   const insert = (binding: Row, range = pendingRange.current ?? query) => {
     if (!editor || disabled) return;
@@ -113,7 +121,7 @@ export function SegmentDocumentField({ label, value, document, disabled, binding
   const options = choices.filter((item) => (scope === "all" || item.in_episode !== false) && `${item.asset_name} ${item.view_label ?? ""}`.toLowerCase().includes((query?.text ?? "").toLowerCase()));
   const choose = (binding: Row) => {
     const bound = bindings.find((item) => item.asset_id === binding.asset_id && item.asset_version_id === binding.asset_version_id && item.resolved !== false);
-    if (bound) insert(bound);
+    if (bound || !onSelectAsset) insert(bound ?? binding);
     else { pendingRange.current = query; pendingAsset.current = binding; setQuery(null); onSelectAsset?.(binding, label); }
   };
   const toolOptions = [{ kind: "shot", name: "添加镜头", icon: Clapperboard }, { kind: "duration", name: "镜头时长", icon: Clock3 }, { kind: "movement", name: "运镜库", icon: Camera }, { kind: "dialogue", name: "添加对白", icon: Mic }].filter((item) => item.name.includes(query?.text ?? ""));

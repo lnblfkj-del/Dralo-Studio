@@ -4,6 +4,7 @@
 
 import re
 from copy import deepcopy
+from app.services.asset_quantity_evidence import vague_group_matches
 
 
 def normalize_fields(document, sources):
@@ -82,9 +83,7 @@ def normalize_fields(document, sources):
                                 continue
                             source = source_map.get(occurrence.get("source_segment_id"))
                             quote = occurrence.get("evidence_text") or ""
-                            if source and quote in source["text"] and re.search(
-                                r"(?:数十|数百|数千|数万|多|众多)(?:名|位|个)?" + re.escape(label), quote
-                            ):
+                            if source and quote in source["text"] and vague_group_matches(quote, label):
                                 labels.append(label)
                     if len(set(labels)) == 1:
                         row.update(character_form="crowd", group_label=labels[0], group_size=None)

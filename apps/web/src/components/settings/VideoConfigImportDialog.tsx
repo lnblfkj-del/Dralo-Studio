@@ -4,7 +4,7 @@ import {Button, Dialog} from '@/components/ui';
 import {toErrorMessage} from '@/api/client';
 import * as api from '@/api/videoTools';
 import {VideoPackageSummary} from './VideoPresetPicker';
-import {downloadVideoJSON, parseVideoPackageText, videoPackageChanges, VIDEO_PACKAGE_MAX_BYTES} from './videoConfigImport';
+import {downloadVideoJSON, parseVideoPackageText, videoImportErrors, videoRepairPrompt, videoPackageChanges, VIDEO_PACKAGE_MAX_BYTES} from './videoConfigImport';
 import '@/styles/video-config-import.css';
 
 export function VideoConfigImportDialog({providerId, identifier, current, onUse, onClose}: {
@@ -19,6 +19,8 @@ export function VideoConfigImportDialog({providerId, identifier, current, onUse,
   const [trust, setTrust] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [issues, setIssues] = useState<string[]>([]);
+  const [repair, setRepair] = useState('');
   const [helpError, setHelpError] = useState('');
   const [prompt, setPrompt] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
@@ -28,11 +30,14 @@ export function VideoConfigImportDialog({providerId, identifier, current, onUse,
   const inFlight = useRef(false), revision = useRef(0), installed = useRef(false);
   let before: api.VideoPackage | null = null;
   try {before = current?.() ?? null;} catch { /* Incomplete settings may be repaired by an import. */ }
-  const invalidate = () => {revision.current++; setPreview(null); setTrust(false); installed.current = false; setError('');};
+  const invalidate = () => {revision.current++; setPreview(null); setTrust(false); installed.current = false; setError(''); setIssues([]); setRepair('');};
   const act = async (task: () => Promise<void>, help = false) => {
     if (inFlight.current) return;
     inFlight.current = true; setBusy(true); help ? setHelpError('') : setError('');
-    try {await task();} catch (reason) {(help ? setHelpError : setError)(toErrorMessage(reason));}
+    try {await task();} catch (reason) {
+      if (help) setHelpError(toErrorMessage(reason));
+      else {setError(toErrorMessage(reason)); setIssues(videoImportErrors(reason));}
+    }
     finally {inFlight.current = false; setBusy(false);}
   };
   const read = (load: () => Promise<api.VideoPackage>, label: string) => {
@@ -50,7 +55,7 @@ export function VideoConfigImportDialog({providerId, identifier, current, onUse,
   const service = !!preview?.video_config.integration?.service_adapter;
   const changes = preview ? videoPackageChanges(before, preview) : [];
   return <Dialog open title="导入视频配置" className="video-config-import-dialog" size="medium" busy={busy}
-    dirty={!!text.trim() || !!link.trim()} onClose={onClose} footer={requestClose => <>
+    dirty={!!text.trim() || !!link.trim() || !!preview} onClose={onClose} footer={requestClose => <>
       <Button disabled={busy} onClick={requestClose}>取消</Button>
       <Button variant="primary" disabled={busy || !preview || (service && !trust)} onClick={() => void act(async () => {
         if (!preview) return;
@@ -76,10 +81,17 @@ export function VideoConfigImportDialog({providerId, identifier, current, onUse,
       }} />
       {mode === 'paste' && <Button disabled={busy || !text.trim()} onClick={() => void read(async () => api.importVideoPackage(parseVideoPackageText(text)), '粘贴的配置')}>读取配置</Button>}
       <details className="video-import-more"><summary>更多导入方式</summary><label>JSON 文件链接<input type="url" aria-label="视频配置链接" value={link} disabled={busy} placeholder="https://…/video-config.json" onChange={e => {invalidate(); setLink(e.target.value);}} /></label><Button icon={<Link2 size={15} />} disabled={busy || !link.trim()} onClick={() => void read(() => api.importVideoLink(link.trim()), '链接配置')}>读取链接</Button></details>
-      {error && <p role="alert" className="video-check-error">{error}</p>}
+      {error && <section role="alert" className="video-check-error"><strong>配置未通过校验</strong><ul>{(issues.length ? issues : [error]).map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+        <Button icon={<Copy size={15} />} disabled={busy} onClick={() => void act(async () => {
+          const value = videoRepairPrompt(issues.length ? issues : [error]);
+          try {await navigator.clipboard.writeText(value); setRepair('修正提示词已复制');}
+          catch {setRepair(value);}
+        }, true)}>复制修正提示词</Button>{repair && <pre role="status">{repair}</pre>}
+      </section>}
       {preview && <section className="video-import-result" aria-label="配置预览">
         <h3>{preview.name}</h3><dl className="video-package-summary"><dt>来源</dt><dd>{source}</dd><dt>格式版本</dt><dd>{preview.schema_version}</dd><dt>供应商版本</dt><dd>文件未声明</dd><dt>适用模型</dt><dd>{identifier || '待填写模型标识'} · 文件未声明适用模型清单，须按渠道资料核对</dd></dl>
         <VideoPackageSummary value={preview} />
+        <Button icon={<Download size={15} />} disabled={busy} onClick={() => downloadVideoJSON(preview, 'video-config.json')}>下载已校验配置</Button>
         <p>{before ? `将替换：${changes.join('、') || '配置内容相同'}。` : '将带入接入方式、接口映射、支持范围、默认设置、脚本偏好和附加参数。'}使用后仍须{current ? '保存模型' : '添加模型'}；不修改渠道密钥和连接地址。</p>
         {service && <div className="video-import-service"><strong>这份配置需要独立适配服务</strong><p>服务必须事先部署；文件不会部署或执行程序。服务将接收提示词和素材，版本必须保留旧任务接口。点击“使用这份配置”将安装服务配置记录，再加入模型编辑稿。</p><label><input type="checkbox" checked={trust} disabled={busy} onChange={e => setTrust(e.target.checked)} />确认服务由我方部署或信任，并同意安装这份服务配置</label></div>}
         <details><summary>查看完整配置</summary><pre>{JSON.stringify(preview, null, 2)}</pre></details>

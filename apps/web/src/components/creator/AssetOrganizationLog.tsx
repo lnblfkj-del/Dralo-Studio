@@ -16,7 +16,8 @@ export function organizationNotes(candidate: ScriptAssetCandidate) {
   if (identity?.scope === "source") notes.push("仅在对应出场范围匹配");
   const claims = attrs.character_alias_claims as { status: string }[] | undefined;
   if (claims?.some(claim => !["confirmed", "proposed"].includes(claim.status))) notes.push("有歧义的别名未参与全局匹配");
-  if (!candidate.selected || candidate.merged_into_candidate_id) notes.push(candidate.merged_into_candidate_id ? "已合并" : "已排除");
+  if (!candidate.selected || candidate.merged_into_candidate_id) notes.push(candidate.merged_into_candidate_id ? "已合并"
+    : (attrs.manual_production_reviews as { background_only?: boolean }[] | undefined)?.some(row => row.background_only) ? "背景群演，原文保留" : "已排除");
   return notes;
 }
 

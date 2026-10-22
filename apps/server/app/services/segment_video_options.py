@@ -111,6 +111,7 @@ async def inspect_options(session, episode, payload):
         raise ConflictError("请先在项目设置中确定画幅比例")
     cap = await load_capability(session, current["provider_model_id"])
     refs = await resolve_materials(session, project, payload.refs, strict=False)
+    refs["shot_frames"] = (segment.get("refs") or {}).get("shot_frames", []) if payload.parameters == segment.get("parameters") else []
     states = refs.get("asset_materials", [])
     material_issue = next((s.get("message") or "引用素材待准备" for s in states
                            if s.get("material_status") == "invalid" or

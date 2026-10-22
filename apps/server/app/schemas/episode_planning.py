@@ -3,6 +3,7 @@
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
 from app.schemas.screenplay_voice import VoiceSource
 
 Key = Annotated[str, Field(min_length=1, max_length=128, pattern=r"\S")]
@@ -198,6 +199,44 @@ class PlannedSegment(Contract):
         return self
 
 
+class NarrativeIdentity(Contract):
+    key: Key
+    name: str = Field(min_length=1, max_length=255)
+    kind: Literal["character", "scene", "prop", "costume", "other"]
+    asset_id: int | None = Field(default=None, gt=0)
+    aliases: tuple[Annotated[str, Field(min_length=1, max_length=255)], ...] = ()
+    description: str | None = Field(default=None, min_length=1, max_length=8000)
+    character_asset_ids: tuple[Annotated[int, Field(gt=0)], ...] = ()
+
+
+class StateChange(Contract):
+    entity_key: Key
+    field: Literal["location", "posture", "injury", "costume", "condition", "holder", "presence", "lighting"]
+    before: str | None = Field(default=None, min_length=1, max_length=500)
+    after: str = Field(min_length=1, max_length=500)
+    source_key: Key
+    evidence: str = Field(min_length=1, max_length=2000)
+
+
+class NarrativeBeat(Contract):
+    block_key: Key
+    staging: str = Field(min_length=1, max_length=2000)
+    changes: tuple[StateChange, ...] = ()
+
+
+class NarrativeConcern(Contract):
+    source_key: Key
+    evidence: str = Field(min_length=1, max_length=2000)
+    problem: str = Field(min_length=1, max_length=2000)
+
+
+class NarrativeContinuity(Contract):
+    version: Literal["narrative-continuity.v1"]
+    identities: tuple[NarrativeIdentity, ...] = Field(min_length=1, max_length=500)
+    beats: tuple[NarrativeBeat, ...] = Field(min_length=1, max_length=500)
+    unresolved: tuple[NarrativeConcern, ...] = ()
+
+
 class FrozenEpisodePlan(Contract):
     contract_version: Literal["episode-planning.v1"]
     execution_epoch: Key
@@ -211,6 +250,8 @@ class FrozenEpisodePlan(Contract):
     timing: ContentTiming
     capability: VideoCapability
     sources: tuple[SourceUnit, ...] = Field(min_length=1)
+    identity_catalog: tuple[NarrativeIdentity, ...] = Field(default=(), exclude_if=lambda value: not value)
+    continuity: NarrativeContinuity | None = Field(default=None, exclude_if=lambda value: value is None)
     segments: tuple[PlannedSegment, ...] = Field(min_length=1)
     planned_timeline_ms: Milliseconds
 
@@ -256,8 +297,8 @@ class SegmentDetail(Contract):
     plan_fingerprint: Digest
     segment_key: Key
     shots: tuple[ShotDetail, ...] = Field(min_length=1)
-    entry_state: str = Field(min_length=1, max_length=4000)
-    exit_state: str = Field(min_length=1, max_length=4000)
+    entry_state: str = Field(min_length=1, max_length=32000)
+    exit_state: str = Field(min_length=1, max_length=32000)
 
 
 class PlanningTask(Contract):

@@ -29,6 +29,8 @@ def _effective_parameters(model, parameters):
     effective = {**request_defaults(model), **parameters}
     # Administrator evidence is an input-planning record, never a wire field.
     effective.pop("episode_planning_capability", None)
+    # Material-repair provenance belongs to the saved plan, not provider parameters.
+    effective.pop("material_refresh", None)
     return effective
 
 
@@ -177,8 +179,10 @@ def compile_video_input(provider, model, references: list[dict[str, Any]], param
     from app.services.video_configuration import projected_params
 
     max_refs = projected_params(model).get("max_reference_images")
+    if ordinary and (type(max_refs) is not int or max_refs < 0):
+        blockers.append(f"视频模型 {model.model_id} 尚未配置有效的参考图上限，请核对当前模型能力")
     if type(max_refs) is int and len(ordinary) > max_refs:
-        blockers.append(f"普通参考图 {len(ordinary)} 张，超过模型配置上限 {max_refs} 张")
+        blockers.append(f"视频模型 {model.model_id}：普通参考图 {len(ordinary)} 张，超过模型配置上限 {max_refs} 张")
     for role, count in (("first_frame", int(bool(first))), ("last_frame", int(bool(last))),
                         ("reference_image", len(ordinary))):
         if count and not any(item.get("source") == role for item in actions):

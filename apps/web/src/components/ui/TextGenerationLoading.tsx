@@ -45,3 +45,7 @@ export function TextGenerationQuip() {
 export function TextGenerationLoading({ label, quip = false }: { label: string; quip?: boolean }) {
   return <div className="text-generation-loading"><div className="text-generation-loading__status" role="status"><TextGenerationIcon /><span>{label}</span></div>{quip && <TextGenerationQuip />}</div>;
 }
+
+export function TextGenerationSkeleton() {
+  return <div className="text-generation-skeleton" aria-hidden="true">{Array.from({ length: 9 }).map((_, index) => <i key={index} />)}</div>;
+}

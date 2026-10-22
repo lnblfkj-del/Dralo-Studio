@@ -3,6 +3,8 @@
 from fastapi import APIRouter, status
 
 from app.api.deps import EpisodeDep, SessionDep
+from app.core.local_write_session import local_write_session
+from app.models import Episode
 from app.api.project_episode_planning_routes import router as content_planning_router
 from app.schemas.episode_segments import (
     SegmentContinuityOut,
@@ -180,18 +182,17 @@ async def select_segment_video_version(
     version_id: int,
     payload: SegmentVideoVersionSelectRequest,
     episode: EpisodeDep,
-    session: SessionDep,
 ) -> SegmentVideoVersionOut:
-    version = await segment_plan_service.select_segment_video_version(
-        session,
-        episode,
-        segment_id,
-        version_id,
-        expected_plan_revision=payload.expected_plan_revision,
-        expected_input_fingerprint=payload.expected_input_fingerprint,
-    )
-    await session.commit()
-    plan = await segment_plan_service.get_active_plan(session, episode)
+    # Acquire SQLite write ownership before reading the mutable adoption state.
+    async with local_write_session() as session:
+        current_episode = await session.get(Episode, episode.id)
+        version = await segment_plan_service.select_segment_video_version(
+            session, current_episode, segment_id, version_id,
+            expected_plan_revision=payload.expected_plan_revision,
+            expected_input_fingerprint=payload.expected_input_fingerprint,
+        )
+        await session.commit()
+        plan = await segment_plan_service.get_active_plan(session, current_episode)
     selected = next(
         item
         for segment in plan["segments"] if segment["id"] == segment_id

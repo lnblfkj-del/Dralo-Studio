@@ -64,14 +64,15 @@ async def project_draft(session, parent, actor_id, *, expected_fingerprint):
     )
 
 
-async def read_projection(session, parent, *, expected_fingerprint):
+async def read_projection(session, parent, *, expected_fingerprint, production_plan=None):
     """Verify an existing projection without creating or updating production data."""
     return await _projection(
-        session, parent, None, expected_fingerprint=expected_fingerprint, create=False
+        session, parent, None, expected_fingerprint=expected_fingerprint, create=False,
+        production_plan=production_plan,
     )
 
 
-async def _projection(session, parent, actor_id, *, expected_fingerprint, create):
+async def _projection(session, parent, actor_id, *, expected_fingerprint, create, production_plan=None):
     if create:
         parent = await workflow._lock_parent(session, parent.id)
     # A new unactivated revision supersedes old writes, not the active video's
@@ -104,17 +105,26 @@ async def _projection(session, parent, actor_id, *, expected_fingerprint, create
         "video_submission_ready": False,
     }
     from app.services.segment_asset_references import automatic_references, catalog
-    assets = await catalog(session, episode.project_id)
+    # Current-revision reads compare immutable content only; live materials are
+    # resolved separately by video preflight, without rebuilding the whole catalog here.
+    check_material_refs = create or production_plan is None
+    assets = await catalog(session, episode.project_id) if check_material_refs else []
     units = [unit.model_dump(mode="json") for unit in plan.sources]
     values = [
         segment_values(plan, item, order, automatic_references(
             assets, episode, units, {source["key"] for shot in item["shots"] for source in shot["sources"]}
-        ))
+        ) if check_material_refs else None)
         for order, item in enumerate(assembly["segments"], start=1)
     ]
     projection = parent.payload.get("production_projection")
     if projection:
-        stored = await session.get(EpisodeProductionPlan, projection["plan_id"])
+        # Video preflight validates the active revision against the immutable script.
+        # Automatic material corrections may create a successor to the original draft.
+        stored = production_plan if not create and production_plan is not None else await session.get(
+            EpisodeProductionPlan, projection["plan_id"])
+        stored_parameters = dict(stored.parameters or {}) if stored is not None else {}
+        if not create and production_plan is not None:
+            stored_parameters.pop("material_refresh", None)
         if (
             stored is None
             or stored.episode_id != episode.id
@@ -122,7 +132,7 @@ async def _projection(session, parent, actor_id, *, expected_fingerprint, create
             or stored.workspace_id != episode.workspace_id
             or stored.source_type != SOURCE_TYPE
             or stored.status not in {"draft", "confirmed"}
-            or stored.parameters != parameters
+            or stored_parameters != parameters
             or stored.source_script_revision != plan.script_revision
             or stored.provider_model_id != plan.capability.provider_model_id
             or stored.model_capability_snapshot != plan.capability.model_dump(mode="json")
@@ -145,8 +155,11 @@ async def _projection(session, parent, actor_id, *, expected_fingerprint, create
             or any(
                 getattr(segment, key) != value
                 for key, value in expected.items()
-                if key != "status" or stored.status == "draft"
+                if (key != "status" or stored.status == "draft")
+                and not (key == "refs" and not create and production_plan is not None)
             )
+            or (not create and production_plan is not None
+                and (segment.refs or {}).get("content_segment") != expected["refs"]["content_segment"])
             for segment, expected in zip(segments, values, strict=True)
         ):
             raise ConflictError("生产片段已被修改，不能假装保存成功或覆盖修改")

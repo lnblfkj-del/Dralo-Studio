@@ -4,7 +4,15 @@ from typing import Annotated, Literal, Self
 
 from pydantic import Field, model_validator
 
-from app.schemas.episode_planning import Contract, Digest, Key, MediaReference, SourceUnit
+from app.schemas.episode_planning import (
+    Contract,
+    Digest,
+    Key,
+    MediaReference,
+    NarrativeContinuity,
+    NarrativeIdentity,
+    SourceUnit,
+)
 
 Duration = Annotated[int, Field(gt=0, le=3_600_000)]
 
@@ -62,6 +70,7 @@ class ContentAnalysis(Contract):
     contract_version: Literal["episode-timing.v1"]
     source_fingerprint: Digest
     blocks: tuple[ContentBlock, ...] = Field(min_length=1, max_length=500)
+    continuity: NarrativeContinuity | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def unique_blocks(self) -> Self:
@@ -75,3 +84,4 @@ class ContentAnalysis(Contract):
 class PlanningSources(Contract):
     script_fingerprint: Digest
     units: tuple[SourceUnit, ...] = Field(min_length=1)
+    identity_catalog: tuple[NarrativeIdentity, ...] = Field(default=(), exclude_if=lambda value: not value)

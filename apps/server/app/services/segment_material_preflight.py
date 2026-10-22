@@ -7,29 +7,41 @@ from app.models import CreationSession, Episode
 
 
 def unresolved_materials(breakdown, episode_number, episode_text, segment_text):
-    """Literal matches localize known names; unknown scope stays conservative."""
+    """Only source-localized materials can block this segment's paid request.
+
+    Unlocalized extraction warnings remain in asset review, not every segment.
+    """
+    def appears(row, name):
+        labels = [name, *(row.get("aliases") or [])]
+        return any(isinstance(label, str) and label.strip() and label.strip() in segment_text
+                   for label in labels)
+
     pending = []
+    excluded_ids = {row.get("candidate_id") for row in breakdown.get("candidates", [])
+                    if not row.get("selected", True) and any(review.get("background_only")
+                    for review in (row.get("attributes") or {}).get("manual_production_reviews", []))}
     for scope in (breakdown.get("review_items_by_scope") or {}).values():
         if episode_number not in scope.get("episode_numbers", []):
             continue
         for row in scope.get("items", []):
             name = str(row.get("name") or "").strip()
-            if name and name in episode_text and name not in segment_text:
-                continue
-            pending.append(name or "未命名素材")
+            if appears(row, name):
+                pending.append(name or "未命名素材")
     for row in breakdown.get("candidates") or []:
         if (not row.get("selected", True) or not row.get("needs_review")
                 or row.get("confirmed_in_current_scope")
                 or episode_number not in row.get("episode_numbers", [])):
             continue
         name = str(row.get("name") or "").strip()
-        if not name or name not in episode_text or name in segment_text:
+        if appears(row, name):
             pending.append(name or "未命名素材")
     for issue in breakdown.get("validation_issues") or []:
+        if issue.get("candidate_id") is not None and issue["candidate_id"] in excluded_ids:
+            continue
         if issue.get("severity") != "blocking" or episode_number not in issue.get("episode_numbers", []):
             continue
         name = str(issue.get("character_name") or "").strip()
-        if not name or name not in episode_text or name in segment_text:
+        if appears(issue, name):
             pending.append(name or "来源待核对素材")
     return list(dict.fromkeys(pending))
 

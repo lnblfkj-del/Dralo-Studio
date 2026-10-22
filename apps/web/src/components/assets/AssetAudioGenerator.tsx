@@ -19,7 +19,7 @@ import { PriceEstimate } from "@/components/settings/PriceEstimate";
 import "@/styles/asset-audio-generator.css";
 
 const ACTIVE = new Set(["queued", "claimed", "running", "processing", "downloading", "retrying"]);
-const STATUS: Record<string, string> = {queued:"排队中",claimed:"准备中",running:"生成中",processing:"处理中",downloading:"保存中",retrying:"等待恢复",succeeded:"已生成候选",failed:"生成失败",cancelled:"已取消"};
+const STATUS: Record<string, string> = {queued:"排队中",claimed:"准备中",running:"生成中",processing:"处理中",downloading:"保存中",retrying:"等待恢复",succeeded:"已生成",failed:"生成失败",cancelled:"已取消"};
 
 function readPending(key: string): AssetAudioRequest | null {
   try {
@@ -137,6 +137,6 @@ export function AssetAudioGenerator({projectId,assetId,revision,usage,binding,in
     {error && <p role="alert">{toErrorMessage(error)}</p>}
     {pending ? <Button disabled={submit.isPending || busy || task.isPending || task.isError} onClick={()=>submit.mutate()}>核对并恢复原提交</Button> : <Button variant="primary" icon={music ? <Music2 size={14}/> : <Mic size={14}/>} disabled={!ready || submit.isPending} onClick={()=>setConfirm(true)}>生成{label}</Button>}
     <ConfirmDialog open={confirm} title={`确认生成${label}`} confirmLabel="确认并提交" confirmDisabled={!ready} onClose={()=>setConfirm(false)} onConfirm={()=>{setConfirm(false);submit.mutate();}}
-      message={<><p>{effects||design?label:music ? supportsSongs&&song?'歌曲':'纯音乐' : `${reference?'参考样本':'后期配音'} · 音色：${voiceLabel(model,resolvedVoice)}`} · {model?.name}</p>{reference&&<p>{description}</p>}<p>{prompt}</p>{supportsSongs&&song&&lyrics.trim()&&<p>{lyrics}</p>}<p>将调用模型并产生渠道费用；成功后保留为候选，请试听后采用。重新生成可能再次收费，取消不代表退款。</p>{model && <PriceEstimate providerId={model.provider_id} modelId={model.id} prompt={prompt} parameters={parameters}/>}</>}/>
+      message={<><p>{effects||design?label:music ? supportsSongs&&song?'歌曲':'纯音乐' : `${reference?'参考样本':'后期配音'} · 音色：${voiceLabel(model,resolvedVoice)}`} · {model?.name}</p>{reference&&<p>{description}</p>}<p>{prompt}</p>{supportsSongs&&song&&lyrics.trim()&&<p>{lyrics}</p>}<p>将调用模型并产生渠道费用；成功后默认采用最新音频版本，可手动切换。重新生成可能再次收费，取消不代表退款。</p>{model && <PriceEstimate providerId={model.provider_id} modelId={model.id} prompt={prompt} parameters={parameters}/>}</>}/>
   </section>;
 }

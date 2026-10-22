@@ -88,7 +88,8 @@ def apply_prompt(prompt, script, policy, refs=None):
         authored["editor_document"]["content"] = paragraphs
         refs = refs or {}
         _, compiled, _ = compile_document(authored, authored.get("source_shot_ids", []),
-            refs.get("asset_bindings") or [], refs.get("asset_references") or [])
+            [*(refs.get("asset_bindings") or []), *(refs.get("document_asset_bindings") or [])], [*(refs.get("asset_references") or []),
+                                               *(refs.get("document_asset_references") or [])])
         return compiled + "\n" + instruction(policy), omitted
     from app.services.segment_script_semantics import compile_prompt
     derived, omitted = effective_script(script, policy)

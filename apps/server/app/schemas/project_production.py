@@ -338,6 +338,10 @@ class H3VideoStartRequest(H3VideoRequest):
 
 
 class SegmentFirstFramePlanRequest(BaseModel):
+    frame_scope: Literal["segment", "shots"] = "segment"
+    shot_indices: list[int] | None = Field(default=None, max_length=100)
+    missing_only: bool = True
+    source_fingerprint: str | None = None
     segment_ids: list[int] = Field(min_length=1, max_length=100)
     provider_model_id: int = Field(ge=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -360,6 +364,10 @@ class SegmentFirstFrameBatchRequest(SegmentFirstFramePlanRequest):
 
 
 class SegmentFirstFramePlanOut(BaseModel):
+    frame_scope: Literal["segment", "shots"] = "segment"
+    shot_indices: list[int] | None = None
+    missing_only: bool = True
+    source_fingerprint: str | None = None
     project_id: int
     episode_id: int
     provider_model_id: int

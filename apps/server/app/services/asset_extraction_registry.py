@@ -36,6 +36,21 @@ def _formal_kind(asset: dict[str, Any]) -> str:
     )
 
 
+def _narrative_identity(row, context):
+    from app.services.creation_asset_scope import candidate_narrative_scope
+    attrs = row.get("attributes") or {}
+    scope = row.get("narrative_scope") or attrs
+    if not scope.get("narrative_structure"):
+        scope = candidate_narrative_scope(row.get("episode_numbers") or attrs.get("episode_numbers") or [],
+                                         context.get("narrative_scope"))
+    structure = scope.get("narrative_structure")
+    if structure in (None, "continuous"):
+        return ""
+    units = sorted(scope.get("unit_ids") or [])
+    episodes = sorted(row.get("episode_numbers") or attrs.get("episode_numbers") or [])
+    return _marker([structure, units or episodes])
+
+
 def unique_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for _, row in sorted({_marker(row): row for row in records}.items())]
 
@@ -166,7 +181,7 @@ def project_registry(
         else:
             formal_by_name.setdefault((kind, _key(asset.get("name"))), []).append(asset)
     grouped: dict[str, list[dict[str, Any]]] = {}
-    named: dict[tuple[str, str], list[dict]] = {}
+    named: dict[tuple[str, str, str], list[dict]] = {}
     from app.services.creation_finalize_service import _normalize_asset_classification
 
     for source_kind, group in REQUIREMENT_RESULT_KEYS.items():
@@ -193,22 +208,26 @@ def project_registry(
                         ambiguous = ambiguous or owner_ambiguous
                         attrs[field] = value
             identity_name, _ = descriptor(kind, row)
-            named.setdefault((kind, _key(identity_name)), []).append(row)
+            scope = _narrative_identity(row, context) if kind in {"scene", "prop", "costume"} else ""
+            named.setdefault((kind, _key(identity_name), scope), []).append(row)
             if ambiguous:
                 review_identity(attrs, "Confirmed aliases have multiple owners")
-    formal_named: dict[tuple[str, str], list[dict]] = {}
+    formal_named: dict[tuple[str, str, str], list[dict]] = {}
     for asset in existing:
         kind = _formal_kind(asset)
         name, _ = descriptor(kind, asset)
         canonical, _ = _resolve_name(kind, name, refs)
         canonical, _ = descriptor(kind, {**asset, "name": canonical})
-        formal_named.setdefault((kind, _key(canonical)), []).append(asset)
-    for (kind, _), named_rows in sorted(named.items()):
-        formal = formal_named.get((kind, _key(descriptor(kind, named_rows[0])[0])), [])
+        scope = _narrative_identity(asset, context) if kind in {"scene", "prop", "costume"} else ""
+        formal_named.setdefault((kind, _key(canonical), scope), []).append(asset)
+    for (kind, _, scope), named_rows in sorted(named.items()):
+        formal = formal_named.get((kind, _key(descriptor(kind, named_rows[0])[0]), scope), [])
         resolutions = resolve_variants(kind, named_rows, formal) if kind in {"prop", "scene", "costume"} else [
             (row, {}, None) for row in named_rows
         ]
         for row, variants, resolved_formal in resolutions:
+            if scope:
+                variants = {**variants, "narrative_scope": scope}
             attrs = row["attributes"]
             canonical = descriptor(kind, row)[0]
             if kind == "character" and attrs.get("character_form") in {"fixed_group", "crowd"}:

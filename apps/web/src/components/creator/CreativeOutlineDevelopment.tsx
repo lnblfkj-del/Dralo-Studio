@@ -1,6 +1,6 @@
 import { MAX_EPISODES } from "@/utils/creationLimits";
 import { useRequestDraft } from "@/utils/useRequestDraft";
-import { TextGenerationIcon, TextGenerationQuip } from "@/components/ui/TextGenerationLoading";
+import { TextGenerationIcon, TextGenerationQuip, TextGenerationSkeleton } from "@/components/ui/TextGenerationLoading";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Settings2, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -443,7 +443,7 @@ export function CreativeOutlineDevelopment({ projectId, session, activeJob, onJo
             <p>{outlineBusy ? `Agent 正在组织 ${String(episodeCount)} 集连续剧情与集尾钩子。` : "Agent 正在整理人物、世界规则和连续剧情钩子；完成后先给你审阅，不会直接覆盖正式内容。"}</p>
             <CreationWorkflowProgress progress={session.workflow_progress} />
             <TextGenerationQuip />
-            <div className="creative-skeleton">{Array.from({ length: 9 }).map((_, index) => <i key={index} />)}</div>
+            <TextGenerationSkeleton />
           </section>
         )}
 

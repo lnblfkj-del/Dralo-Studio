@@ -5,6 +5,7 @@
 import re
 
 from app.services.screenplay_source_parser import SCENE, SCENE_SLUG, split_cue, unwrap
+from app.services.asset_quantity_evidence import counted_introduction
 
 OWNED_FIELDS = {"role", "age", "gender", "appearance", "costume", "hair", "makeup", "injury", "stage"}
 NARRATIVE_LABELS = {"动作", "画面", "人物", "角色", "出场人物", "场景", "旁白", "说明"}
@@ -51,7 +52,7 @@ def character_fact_owner(asset, fact, source, alignment, names, *, resolve_prono
     if fact.field == "costume" and re.search(r"抓着|手持|递出|抱着|接过", prefix):
         return "unresolved"
     suffix = line[value_offset + len(fact.value):]
-    introducing = re.search(r"(?:一|两|三|[0-9]+)(?:名|位)[^。；!?]{0,80}$", prefix)
+    introducing = counted_introduction(prefix)
     if introducing and any(re.match(r"^(?:、[^，。:：]{0,40})?的?" + re.escape(target), suffix) for target in targets):
         return "explicit_subject"
     mentions = [(match.end(), len(name), name) for name in names | targets

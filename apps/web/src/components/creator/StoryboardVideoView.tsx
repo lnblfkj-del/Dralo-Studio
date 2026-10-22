@@ -5,6 +5,7 @@ import { useMultitrackEntry } from "@/components/multitrack/useMultitrackEntry";
 
 import { toErrorMessage } from "@/api/client";
 import { ContentPlanningDialog } from "@/components/creator/ContentPlanningDialog";
+import { ContentPlanningResult } from "./ContentPlanningResult";
 import { ModelChangeDialog } from "@/components/creator/ModelChangeDialog";
 import type { ModelChangeInput } from "@/api/modelChange";
 import { EpisodeScriptConfirmation } from "@/components/creator/EpisodeScriptConfirmation";
@@ -24,6 +25,8 @@ export function StoryboardVideoView({ model }: { model: StoryboardVideoModel }) 
 projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutputResolution, directorOpen, setDirectorOpen, directorPlannerModelId, sourceOpen, setSourceOpen, setSegmentDirty, segmentAttemptPlan, setSegmentAttemptPlan, setSegmentAttemptId, initialSegmentId, returnToCanvas, activeSegmentId, setActiveSegmentId, project, episode, production, segmentPlan, episodeAssetReadiness, assets, videoModels, plannerModels, activeJob, saveProductionSettings, saveHeaderModel, saveSegmentPlan, adjustSegments, changeSegmentLifecycleMutation, continuityCheck, planSingleSegment, startSingleSegment, generateFirstFrames, startFirstFrames, firstFramePlan, setFirstFramePlan, chooseSegmentVersion, soundCueErrors, projectAspectRatio, productionSettingsDirty, contentUnsavedChanges, hasUnsavedChanges, savePending, blocker, sourceStale, dirtyParts, saveError, saveStateLabel, orderedEpisodes, switchEpisode, navigateSafely, activeSegmentModel, activeImageModel, segmentError, recoveredState, episodeLabel
   } = model;
   const [independentOpen, setIndependentOpen] = useMultitrackEntry();
+  const [planningBusy, setPlanningBusy] = useState(false);
+  const planningRun = model.contentPlanningRuns?.data?.[0];
   const [capabilityModel, setCapabilityModel] = useState<ModelOption | null>(null);
   const [modelChange, setModelChange] = useState<ModelChangeInput | null>(null);
   const [headerModelChoice, setHeaderModelChoice] = useState<{ id: number; resolution: string } | null>(null);
@@ -35,9 +38,23 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
   const checkedCapabilities = !capabilityQuery?.isError && capabilityQuery?.data?.plan_id === segmentPlan.data?.id
     && capabilityQuery?.data?.provider_model_id === videoModelId
     && capabilityQuery?.data?.production_revision === production.data?.revision ? capabilityQuery?.data : undefined;
-  const supportedResolutions = segmentPlan.data ? checkedCapabilities?.compatible_resolutions ?? [] : videoModelResolutions(selectedVideoModel, projectAspectRatio);
+  const supportedResolutions = segmentPlan.data ? checkedCapabilities?.resolutions ?? [] : videoModelResolutions(selectedVideoModel, projectAspectRatio);
+  const resolutionCheck = checkedCapabilities?.resolution_checks?.find(item => item.resolution === outputResolution);
+  const resolutionIssues = resolutionCheck?.blocked ?? (checkedCapabilities && checkedCapabilities.resolution === outputResolution ? checkedCapabilities.blocked : []);
+  const resolutionChanges = resolutionCheck?.changes ?? (checkedCapabilities && checkedCapabilities.resolution === outputResolution ? checkedCapabilities.changes : []);
+  const currentResolutionLabel = outputResolution ? formatResolution(outputResolution) : "未选择清晰度";
+  const unresolvedResolutionLabel = capabilityQuery?.isFetching ? `${currentResolutionLabel} · 检查中`
+    : capabilityQuery?.isError ? `${currentResolutionLabel} · 检查失败`
+    : checkedCapabilities ? `${currentResolutionLabel} · 模型不支持` : currentResolutionLabel;
   const modelMetadataMissing = !videoModelModes(selectedVideoModel, projectAspectRatio).length;
   const capabilityMissing = Boolean(selectedVideoModel && (modelMetadataMissing || capabilityQuery?.isError));
+  const locateSegment = (id: number) => {
+    setModelChange(null);
+    setActiveSegmentId(id);
+    const segment = studioRef?.current?.querySelector<HTMLButtonElement>(`#segment-radio-${id}`);
+    segment?.click();
+    segment?.scrollIntoView?.({block: "nearest", inline: "nearest"});
+  };
   const chooseVideoModel = (id: number | null) => {
     if (savePending || hasUnsavedChanges || contentUnsavedChanges || directorOpen || modelChange || !production.data || segmentPlan.isPending || segmentPlan.isError || id === videoModelId) return;
     if (segmentPlan.data) {
@@ -68,7 +85,7 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
   return <><ProjectHeader projectId={projectId} name={project.data.name} active="production" settings={project.data.creation_settings} controls={<>
     <select aria-label="视频模型" disabled={savePending || hasUnsavedChanges || contentUnsavedChanges || directorOpen || !production.data || segmentPlan.isPending || segmentPlan.isError} value={videoModelId ?? ""} onChange={(event) => chooseVideoModel(Number(event.target.value) || null)}><option value="" disabled={Boolean(segmentPlan.data)}>选择视频模型</option>{videoModels.map((model) => <option key={model.id} value={model.id}>{model.provider_name} · {model.name}</option>)}</select>
     <span className="studio-resolution-control"><select aria-label="输出清晰度" value={outputResolution} disabled={savePending || hasUnsavedChanges || contentUnsavedChanges || directorOpen || Boolean(modelChange) || !production.data || segmentPlan.isPending || segmentPlan.isError || capabilityQuery?.isFetching || !supportedResolutions.length} onChange={(event) => chooseResolution(event.target.value)}>
-      {!supportedResolutions.includes(outputResolution) && <option value={outputResolution} disabled>{outputResolution ? `${formatResolution(outputResolution)} · 待检查` : "暂无兼容清晰度"}</option>}
+      {!supportedResolutions.includes(outputResolution) && <option value={outputResolution} disabled>{unresolvedResolutionLabel}</option>}
       {supportedResolutions.map(value => <option key={value} value={value}>{formatResolution(value)}</option>)}
     </select>{capabilityMissing && <button type="button" aria-label="快捷设置视频模型能力" title="打开视频模型设置" onClick={() => setCapabilityModel(selectedVideoModel)}><Settings2 size={15} /></button>}</span>
   </>} /><main ref={studioRef} className="episode-studio episode-studio-simple">
@@ -83,6 +100,10 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
     {sourceStale && <section className="studio-source-stale" role="alert"><strong>来源正文已变化</strong><span>制作记录来源 V{segmentPlan.data?.source_script_revision ?? production.data?.source_script_revision ?? "—"}，当前正文为 V{episode.script_revision}。{!scriptConfirmed ? "请先查看并确认本集当前正文。" : "当前正文已确认，请重新规划片段脚本。"}旧预检和生成动作保持停用。</span><button onClick={() => !scriptConfirmed ? setSourceOpen(true) : openPlanning()}>{!scriptConfirmed ? "查看并确认正文" : "重新规划片段"}</button></section>}
     {saveError && <section className="studio-save-error" role="alert">{toErrorMessage(saveError)}。未保存输入仍保留，可修正冲突后重试。</section>}
     {segmentPlan.data && capabilityQuery?.isError && <section className="studio-save-error" role="alert">清晰度检查失败：{toErrorMessage(capabilityQuery.error)}<button disabled={capabilityQuery.isFetching || savePending} onClick={() => void capabilityQuery.refetch()}><RefreshCw size={16} />重新检查清晰度</button></section>}
+    {Boolean(resolutionIssues?.length) && <section className="studio-save-error" role="alert"><strong>{currentResolutionLabel} 已配置，{resolutionIssues!.length} 个片段需要调整</strong>
+      <details><summary>查看冲突片段</summary>{resolutionIssues!.map(item => <p key={item.segment_id}>片段 {item.order}：{item.reason} <button disabled={hasUnsavedChanges || contentUnsavedChanges || savePending} onClick={() => locateSegment(item.segment_id)}>定位片段 {item.order}</button></p>)}</details>
+    </section>}
+    {!resolutionIssues?.length && Boolean(resolutionChanges?.length) && <section className="studio-source-stale" role="status"><span>{currentResolutionLabel} 已配置，当前片段时长或数量需要调整。</span><button disabled={hasUnsavedChanges || contentUnsavedChanges || savePending || Boolean(modelChange)} onClick={() => videoModelId && setModelChange({provider_model_id: videoModelId, resolution: outputResolution})}>查看调整方案</button></section>}
     <EpisodeSegmentWorkspace
       key={episodeId}
       projectId={projectId}
@@ -91,12 +112,15 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
       episodeAssetIds={[...new Set([...(episodeAssetReadiness.data?.episodes.find((item) => item.episode_id === episodeId)?.related_asset_ids ?? []), ...(episodeAssetReadiness.data?.episodes.find((item) => item.episode_id === episodeId)?.required_asset_ids ?? []), ...(production.data?.settings.asset_ids ?? []), ...(segmentPlan.data?.segments.flatMap((item) => Array.isArray(item.refs.asset_bindings) ? item.refs.asset_bindings.map((binding: Record<string, unknown>) => Number(binding.asset_id)).filter(Number.isSafeInteger) : []) ?? [])])]}
       episodeAssetsLoading={episodeAssetReadiness.isPending}
       episodeAssetsError={episodeAssetReadiness.error ? toErrorMessage(episodeAssetReadiness.error) : undefined}
+      assetsLoading={assets.isPending}
+      assetsError={assets.error ? toErrorMessage(assets.error) : undefined}
+      onRetryAssets={() => { void assets.refetch(); void episodeAssetReadiness.refetch(); }}
       initialSegmentId={initialSegmentId}
       onSelectedSegmentChange={setActiveSegmentId}
       onManageAssets={() => navigateSafely(`/projects/${projectId}/assets`)}
       onChooseVersion={(segmentId, versionId, inputFingerprint) => chooseSegmentVersion.mutate({ segmentId, versionId, inputFingerprint })}
       choosingVersion={chooseSegmentVersion.isPending || contentUnsavedChanges || sourceStale}
-      versionChoiceError={chooseSegmentVersion.error ? toErrorMessage(chooseSegmentVersion.error) : undefined}
+      versionChoiceError={chooseSegmentVersion.error && chooseSegmentVersion.variables?.segmentId === activeSegmentId ? toErrorMessage(chooseSegmentVersion.error) : undefined}
       generationPlan={segmentAttemptPlan}
       generationJob={activeJob.data}
       generationBusy={planSingleSegment.isPending || startSingleSegment.isPending}
@@ -104,7 +128,7 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
       onPlanGeneration={(segmentId) => planSingleSegment.mutate(segmentId)}
       onStartGeneration={(segmentId) => startSingleSegment.mutate(segmentId)}
       onCancelGenerationPlan={() => { setSegmentAttemptPlan(null); setSegmentAttemptId(null); }}
-      onGenerateFirstFrames={(segmentIds) => generateFirstFrames.mutate(segmentIds)}
+      onGenerateFirstFrames={(segmentIds, shotIndices) => generateFirstFrames.mutate({ segmentIds, shotIndices })}
       onGenerateSelectedVideos={(ids) => {
         if (!videoModelId || !segmentPlan.data || contentUnsavedChanges || sourceStale) return;
         setSelectedVideoInput({ segment_ids: ids.sort((a, b) => a - b), provider_model_id: videoModelId,
@@ -118,7 +142,7 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
       assets={assets.data ?? []}
       productionRevision={production.data?.revision ?? 0}
       modelName={activeSegmentModel ? `${activeSegmentModel.provider_name} · ${activeSegmentModel.name}` : ""}
-      busy={saveSegmentPlan.isPending || adjustSegments.isPending || changeSegmentLifecycleMutation.isPending || deleteSegmentsMutation?.isPending || continuityCheck.isPending}
+      busy={planningBusy || saveSegmentPlan.isPending || adjustSegments.isPending || changeSegmentLifecycleMutation.isPending || deleteSegmentsMutation?.isPending || continuityCheck.isPending}
       error={segmentError ? toErrorMessage(segmentError) : undefined}
       continuity={continuityCheck.data ?? null}
       onSave={(payload) => saveSegmentPlan.mutate(payload)}
@@ -126,7 +150,17 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
       onLifecycle={(payload) => changeSegmentLifecycleMutation.mutate(payload)}
       onDeleteSegments={(payload) => deleteSegmentsMutation.mutateAsync(payload).then(() => undefined)}
       onCreatePlan={openPlanning}
-      canCreatePlan={Boolean(script.trim() && !contentUnsavedChanges && !hasUnsavedChanges && !savePending && production.data && directorPlannerModelId)}
+      planningRun={planningRun}
+      planningActions={planningRun && !directorOpen && <div className="segment-planning-actions">
+        {planningRun.status === "succeeded" && <ContentPlanningResult key={planningRun.job_id}
+          scope={{ projectId, episodeId, jobId: planningRun.job_id }}
+          disabled={hasUnsavedChanges || contentUnsavedChanges || savePending || sourceStale}
+          onReady={() => undefined} onBusyChange={setPlanningBusy} />}
+        {planningRun.status === "succeeded" && (hasUnsavedChanges || contentUnsavedChanges) && <p role="status">请先保存当前修改，再接收生成结果。</p>}
+        {planningRun.status === "succeeded" && sourceStale && <p role="status">正文版本已变化，生成结果已保留，不会覆盖当前脚本。</p>}
+      </div>}
+      onOpenPlanning={openPlanning}
+      canCreatePlan={Boolean(script.trim() && !planningBusy && !contentUnsavedChanges && !hasUnsavedChanges && !savePending && production.data && directorPlannerModelId)}
       onDirtyChange={setSegmentDirty}
     />
 
@@ -141,13 +175,7 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
     onApply={input => model.changeModel.mutateAsync(input)}
     onRefresh={() => Promise.all([production.refetch(), segmentPlan.refetch()])}
     onClose={() => { setModelChange(null); void production.refetch?.(); void segmentPlan.refetch?.(); }}
-    onLocate={id => {
-      setModelChange(null);
-      setActiveSegmentId(id);
-      const segment = studioRef?.current?.querySelector<HTMLButtonElement>(`#segment-radio-${id}`);
-      segment?.click();
-      segment?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-    }}
+    onLocate={locateSegment}
   />}
   {selectedVideoInput && <SelectedVideosDialog projectId={projectId} episodeId={episodeId}
     input={{ segment_ids: selectedVideoInput.segment_ids, provider_model_id: selectedVideoInput.provider_model_id, parameters: selectedVideoInput.parameters }}
@@ -155,14 +183,14 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
     onClose={() => setSelectedVideoInput(null)} onSubmitted={(job) => { model.setActiveJobId(job.id); setSelectedVideoInput(null); void production.refetch(); void segmentPlan.refetch(); }} />}
   <ConfirmDialog
     open={Boolean(firstFramePlan)}
-    accessibleLabel="确认首帧生成费用"
-    title="确认生成首帧"
+    accessibleLabel="确认镜头图生成费用"
+    title="确认生成镜头图"
     confirmLabel="确认并提交"
-    confirmDisabled={firstFramePlan?.pricing_estimate.estimated_cents == null || startFirstFrames.isPending}
+    confirmDisabled={firstFramePlan?.pricing_estimate.estimated_cents == null || startFirstFrames.isPending || contentUnsavedChanges || hasUnsavedChanges || sourceStale || firstFramePlan?.plan_id !== segmentPlan.data?.id || firstFramePlan?.plan_revision !== segmentPlan.data?.revision}
     onClose={() => setFirstFramePlan(null)}
     onConfirm={() => startFirstFrames.mutate()}
     message={firstFramePlan ? <div>
-      <p>{firstFramePlan.estimated_count} 个片段 · {firstFramePlan.provider_name} · {activeImageModel?.name ?? firstFramePlan.model_id}</p>
+      <p>{firstFramePlan.estimated_count} 张镜头图 · {firstFramePlan.provider_name} · {activeImageModel?.name ?? firstFramePlan.model_id}</p>
       <p>{firstFramePlan.pricing_estimate.amount != null ? `预估费用 ${firstFramePlan.pricing_estimate.currency ?? "CNY"} ${firstFramePlan.pricing_estimate.amount}` : "费用未知，禁止提交"}</p>
       <small>{firstFramePlan.pricing_estimate.reason ?? "费用以提交时价格快照及渠道实际账单为准。"}</small>
     </div> : null}
@@ -177,6 +205,8 @@ projectId, episodeId, studioRef, script, videoModelId, outputResolution, setOutp
     videoModels={videoModels}
     initialPlannerId={directorPlannerModelId}
     initialVideoId={videoModelId}
+    initialResolution={outputResolution}
+    startNew
     backgroundMusic={production.data?.settings.background_music}
     onClose={() => setDirectorOpen(false)}
   />}

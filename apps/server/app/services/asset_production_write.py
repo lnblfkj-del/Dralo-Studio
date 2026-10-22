@@ -38,6 +38,8 @@ async def _update_production(
     patch: AssetProductionPatch,
     request_hash: str,
 ) -> dict[str, Any]:
+    from app.services.asset_consistency_service import lock_project
+    await lock_project(session, project.id)
     link = await link_for(session, project.id, asset_id)
     asset = await asset_service.get_asset(session, project.id, asset_id)
     receipt = await session.scalar(
@@ -58,8 +60,7 @@ async def _update_production(
     data = dict(link.production_data or {})
     if patch.prompt_anchor is not None:
         data["prompt_anchor"] = patch.prompt_anchor.strip()
-        if (asset.attributes or {}).get("field_trust") or (data.get("extraction_projection") or {}).get("field_trust"):
-            data["field_trust_prompt_override"] = True
+        data["field_trust_prompt_override"] = True
     if patch.profile is not None:
         profile = patch.profile
         character_ids = set(profile.linked_character_asset_ids)
@@ -88,7 +89,7 @@ async def _update_production(
         try:
             AssetProfile.model_validate(data["profile"])
         except ValueError as exc:
-            raise ValidationError("角色形式与群体人数不一致，请核对后保存") from exc
+            raise ValidationError("角色形式与群体数量不一致，请核对后保存") from exc
         if asset.asset_type != "character" and data["profile"].get("character_form", "single") != "single":
             raise ValidationError("只有角色资产能设置小组或人群形式")
     if patch.sources is not None:

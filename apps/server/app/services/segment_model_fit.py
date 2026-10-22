@@ -49,43 +49,64 @@ def content_needs(segment):
     return dialogue, audio, music
 
 
+def input_modes_for(counts):
+    first, last, images = counts.get("first_frame", 0), counts.get("last_frame", 0), counts.get("image", 0)
+    if last and not first:
+        return set()
+    if first:
+        return {"first_last_frame"} if last else {"first_frame"}
+    if images == 1:
+        return {"single_image", "multi_reference"}
+    return {"multi_reference"} if images else {"text"}
+
+
+def mode_issues(mode, counts, needs, bgm):
+    labels = {"image": "参考图片", "first_frame": "首帧图片", "last_frame": "尾帧图片",
+              "audio": "参考音频", "video": "参考视频"}
+    limits = {r.role: r for r in mode.reference_limits}
+    issues = []
+    for role in dict.fromkeys([*limits, *counts]):
+        count, limit = counts.get(role, 0), limits.get(role)
+        if limit is None and count:
+            issues.append(f"不支持{labels.get(role, role)}, 当前 {count} 份")
+        elif limit and not limit.minimum <= count <= limit.maximum:
+            issues.append(f"{labels.get(role, role)}需要 {limit.minimum}-{limit.maximum} 份, 当前 {count} 份")
+    if sum(counts.values()) > mode.max_total_references:
+        issues.append(f"素材总数最多 {mode.max_total_references} 份, 当前 {sum(counts.values())} 份")
+    dialogue, sound, music = needs
+    if dialogue and not mode.native_dialogue:
+        issues.append("片段有对白, 该规格未配置人物对白能力")
+    if (sound or (music and bgm is not False) or bgm is True) and not mode.native_audio:
+        issues.append("片段需要声音, 该规格未配置视频自带声音")
+    if bgm is False and mode.native_audio and mode.bgm_control == "unsupported":
+        issues.append("当前要求关闭配乐, 该规格不支持配乐控制")
+    if bgm is True and mode.bgm_control == "unsupported":
+        issues.append("当前要求生成配乐, 该规格不支持配乐控制")
+    return issues
+
+
 def matching_modes(capability, ratio, resolution, counts, needs, bgm):
-    result = []
-    for mode in capability.modes:
-        if mode.aspect_ratio != ratio or mode.resolution != resolution:
-            continue
-        first, last, images = counts["first_frame"], counts["last_frame"], counts["image"]
-        modes = (
-            ({"first_last_frame"} if last else {"first_frame"})
-            if first
-            else (
-                {"single_image", "multi_reference"}
-                if images == 1
-                else {"multi_reference"}
-                if images
-                else {"text"}
-            )
-        )
-        if (last and not first) or mode.input_mode not in modes:
-            continue
-        limits = {r.role: r for r in mode.reference_limits}
-        if any(count and role not in limits for role, count in counts.items()):
-            continue
-        if any(not r.minimum <= counts.get(r.role, 0) <= r.maximum for r in mode.reference_limits):
-            continue
-        if sum(counts.values()) > mode.max_total_references:
-            continue
-        dialogue, sound, music = needs
-        if (dialogue and not mode.native_dialogue) or (
-            (sound or (music and bgm is not False) or bgm is True) and not mode.native_audio
-        ):
-            continue
-        if bgm is False and mode.native_audio and mode.bgm_control == "unsupported":
-            continue
-        if bgm is True and mode.bgm_control == "unsupported":
-            continue
-        result.append(mode)
+    expected = input_modes_for(counts)
+    result = [mode for mode in capability.modes
+              if mode.aspect_ratio == ratio and mode.resolution == resolution
+              and mode.input_mode in expected and not mode_issues(mode, counts, needs, bgm)]
     return sorted(result, key=lambda mode: mode.key)
+
+
+def explain_no_match(capability, ratio, resolution, counts, needs, bgm):
+    expected = input_modes_for(counts)
+    if not expected:
+        return "片段配置了尾帧但没有首帧, 请补充首帧或调整素材用途"
+    modes = [m for m in capability.modes if m.aspect_ratio == ratio and m.resolution == resolution]
+    names = {"text": "文字生成", "single_image": "单图参考", "multi_reference": "多图参考",
+             "first_frame": "首帧生成", "first_last_frame": "首尾帧生成"}
+    if not modes:
+        return f"模型未配置 {ratio} / {resolution} 的视频规格"
+    candidates = [m for m in modes if m.input_mode in expected]
+    if not candidates:
+        return f"当前素材需要{'或'.join(names[k] for k in sorted(expected))}, 模型在 {ratio} / {resolution} 下未配置此方式"
+    closest = min(candidates, key=lambda m: (len(mode_issues(m, counts, needs, bgm)), m.key))
+    return f"{names[closest.input_mode]}: " + "; ".join(mode_issues(closest, counts, needs, bgm))
 
 
 def fit(segment, modes):

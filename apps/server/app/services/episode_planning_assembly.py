@@ -11,6 +11,7 @@ from app.services.episode_planning_contract import (
     validate_frozen_plan,
 )
 from app.services.episode_planning_storage import validate_analysis_snapshot
+from app.services.narrative_continuity import segment_context
 
 
 def assemble(
@@ -57,6 +58,8 @@ def assemble(
                 "entry_state": detail.entry_state,
                 "exit_state": detail.exit_state,
                 "detail_fingerprint": fingerprint(detail),
+                **({"continuity": segment_context(plan, segment.key)}
+                   if plan.continuity is not None else {}),
             }
         )
         cursor += segment.used_duration_ms

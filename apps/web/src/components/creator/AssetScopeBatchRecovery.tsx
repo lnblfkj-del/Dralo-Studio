@@ -89,10 +89,10 @@ export function AssetScopeBatchRecovery({ jobs, labels, disabled, onRecovered, o
       confirmLabel={`确认调用模型（${confirmJobs.length} 个范围）`} busy={running}
       confirmDisabled={disabled || (confirmJobs.some(requiresChannelCheck) && !channelChecked)}
       onClose={() => { if (!running) setConfirmJobs([]); }} onConfirm={() => void execute(confirmJobs, "remote")}
-      message={<div><p>将使用各任务原渠道和模型重新生成 {confirmJobs.length} 个失败范围，可能再次计费，费用以渠道账单为准。成功范围保留。</p>
+      message={<div className="asset-recovery-confirmation"><p>将使用各任务原渠道和模型重新生成 {confirmJobs.length} 个失败范围，可能再次计费，费用以渠道账单为准。成功范围保留。</p>
         <details><summary>查看提交范围</summary>{confirmJobs.map(job => <p key={job.id}>{labels[job.id] || `任务 #${job.id}`} · {job.provider} / {job.model}</p>)}</details>
-        {confirmJobs.some(requiresChannelCheck) && <label><input type="checkbox" checked={channelChecked} disabled={running}
-          onChange={event => setChannelChecked(event.target.checked)} />已核对渠道后台，确认这些原请求未生成结果</label>}
+        {confirmJobs.some(requiresChannelCheck) && <label className="asset-recovery-confirmation__check"><input type="checkbox" checked={channelChecked} disabled={running}
+          onChange={event => setChannelChecked(event.target.checked)} /><span>已核对渠道后台，确认这些原请求未生成结果</span></label>}
       </div>} />
   </section>;
 }

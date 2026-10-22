@@ -112,6 +112,7 @@ class ScriptAssetEvidenceChoice(BaseModel):
 
 
 class ScriptAssetManualReviewRequest(BaseModel):
+    background_only: bool = False
     keep_independent: bool = False
     confirm_usage_relation: bool = False
     expected_parent_job_id: int = Field(ge=1)

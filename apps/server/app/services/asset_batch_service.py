@@ -1,8 +1,11 @@
 """Durable parent/child batches for project asset image generation."""
 
+# ruff: noqa: RUF001
+
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from typing import Any
 
@@ -14,7 +17,6 @@ from app.models import (
     JOB_STATUS_PROCESSING,
     JOB_TYPE_IMAGE,
     Asset,
-    AssetVersion,
     Job,
     Project,
     ProjectAssetLink,
@@ -24,10 +26,8 @@ from app.services import asset_service, job_service
 from app.services.asset_character_representation import GROUP_CONTRACT, character_profile, is_group
 from app.services.costume_generation_service import resolve_mode
 from app.services.costume_generation_service import views as costume_views
-from app.services.job_concurrency_service import TERMINAL_STATUSES
-from app.services.job_pricing_service import _aggregate_video_pricing
 
-ASSET_IMAGE_BATCH_CONTRACT = "asset-image-batch.v5"
+ASSET_IMAGE_BATCH_CONTRACT = "asset-image-batch.v6"
 CHARACTER_REFERENCE_NEGATIVE_PROMPT = (
     "全身视图人物过大，人物贴边，人物越界，分区重叠，裁切头顶，裁切发髻，"
     "裁切头饰，裁切手部，裁切鞋底，裁切脚趾，裁切长袍或裙摆，脚下无留白"
@@ -104,14 +104,20 @@ async def create(
     parameters: dict[str, Any],
     request_id: str,
     generation_mode: str = "missing",
+    scope: str = "selected",
+    preview_token: str | None = None,
+    prepare_prompts: bool = False,
+    text_model_id: int | None = None,
 ) -> Job:
+    from app.services.asset_batch_planning import effective_anchor, preview
+    from app.services.asset_batch_scheduler import lock_transition
+    from app.services.asset_consistency_service import lock_project
+    await lock_transition(session)
+    await lock_project(session, project.id)
+    await session.refresh(project)
     if generation_mode not in {"missing", "regenerate"}:
         raise ConflictError("无效的图片生成模式")
     ordered_ids = list(dict.fromkeys(asset_ids))
-    parameters = _effective_image_parameters(project, parameters)
-    image_model = await session.get(ProviderModel, provider_model_id)
-    if image_model is None:
-        raise ConflictError("图片模型不存在")
     request_fingerprint = _fingerprint(
         {
             "asset_ids": ordered_ids,
@@ -119,6 +125,9 @@ async def create(
             "negative_prompt": negative_prompt,
             "parameters": parameters,
             "generation_mode": generation_mode,
+            "scope": scope,
+            "preview_token": preview_token,
+            "prepare_prompts": prepare_prompts, "text_model_id": text_model_id,
         }
     )
     existing = list(
@@ -139,6 +148,23 @@ async def create(
             raise ConflictError("请求编号已用于不同的资产图片批次")
         return job
 
+    parameters = _effective_image_parameters(project, parameters)
+    image_model = await session.get(ProviderModel, provider_model_id)
+    if image_model is None:
+        raise ConflictError("图片模型不存在")
+    parameters = {**(image_model.default_params or {}), **parameters}
+
+    plan = await preview(session, project, asset_ids=ordered_ids, provider_model_id=provider_model_id,
+                         negative_prompt=negative_prompt, parameters=parameters,
+                         generation_mode=generation_mode, scope=scope,
+                         prepare_prompts=prepare_prompts, text_model_id=text_model_id)
+    if not preview_token or not hmac.compare_digest(preview_token, plan["preview_token"]):
+        raise ConflictError("图片批次预览已变化，请重新确认范围与费用")
+    if not plan["can_create"]:
+        raise ConflictError("图片批次暂不可创建，请检查前置条件", details={"preview": plan})
+    selected_ids = ordered_ids
+    ordered_ids = plan["asset_ids"]
+
     rows = list(
         (
             await session.execute(
@@ -155,86 +181,15 @@ async def create(
     if len(by_id) != len(ordered_ids):
         raise ConflictError("资产清单包含不属于当前项目的资产")
 
-    active_asset_ids = set(
-        (
-            await session.scalars(
-                select(Job.target_id).where(
-                    Job.project_id == project.id,
-                    Job.target_type == "asset",
-                    Job.target_id.in_(ordered_ids),
-                    Job.status.not_in(TERMINAL_STATUSES),
-                    Job.deleted_at.is_(None),
-                )
-            )
-        ).all()
-    )
-    version_rows = list((await session.scalars(
-        select(AssetVersion).where(
-            AssetVersion.asset_id.in_(ordered_ids),
-            AssetVersion.review_status != "archived",
-        )
-    )).all())
-    final_asset_ids = {
-        version.asset_id for version in version_rows
-        if version.is_final and version.view_type != asset_service.LAYOUT_SHEET_VIEW_TYPE
-    }
-    sheet_views_by_asset: dict[int, set[str]] = {}
-    for version in version_rows:
-        for tag in version.tags or []:
-            if isinstance(tag, str) and tag.startswith("character-sheet-view:"):
-                sheet_views_by_asset.setdefault(version.asset_id, set()).add(tag.split(":", 1)[1])
-    required_sheet_views = {
-        str(view["key"]) for view in asset_service.character_reference_sheet_views()
-    }
-    complete_character_sheets = {
-        asset_id for asset_id, views in sheet_views_by_asset.items()
-        if required_sheet_views.issubset(views)
-    }
-
     eligible: list[tuple[Asset, str]] = []
     groups = {asset_id: character_profile(asset.attributes, link.production_data)
               for asset_id, (asset, link) in by_id.items()}
-    skipped: list[dict[str, Any]] = []
+    skipped = plan["skipped"]
     for asset_id in ordered_ids:
         asset, link = by_id[asset_id]
-        prompt = (
-            link.production_data.get("prompt_anchor")
-            if "prompt_anchor" in (link.production_data or {})
-            else asset.prompt_anchor
-        )
-        if not str(prompt or "").strip():
-            prompt = asset.description
-        code = None
-        reason = None
-        if asset.asset_type not in IMAGE_ASSET_TYPES:
-            code, reason = "unsupported_media_type", "该资产类型不使用图片模型"
-        elif asset.project_id != project.id:
-            code, reason = "shared_asset_requires_local_variant", "公共素材需先建立项目变体"
-        elif link.production_archived:
-            code, reason = "archived", "资产已归档，请先恢复"
-        elif generation_mode == "missing" and asset.asset_type == "character" and not is_group(groups[asset.id]) and asset.id in complete_character_sheets:
-            code, reason = "already_ready", "已有角色设定图"
-        elif generation_mode == "missing" and (asset.asset_type != "character" or is_group(groups[asset.id])) and ((link.production_data or {}).get("adoptions") or asset.id in final_asset_ids):
-            code, reason = "already_ready", "已有采用素材或最终版"
-        elif not isinstance(prompt, str) or not prompt.strip():
-            code, reason = "missing_prompt", "缺少资产一致性提示词"
-        elif asset.id in active_asset_ids:
-            code, reason = "active_job", "已有进行中的图片任务"
-        if code:
-            skipped.append(
-                {"asset_id": asset.id, "asset_name": asset.name, "code": code, "reason": reason}
-            )
-        else:
-            eligible.append((asset, prompt.strip()))
-
-    if not eligible:
-        reasons = "；".join(f"{item['asset_name']}：{item['reason']}" for item in skipped[:10])
-        raise ConflictError(f"所选资产均不可生成图片。{reasons}" + ("；其余原因请缩小选择范围查看" if len(skipped) > 10 else ""))
-    planned_view_count = sum(
-        len(asset_service.character_reference_sheet_views())
-        if asset.asset_type == "character" else len(costume_views(parameters.get("costume_views"))) if asset.asset_type == "costume" else 1
-        for asset, _prompt in eligible
-    )
+        prompt = effective_anchor(asset, link, dependency_only=asset_id not in selected_ids)
+        eligible.append((asset, prompt))
+    planned_view_count = plan["planned_view_count"]
 
     parent = Job(
         owner_id=project.owner_id,
@@ -255,9 +210,14 @@ async def create(
             "character_reference_contract": asset_service.CHARACTER_REFERENCE_SHEET_KEY,
             "asset_reference_contracts": asset_service.ASSET_REFERENCE_CONTRACTS,
             "planned_view_count": planned_view_count,
+            "expected_total": planned_view_count,
+            "batch_plan": plan,
+            "selected_asset_ids": selected_ids,
+            "scope": scope,
         },
         result={
-            "requested": len(ordered_ids),
+            "requested": len(selected_ids),
+            "expanded": len(plan["expanded_asset_ids"]),
             "eligible": len(eligible),
             "skipped": skipped,
             "total": planned_view_count,
@@ -275,13 +235,9 @@ async def create(
     children: list[Job] = []
     for asset, anchor in eligible:
         costume_mode = await resolve_mode(session, project.id, asset, parameters)
-        prompt, references = await asset_service.expand_prompt(session, project.id, anchor)
-        reference_media_ids = [
-            version.media_file_id
-            for referenced in references
-            for version in referenced["versions"]
-            if version.is_final
-        ]
+        child_parameters = {**parameters, **({"costume_mode": costume_mode} if costume_mode else {})}
+        prompt = plan["expanded_prompts"][str(asset.id)] or f"ASSET_PROMPT_PENDING_{asset.id}"
+        reference_media_ids = []  # Exact adopted bindings are frozen by the durable gate.
         character_view = (
             asset_service.character_reference_sheet_views()[0]
             if asset.asset_type == "character" and not is_group(groups[asset.id]) else None
@@ -314,11 +270,13 @@ async def create(
             negative_prompt="\n".join(filter(None, [negative_prompt, reference_negative])) or None,
             reference_media_ids=reference_media_ids,
             parameters=(
-                _character_view_parameters(image_model, parameters, character_view)
-                if character_view else parameters
+                _character_view_parameters(image_model, child_parameters, character_view)
+                if character_view else child_parameters
             ),
             view_type=view_type,
             view_label=view_label,
+            defer_consistency=True,
+            asset_generation_contract=generation_contract,
         )
         child.parent_job_id = parent.id
         if generation_contract:
@@ -344,6 +302,24 @@ async def create(
                 ],
             }
         children.append(child)
+        child.payload = {**child.payload, "asset_type": asset.asset_type}
+        if character_view:
+            for extra_view in asset_service.character_reference_sheet_views()[1:]:
+                extra = await job_service.create_image_job(
+                    session, project.owner_id, project_id=project.id, asset_id=asset.id,
+                    provider_model_id=provider_model_id,
+                    prompt=asset_service.character_reference_prompt(prompt, str(extra_view["key"])),
+                    negative_prompt="\n".join(filter(None, [negative_prompt, reference_negative])) or None,
+                    reference_media_ids=[], parameters=_character_view_parameters(image_model, parameters, extra_view),
+                    view_type=str(extra_view["view_type"]), view_label=str(extra_view["view_label"]),
+                    defer_consistency=True, asset_generation_contract=generation_contract,
+                )
+                extra.parent_job_id = parent.id
+                extra.payload = {**extra.payload, "asset_type": asset.asset_type,
+                    "character_reference_sheet": {**child.payload["character_reference_sheet"], "view_key": extra_view["key"]},
+                    "requires_manual_review": True,
+                    "version_tags": [f"contract:{generation_contract}", f"character-sheet-view:{extra_view['key']}", "qa:manual-review-required"]}
+                children.append(extra)
         if asset.asset_type == "costume":
             for key, label in costume_views(parameters.get("costume_views"))[1:]:
                 extra = await job_service.create_image_job(
@@ -355,21 +331,22 @@ async def create(
                     reference_media_ids=reference_media_ids,
                     parameters={**parameters, "costume_mode": costume_mode, "costume_direction": label},
                     view_type="angle", view_label=f"服装{label}",
+                    defer_consistency=True,
+                    asset_generation_contract=generation_contract,
                 )
                 extra.parent_job_id = parent.id
                 extra.payload = {**extra.payload, "asset_adoption_key": f"costume:{costume_mode}:{key}",
-                                 "asset_generation_contract": generation_contract}
+                                 "asset_generation_contract": generation_contract, "asset_type": asset.asset_type}
                 children.append(extra)
 
-    quotes = []
-    for child in children:
-        quote = dict((child.payload or {}).get("pricing_snapshot") or {})
-        copies = (
-            len(asset_service.character_reference_sheet_views())
-            if (child.payload or {}).get("character_reference_sheet") else 1
-        )
-        quotes.extend(dict(quote) for _index in range(copies))
-    pricing = _aggregate_video_pricing(quotes)
+    from app.services.asset_batch_scheduler import prepare_batch, stage_children
+    await stage_children(session, parent, children, plan)
+    if plan.get("prompt_asset_ids"):
+        from app.services.asset_batch_prompt_preparation import stage_prompts
+        await stage_prompts(session, project, parent, children, plan)
+    await prepare_batch(session, parent)
+
+    pricing = plan["estimated_cost"]
     parent.payload = {**parent.payload, "pricing_snapshot": pricing}
     parent.cost_estimate = pricing.get("estimated_cents")
     parent.result = {
@@ -379,4 +356,6 @@ async def create(
         "estimated_cost": pricing,
     }
     await session.flush()
+    if children:
+        await job_service.aggregate_parent_job(session, children[0].id)
     return parent

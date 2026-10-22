@@ -1,4 +1,4 @@
-"""Project audio asset submission, guarded reuse and candidate-only persistence."""
+"""Project audio asset submission, guarded reuse and automatic latest adoption."""
 
 # ruff: noqa: RUF001
 from hashlib import sha256
@@ -151,13 +151,17 @@ async def finalize(session, job, result):
     prior = await session.scalar(select(AssetVersion).where(AssetVersion.asset_id == asset.id, AssetVersion.source_job_id == job.id))
     if prior:
         return {"asset_id":asset.id,"asset_version_id":prior.id,"media_file_id":prior.media_file_id,"already_persisted":True}
+    purpose = job.payload.get("audio_purpose")
+    if purpose == "voice_reference":
+        from app.services.generated_audio_media import reference_sample
+        result = {**result, **await reference_sample(result["audio_bytes"])}
+    extension = "wav" if purpose == "voice_reference" else "mp3"
     data = result["audio_bytes"]
-    relative = Path("projects") / str(job.project_id) / "assets" / str(asset.id) / f"audio-job-{job.id}.mp3"
+    relative = Path("projects") / str(job.project_id) / "assets" / str(asset.id) / f"audio-job-{job.id}.{extension}"
     await require_media_budget(session,len(data))
     write_storage_bytes(settings,settings.storage_path / relative,data)
-    purpose = job.payload.get("audio_purpose")
     media = MediaFile(owner_id=job.owner_id,project_id=job.project_id,kind="audio",source="generation",purpose=purpose or "creative",
-        file_path=relative.as_posix(),original_name=f"{asset.name}-{job.id}.mp3",mime_type="audio/mpeg",
+        file_path=relative.as_posix(),original_name=f"{asset.name}-{job.id}.{extension}",mime_type="audio/wav" if extension == "wav" else "audio/mpeg",
         size=len(data),hash=sha256(data).hexdigest(),duration=result["duration"])
     session.add(media)
     await session.flush()
@@ -169,5 +173,7 @@ async def finalize(session, job, result):
         view_label={"voice_reference": "参考声线候选", "ambience": "环境声候选", "sfx": "音效候选"}.get(purpose, "配乐候选" if job.job_type=="audio" else "配音候选"),review_status="candidate",is_final=False)
     session.add(version)
     await session.flush()
+    from app.services.asset_audio_adoption import adopt_generated_audio
+    adoption = await adopt_generated_audio(session, job, asset, version, media)
     return {"asset_id":asset.id,"asset_version_id":version.id,"media_file_id":media.id,
-            "duration":media.duration,"media_url":f"/api/media/{media.id}"}
+            "duration":media.duration,"media_url":f"/api/media/{media.id}", "adoption": adoption}

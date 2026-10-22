@@ -22,7 +22,7 @@ const stageLabels: Record<string, string> = {
 
 interface Props {
   scope: ContentEpisodeScope; scriptRevision: number; plannerModels: ModelOption[]; videoModels: ModelOption[];
-  initialPlannerId: number | null; initialVideoId: number | null; backgroundMusic?: boolean | null; onClose: () => void;
+  initialPlannerId: number | null; initialVideoId: number | null; initialResolution?: string; startNew?: boolean; backgroundMusic?: boolean | null; onClose: () => void;
 }
 
 export function ContentPlanningDialog(props: Props) {
@@ -30,19 +30,18 @@ export function ContentPlanningDialog(props: Props) {
   return <ContentPlanningDialogBody key={submissionKey(props.scope, user?.id ?? 0, user?.workspace_id)} {...props} />;
 }
 
-function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, videoModels, initialPlannerId, initialVideoId, backgroundMusic, onClose }: Props) {
+function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, videoModels, initialPlannerId, initialVideoId, initialResolution, startNew = false, backgroundMusic, onClose }: Props) {
   const user = useAuthStore(state => state.user);
   const storageKey = submissionKey(scope, user?.id ?? 0, user?.workspace_id);
   const client = useQueryClient();
   const [pending, setPending] = useState(() => readSubmission(storageKey));
   const [plannerId, setPlannerId] = useState(pending?.planner_model_id ?? initialPlannerId);
   const [videoId, setVideoId] = useState(pending?.video_model_id ?? initialVideoId);
-  const [resolution, setResolution] = useState(pending?.resolution ?? "");
+  const [resolution, setResolution] = useState(pending?.resolution ?? initialResolution ?? "");
   const [requirements, setRequirements] = useState(pending?.requirements ?? "");
   const [bgm, setBgm] = useState(pending?.background_music ?? backgroundMusic ?? false);
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
-  const [newPlan, setNewPlan] = useState(false);
-  const [confirmation, setConfirmation] = useState<ContentCreateInput | null>(null);
+  const [newPlan, setNewPlan] = useState(startNew);
   const [busy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [resultBusy, setResultBusy] = useState(false);
@@ -88,7 +87,8 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
       request_id: crypto.randomUUID() };
     try {
       const checked = await preflightContentInput(scope, input, inputs.data.source_fingerprint);
-      setConfirmation({ ...input, expected_input_fingerprint: checked.fingerprint });
+      inFlight.current = false;
+      await submit({ ...input, expected_input_fingerprint: checked.fingerprint });
     } catch (failure) { setError(toErrorMessage(failure)); }
     finally { inFlight.current = false; setBusy(false); }
   }
@@ -99,11 +99,12 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
     try {
       retainSubmission(storageKey, input); setPending(input);
       const result = await createContentRun(scope, input);
-      setSelectedJobId(result.job_id); setNewPlan(false); setConfirmation(null);
+      setSelectedJobId(result.job_id); setNewPlan(false);
       clearSubmission(storageKey); setPending(null);
       await client.invalidateQueries({ queryKey: ["content-plan-runs", scope.projectId, scope.episodeId] });
+      onClose();
     } catch (failure) {
-      setError(toErrorMessage(failure)); setConfirmation(null);
+      setError(toErrorMessage(failure));
       // A definite client rejection did not accept a new run; transport/server failures are unknown.
       if (!pending && failure instanceof AppError && failure.status && failure.status >= 400 && failure.status < 500 && failure.status !== 408) {
         clearSubmission(storageKey); setPending(null);
@@ -111,18 +112,24 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
     } finally { inFlight.current = false; setBusy(false); }
   }
 
-  return <Dialog open title="生成片段脚本" size="large" onClose={onClose} busy={busy || recoveryBusy || resultBusy} footer={<>
-    <Button onClick={onClose} disabled={busy || recoveryBusy || resultBusy}>关闭</Button>
-    {showForm && <Button variant="primary" icon={<WandSparkles size={16} />} disabled={busy || runs.isFetching || Boolean(readError) || active || (!unresolved && !formReady)} onClick={() => {
+  return <Dialog open title="生成片段脚本" purpose="confirmation" size="small" onClose={onClose} busy={busy || recoveryBusy || resultBusy} footer={<>
+    <Button onClick={onClose} disabled={busy || recoveryBusy || resultBusy}>取消</Button>
+    {showForm && <Button variant="primary" icon={<WandSparkles size={16} />} disabled={busy || runs.isFetching || Boolean(jobId && live.isPending) || Boolean(readError) || active || (!unresolved && !formReady)} onClick={() => {
       if (unresolved && pending) { void submit(pending); return; }
       void prepareConfirmation();
-    }}>{unresolved ? "恢复提交" : "生成片段脚本"}</Button>}
+    }}>{unresolved ? "恢复提交" : "确认并生成"}</Button>}
   </>}>
     <div className="content-planning-dialog">
       {(runs.isPending || (jobId && live.isPending)) && <p role="status">正在读取本集规划…</p>}
       {readError && <p role="alert">{toErrorMessage(readError)} <Button icon={<RefreshCw size={14} />} onClick={() => { void runs.refetch(); if (jobId) void live.refetch(); }}>重新读取</Button></p>}
       {showForm && <>
+        <div className="content-planning-summary">
+          <span>文本模型</span><strong>{plannerModels.find(item => item.id === plannerId)?.name ?? "未选择文本模型"}</strong>
+          <span>视频模型</span><strong>{videoModels.find(item => item.id === videoId)?.name ?? "未选择视频模型"}</strong>
+          {capability.data && <><span>视频规格</span><strong>{capability.data.resolution.toUpperCase() || "待选择清晰度"} · {capability.data.aspect_ratio} · {capability.data.minimum_seconds}–{capability.data.maximum_seconds} 秒</strong></>}
+        </div>
         <fieldset className="content-planning-fields" disabled={busy || unresolved || active}>
+          <details open={!videoId || !plannerId || Boolean(capability.data?.requires_resolution_selection)}><summary>修改生成设置</summary>
           <label>视频模型<select aria-label="规划目标视频模型" value={videoId ?? ""} onChange={event => { setResolution(""); setVideoId(Number(event.target.value) || null); }}><option value="">选择视频模型</option>{videoModels.map(item => <option key={item.id} value={item.id}>{item.provider_name} · {item.name}</option>)}</select></label>
           {capability.data && <>
             <label>清晰度<select aria-label="规划视频清晰度" value={capability.data.resolution} disabled={capability.isFetching} onChange={event => setResolution(event.target.value)}>
@@ -132,10 +139,12 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
             <p>项目画幅 {capability.data.aspect_ratio}{capability.data.resolution ? ` · 每片段 ${capability.data.minimum_seconds}–${capability.data.maximum_seconds} 秒` : ""}</p>
             {capability.data.requires_resolution_selection && <p role="alert">当前清晰度不受该模型支持，请选择清晰度；不会自动降低清晰度。</p>}
           </>}
-          <label>补充要求（选填）<textarea aria-label="补充要求" maxLength={3000} value={requirements} onChange={event => setRequirements(event.target.value)} /></label>
           <label className="content-planning-bgm"><input type="checkbox" checked={bgm} onChange={event => setBgm(event.target.checked)} />视频包含背景音乐</label>
-          <details><summary>高级设置</summary><label>文本模型<select aria-label="规划文本模型" value={plannerId ?? ""} onChange={event => setPlannerId(Number(event.target.value) || null)}><option value="">选择文本模型</option>{plannerModels.map(item => <option key={item.id} value={item.id}>{item.provider_name} · {item.name}</option>)}</select></label></details>
+          <label>文本模型<select aria-label="规划文本模型" value={plannerId ?? ""} onChange={event => setPlannerId(Number(event.target.value) || null)}><option value="">选择文本模型</option>{plannerModels.map(item => <option key={item.id} value={item.id}>{item.provider_name} · {item.name}</option>)}</select></label>
+          </details>
+          <label>补充要求（选填）<textarea aria-label="补充要求" maxLength={3000} value={requirements} onChange={event => setRequirements(event.target.value)} /></label>
         </fieldset>
+        <p className="content-planning-fees">将调用文本模型，费用按渠道实际计费，不生成图片或视频。已有脚本将更新，历史版本保留；生成期间发生编辑冲突时不会覆盖。</p>
         {capability.error && <p role="alert">{toErrorMessage(capability.error)} <Button onClick={() => void capability.refetch()}>重新读取</Button><Button onClick={() => setSettingsModel(videoModels.find(item => item.id === videoId) ?? null)}>设置视频模型</Button></p>}
         {inputs.error && <p role="alert">{toErrorMessage(inputs.error)} <Button onClick={() => void inputs.refetch()}>重新读取正文范围</Button></p>}
         {sourceIssue && <ScriptSourceReview projectId={scope.projectId} episodeId={scope.episodeId} revision={scriptRevision} editing={false} onLocate={(issue, revision) => {
@@ -143,7 +152,8 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
         }} />}
         {capability.data && !capability.data.supports_background_music && bgm && <p role="alert">该模型不支持背景音乐，请关闭配乐或更换模型。</p>}
         {unresolved && <p role="status">上次提交结果尚未确认。恢复提交沿用原请求，不会创建第二份相同任务。</p>}
-        {newPlan && jobId && !unresolved && <Button variant="text" onClick={() => setNewPlan(false)}>返回已有规划</Button>}
+        {active && <p role="status">本集已有任务正在生成，请返回工作台查看进度。</p>}
+        {!startNew && newPlan && jobId && !unresolved && <Button variant="text" onClick={() => setNewPlan(false)}>返回已有规划</Button>}
       </>}
       {!showForm && job && <>
         {latest?.job_id === job.id && latest.script_revision !== scriptRevision && <p role="alert">正文已更新，当前显示的是旧版规划。请按已确认的新正文重新规划。</p>}
@@ -157,10 +167,6 @@ function ContentPlanningDialogBody({ scope, scriptRevision, plannerModels, video
       </>}
       {error && <p role="alert">{error}</p>}
     </div>
-    <Dialog purpose="confirmation" open={Boolean(confirmation)} title="确认文本生成费用" size="small" onClose={() => setConfirmation(null)} busy={busy} footer={<>
-      <Button disabled={busy} onClick={() => setConfirmation(null)}>取消</Button>
-      <Button variant="primary" disabled={busy} onClick={() => { if (confirmation) void submit(confirmation); }}>确认并生成</Button>
-    </>}><p>将分析本集正文，并按视频模型规格生成片段脚本。会调用文本模型并产生费用，按渠道实际计费；不会生成图片或视频。</p><p>重新规划会新增文本费用。已有失败任务可先重试未完成内容，复用已保存结果。</p></Dialog>
     <VideoModelCapabilityDialog model={settingsModel} onClose={() => setSettingsModel(null)} onSaved={() => { setSettingsModel(null); void capability.refetch(); }} />
   </Dialog>;
 }

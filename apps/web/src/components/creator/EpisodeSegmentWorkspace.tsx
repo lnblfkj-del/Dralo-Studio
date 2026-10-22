@@ -1,4 +1,8 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type CSSProperties } from "react";
+import { useSegmentPreviewWidth } from "./useSegmentPreviewWidth";
+import { VideoQualityReview } from "./VideoQualityReview";
+import { SegmentPlanningStatus } from "./SegmentPlanningStatus";
+import type { ContentRunSummary } from "@/api/contentPlanning";
 import { AlertCircle, ChevronDown, Clapperboard, Film, MoreHorizontal, Plus, SlidersHorizontal, Sparkles, Trash2, Volume2 } from "lucide-react";
 import { AssetMediaPreview } from "@/components/assets/AssetMediaPreview";
 import { MediaThumbnail } from "@/components/assets/MediaThumbnail";
@@ -17,7 +21,7 @@ import { SegmentStructuredEditor } from "./SegmentStructuredEditor";
 import { SegmentAssetBindingDialog } from "./SegmentAssetBindingDialog";
 import { SegmentUnmatchedAssets } from "./SegmentUnmatchedAssets";
 import { SegmentAssetReferences } from "./SegmentAssetReferences";
-import { scriptAssetBindings, withoutAssetMentions, replaceAssetMentionVersion } from "@/domain/segmentAssetReferences";
+import { documentAssetReferences, documentPinnedBindings, scriptAssetBindings, replaceAssetMentionVersion } from "@/domain/segmentAssetReferences";
 import { CheckedSegmentPreview } from "./CheckedSegmentPreview";
 import type { PlanningCapability } from "@/api/planningCapabilities";
 import "@/styles/episode-segment-studio.css";
@@ -57,6 +61,9 @@ interface Props {
   onDeleteSegments?: (payload: SegmentDeleteInput) => Promise<void>;
   onCheckContinuity?: () => void;
   onCreatePlan: () => void;
+  planningRun?: ContentRunSummary;
+  planningActions?: ReactNode;
+  onOpenPlanning?: () => void;
   canCreatePlan?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
   onManageAssets?: () => void;
@@ -71,7 +78,7 @@ interface Props {
   onPlanGeneration?: (segmentId: number) => void;
   onStartGeneration?: (segmentId: number) => void;
   onCancelGenerationPlan?: () => void;
-  onGenerateFirstFrames?: (segmentIds: number[]) => void;
+  onGenerateFirstFrames?: (segmentIds: number[], shotIndices?: number[]) => void;
   onGenerateSelectedVideos?: (segmentIds: number[]) => void;
   onOpenAssembly?: (focus: "video") => void;
   frameGenerationBusy?: boolean;
@@ -81,6 +88,9 @@ interface Props {
   episodeAssetIds?: number[];
   episodeAssetsLoading?: boolean;
   episodeAssetsError?: string;
+  assetsLoading?: boolean;
+  assetsError?: string;
+  onRetryAssets?: () => void;
   initialSegmentId?: number | null;
   onSelectedSegmentChange?: (segmentId: number | null) => void;
 }
@@ -158,6 +168,9 @@ export function EpisodeSegmentWorkspace({
   onLifecycle,
   onDeleteSegments,
   onCreatePlan,
+  planningRun,
+  planningActions,
+  onOpenPlanning,
   canCreatePlan = true,
   onDirtyChange,
   onManageAssets,
@@ -178,6 +191,9 @@ export function EpisodeSegmentWorkspace({
   episodeAssetIds = [],
   episodeAssetsLoading = false,
   episodeAssetsError,
+  assetsLoading = false,
+  assetsError,
+  onRetryAssets,
   initialSegmentId = null,
   onSelectedSegmentChange,
 }: Props) {
@@ -187,6 +203,8 @@ export function EpisodeSegmentWorkspace({
   const [selectedLineage, setSelectedLineage] = useState<string | null>(null);
   const [assetSearch, setAssetSearch] = useState("");
   const [assetScope, setAssetScope] = useState(projectId ? "episode" : "all");
+  const libraryError = assetsError || (assetScope === "episode" ? episodeAssetsError : undefined);
+  const libraryLoading = !libraryError && (assetsLoading || (assetScope === "episode" && episodeAssetsLoading));
   const [assetCategory, setAssetCategory] = useState("all");
   const [bindingChoice, setBindingChoice] = useState<{ index: number; asset: Asset; version: AssetVersion } | null>(null);
   const [previewChoice, setPreviewChoice] = useState<{ asset: Asset; version: AssetVersion } | null>(null);
@@ -201,6 +219,7 @@ export function EpisodeSegmentWorkspace({
   const [exclusionReviewed, setExclusionReviewed] = useState(false);
   useEffect(() => setExclusionReviewed(savedExclusionReview), [plan?.id, savedExclusionReview]);
   const [assetCollapsed, setAssetCollapsed] = useState(false);
+  const previewWidth = useSegmentPreviewWidth();
   const [mobilePanel, setMobilePanel] = useState<"assets" | "preview" | null>(null);
   const assetPanelRef = useRef<HTMLElement>(null);
   const previewPanelRef = useRef<HTMLElement>(null);
@@ -285,6 +304,8 @@ export function EpisodeSegmentWorkspace({
     return Array.isArray(values) ? values.map(Number).filter((value) => Number.isFinite(value) && value > 0) : [];
   }, [checkVideoOptions, plan?.model_capability_snapshot]);
   const maxReferences = Number(plan?.model_capability_snapshot.max_reference_images ?? 0);
+  const planningFailed = Boolean(planningRun && !planningRun.saved_to_workbench && ["failed", "cancelled"].includes(planningRun.status));
+  const generationLabel = planningFailed ? "重新AI生成脚本" : "AI生成整集脚本";
 
   const change = (index: number, patch: Partial<SegmentDraft>) => {
     setDrafts((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
@@ -307,6 +328,11 @@ export function EpisodeSegmentWorkspace({
     const current = drafts[index];
     const asset = assets.find(item => item.id === assetId);
     if (!current || !asset || busy || current.segment_status === "archived") return;
+    if (referenceTargetField.current) {
+      setMentionRequest({ id: ++mentionSequence.current, label: referenceTargetField.current, name: asset.name });
+      referenceTargetField.current = null;
+      return;
+    }
     const refs = current.refs ?? {};
     const references = [...list(refs.asset_references).filter(item => Number(item.asset_id) !== assetId), {
       asset_id: assetId, asset_name: asset.name, asset_type: asset.asset_type, resolved: true,
@@ -338,7 +364,8 @@ export function EpisodeSegmentWorkspace({
     if (!current) return;
     const refs = current.refs ?? {};
     const remaining = list(refs.asset_bindings).filter(item => Number(item.asset_id) !== assetId);
-    change(index, { parameters: withoutAssetMentions(current.parameters ?? {}, assetId), refs: { ...refs,
+    change(index, { refs: { ...refs,
+      document_asset_bindings: documentPinnedBindings(current.parameters ?? {}, [...list(refs.document_asset_bindings), ...list(refs.asset_bindings).filter(item => Number(item.asset_id) === assetId)]),
       asset_references: list(refs.asset_references).filter(item => Number(item.asset_id) !== assetId),
       asset_bindings: remaining, unresolved_assets: list(refs.unresolved_assets).filter(item => Number(item.asset_id) !== assetId),
       reference_media_ids: remaining.filter(item => item.media_kind === "image").map(item => Number(item.media_file_id)),
@@ -397,9 +424,9 @@ export function EpisodeSegmentWorkspace({
       { asset_id: binding.asset_id, asset_name: binding.asset_name, asset_type: binding.asset_type, resolved: false },
     ];
     change(index, {
-      parameters: withoutAssetMentions(current.parameters ?? {}, Number(binding.asset_id)),
       refs: {
         ...refs,
+        document_asset_bindings: documentPinnedBindings(current.parameters ?? {}, [...list(refs.document_asset_bindings), binding]),
         asset_bindings: bindings,
         reference_media_ids: [...new Set(bindings.filter((item) => item.media_kind !== "audio" && item.media_kind !== "video").map((item) => Number(item.media_file_id)).filter(Number.isSafeInteger))],
         unresolved_assets: unresolved,
@@ -442,7 +469,7 @@ export function EpisodeSegmentWorkspace({
       parent_plan_id: plan.id,
       segments: drafts.map(({ id, ...item }) => {
         void id;
-        return item;
+        return { ...item, refs: { ...item.refs, document_asset_references: documentAssetReferences(item.parameters ?? {}, adoptedAssetMentionChoices(assets, episodeAssetIds)) } };
       }),
     });
   };
@@ -469,6 +496,8 @@ export function EpisodeSegmentWorkspace({
   const nextSource = plan?.segments[activeIndex + 1];
   const canMergeNext = Boolean(nextSource?.shots.length && activeSource?.shots.length && !archived && nextSource.status !== "archived" && activeSource.shots[0]?.scene_id === nextSource.shots[0]?.scene_id);
   const bindings = list(activeDraft?.refs?.asset_bindings);
+  const shotFrames = list(activeSource?.refs?.shot_frames);
+  const readyShotFrames = shotFrames.filter(item => item.media_file_id);
   const assetReferences = list(activeDraft?.refs?.asset_references);
   const assetMaterials = list(activeSource?.refs?.asset_materials).map(item => {
     const pinned = bindings.find(binding => binding.asset_id === item.asset_id);
@@ -507,16 +536,18 @@ export function EpisodeSegmentWorkspace({
     trigger.current?.focus();
   };
 
-  return <section className={["segment-studio", assetCollapsed ? "library-collapsed" : "", mobilePanel ? "show-" + mobilePanel : ""].join(" ")} aria-label="片段脚本工作台">
+  return <section style={{ "--segment-preview-width": `${previewWidth.width}px` } as CSSProperties} className={["segment-studio", assetCollapsed ? "library-collapsed" : "", mobilePanel ? "show-" + mobilePanel : ""].join(" ")} aria-label="片段脚本工作台">
     {confirmation.dialog}
     <aside ref={assetPanelRef} id="segment-assets-panel" tabIndex={-1} className="segment-library" aria-label="片段素材">
       <AssetLibraryPanelHeader title="本集素材" collapsed={assetCollapsed} onToggle={() => setAssetCollapsed(!assetCollapsed)} />
       <div className="segment-library-content">
         <AssetLibrarySearch label="搜索片段素材" value={assetSearch} onChange={setAssetSearch} />
         <details className="segment-library-filter"><summary><SlidersHorizontal size={15} />筛选{assetScope !== "episode" || assetCategory !== "all" ? " · 已启用" : ""}</summary><div><select aria-label="素材范围" value={assetScope} onChange={(event) => setAssetScope(event.target.value)}><option value="episode">本集素材</option><option value="all">全部项目素材</option><option value="bound">当前片段已引用</option></select><select aria-label="素材分类" value={assetCategory} onChange={(event) => setAssetCategory(event.target.value)}>{Object.entries({ all: "全部分类", character: "角色", costume: "造型", scene: "场景", prop: "道具", reference: "镜头帧", voice: "声音", video: "视频", canvas: "画布" }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></details>
-        {assetScope === "episode" && episodeAssetsLoading && <p role="status">正在读取本集素材…</p>}
-        {assetScope === "episode" && episodeAssetsError && <p role="alert">{episodeAssetsError}</p>}
-        <div className="segment-library-items">{visibleAssets.map((asset) => {
+        {libraryLoading && <p className="segment-empty-note" role="status">{assetScope === "episode" ? "正在读取本集素材…" : "正在读取素材…"}</p>}
+        {libraryError && <div role="alert"><p>{libraryError}</p>{onRetryAssets && <button onClick={onRetryAssets}>重新加载素材</button>}</div>}
+        <div className="segment-library-items" aria-busy={libraryLoading}>
+          {libraryLoading && !visibleAssets.length && <div className="segment-library-skeleton" aria-hidden="true">{Array.from({ length: 5 }, (_, index) => <div key={index}><i /><span><i /><i /></span></div>)}</div>}
+          {visibleAssets.map((asset) => {
           const choices = viewChoices.filter((item) => item.asset.id === asset.id).sort((a, b) => b.version.version - a.version.version || b.version.id - a.version.id);
           const bound = editorBindings.find((binding) => Number(binding.asset_id) === asset.id);
           const preview = choices.find((item) => item.version.id === Number(bound?.asset_version_id)) ?? choices[0];
@@ -525,37 +556,36 @@ export function EpisodeSegmentWorkspace({
             <button className="segment-library-reference" aria-label={"引用素材 " + asset.name} disabled={!activeDraft || archived || busy || (!projectId && !preview)} onMouseDown={() => { referenceTargetField.current = activeEditorField; }} onClick={() => projectId ? addAssetReference(activeIndex, asset.id) : preview && bindView(activeIndex, String(preview.version.id))}><strong title={asset.name}>{asset.name}</strong><small>{bound ? "已引用" : choices.length ? "引用当前采用素材" : "可先引用，素材待准备"}</small></button>
             {projectId && preview && <button className="segment-library-version" aria-label={"选择素材版本 " + asset.name} title="指定素材版本" onClick={() => bindView(activeIndex, String(preview.version.id))}>V{preview.version.version}</button>}
           </article>;
-        })}{!visibleAssets.length && <p className="segment-empty-note">{assetScope === "bound" ? "当前片段尚未引用素材" : "暂无匹配素材"}{assetScope === "episode" && <button type="button" onClick={() => setAssetScope("all")}>查看全剧资产</button>}</p>}</div>
+        })}{!libraryLoading && !libraryError && !visibleAssets.length && <p className="segment-empty-note">{assetScope === "bound" ? "当前片段尚未引用素材" : "暂无匹配素材"}{assetScope === "episode" && <button type="button" onClick={() => setAssetScope("all")}>查看全剧资产</button>}</p>}</div>
         {onManageAssets && <button onClick={onManageAssets}>管理资产</button>}
       </div>
+
     </aside>
     <main className="segment-current-editor">
       <header className="segment-current-heading"><div className="segment-heading-identity"><small>{activeSource ? `片段脚本 · ${String(activeSource.order).padStart(2, "0")}` : "片段脚本"}</small>{activeDraft && activeSource ? <><h1><input className="segment-heading-title" disabled={busy || archived} aria-label={"片段 " + (activeIndex + 1) + " 标题"} value={activeDraft.title ?? ""} maxLength={255} onChange={(event) => change(activeIndex, { title: event.target.value })} /></h1><span className="segment-heading-meta">{seconds(activeSource.timeline_duration)} 秒 · {activeSource.shots.length} 个镜头</span></> : <h1>准备片段脚本</h1>}</div><div>
         <button ref={assetPanelTriggerRef} className="segment-mobile-assets" aria-controls="segment-assets-panel" aria-expanded={mobilePanel === "assets"} onClick={() => setMobilePanel(mobilePanel === "assets" ? null : "assets")}>素材</button>
         <button ref={previewPanelTriggerRef} className="segment-mobile-preview" aria-controls="segment-preview-panel" aria-expanded={mobilePanel === "preview"} onClick={() => setMobilePanel(mobilePanel === "preview" ? null : "preview")}>视频</button>
-        <button className="segment-whole-script-action" disabled={!canCreatePlan || busy || dirty} onClick={onCreatePlan}><Sparkles size={16} />AI生成整集脚本</button>
+        {drafts.length > 0 && !["queued", "running", "processing", "retrying", "downloading"].includes(planningRun?.status ?? "") && <button className="segment-whole-script-action" disabled={busy || dirty || !canCreatePlan} onClick={onCreatePlan}><Sparkles size={16} />{generationLabel}</button>}
         {<button className="studio-primary" disabled={busy || pendingMention || (!dirty && (plan?.status !== "draft" || draftBlocked)) || !plan} onClick={save}>{busy ? "处理中…" : draftBlocked ? "保存草稿" : !dirty && plan?.status === "draft" ? "确认脚本" : "保存脚本"}</button>}
       </div></header>
-      {plan && draftBlocked && <details className="segment-confirmation-notice" aria-label="脚本待确认项">
+      {plan && drafts.length > 0 && draftBlocked && <details className="segment-confirmation-notice" aria-label="脚本待确认项">
         <summary><AlertCircle size={16} aria-hidden="true" /><strong>脚本待确认</strong><span>{confirmationIssueCount ? `${confirmationIssueCount} 项待处理` : "请补全片段内容"}</span><span className="segment-confirmation-toggle">查看问题<ChevronDown size={15} aria-hidden="true" /></span></summary>
         <div className="segment-confirmation-issues">
           {excludedShotsNeedReview && <p>请确认已移出时间轴的 {excludedShots.length} 个来源镜头。</p>}
           {confirmationIssues.map(({ item, label }) => <button key={`${item.id}-${label}`} disabled={busy} onClick={() => setSelectedLineage(item.lineage_key ?? null)}>{label}</button>)}
         </div>
       </details>}
-      {frameGenerationError && <p className="studio-error" role="alert">{frameGenerationError}</p>}
       {error && <p className="studio-error" role="alert">{error}</p>}
       {continuity && <details className="segment-check-result" open={continuity.status === "blocked"}><summary>{continuity.status === "passed" ? "连续性检查通过" : continuity.status === "blocked" ? "连续性存在阻断" : "连续性需要注意"}</summary>{continuity.issues.map((issue, index) => <p key={index}>{issue.message}</p>)}</details>}
-      {!activeDraft || !activeSource ? <div className="segment-empty-workspace"><Film size={32} /><h2>还没有片段脚本</h2><p>{canCreatePlan ? "从本集正文规划片段脚本。" : "请先确认本集正文。"}</p><button className="studio-primary" disabled={!canCreatePlan || busy} onClick={onCreatePlan}>AI生成整集脚本</button></div> : <>
+      {planningRun && !planningRun.saved_to_workbench && (!planningFailed || Boolean(activeDraft && activeSource)) && <SegmentPlanningStatus run={planningRun} compact={Boolean(activeDraft && activeSource)} onOpen={onOpenPlanning ?? onCreatePlan} />}
+      {planningRun?.status === "succeeded" && !planningRun.saved_to_workbench && planningActions}
+      {!activeDraft || !activeSource ? planningRun && !planningRun.saved_to_workbench && !planningFailed ? null : <div className="segment-empty-workspace"><Film size={32} /><h2>{planningFailed ? "片段脚本生成未完成" : "还没有片段脚本"}</h2><p>{!canCreatePlan ? "请先确认本集正文。" : planningFailed ? "上次生成结果已保留。" : "从本集正文规划片段脚本。"}</p><button className="studio-primary" disabled={!canCreatePlan || busy} onClick={onCreatePlan}><Sparkles size={16} />{generationLabel}</button></div> : <>
         {archived && <p className="segment-archive-note" role="status">该片段已归档，恢复后可继续编辑和生成。</p>}
         <>
-        <SegmentAssetReferences references={assetReferences} materials={assetMaterials} disabled={busy || archived} onRemove={assetId => removeAssetReference(activeIndex, assetId)} onDelivery={(assetId, delivery) => changeAssetDelivery(activeIndex, assetId, delivery)} />
-        <div className="segment-reference-row" aria-label="当前片段引用">{bindings.map((binding) => <button disabled={busy || archived} title="移除此视图绑定" key={String(binding.asset_version_id) + String(binding.role)} onClick={() => removeView(activeIndex, binding)}>{String(binding.asset_name ?? "素材")} · {String(binding.view_label ?? "指定视图")} ×</button>)}{unresolvedBindings.map((binding) => {
-          if (binding.asset_type !== "voice") return <span className="unresolved" key={String(binding.asset_id)}>{String(binding.asset_name)} · 待绑定</span>;
-          const isCharacterVoice = voicePurposeByAssetId.get(Number(binding.asset_id)) === "character_voice";
-          const fallback = isCharacterVoice ? "采用角色声线" : "按脚本描述";
-          return <span className="voice-fallback" role="status" aria-label={`${String(binding.asset_name)}没有可用声音素材，${fallback}`} key={String(binding.asset_id)}><Volume2 size={14} aria-hidden="true" /><strong>{String(binding.asset_name)}</strong><span>声音未绑定</span><span className="voice-fallback-separator" aria-hidden="true">·</span><span>{fallback}</span></span>;
-        })}{onGenerateFirstFrames && <button disabled={busy || dirty || archived || frameGenerationBusy || !imageModelName} title={imageModelName ? `使用 ${imageModelName} 生成` : "请先配置图片模型"} onClick={() => onGenerateFirstFrames([activeSource.id])}>{frameGenerationBusy ? "正在提交首帧…" : bindings.some((item) => item.role === "first_frame") ? "重新生成首帧" : "生成首帧"}</button>}</div>
+        {list(activeSource.refs?.coverage_issues).length > 0 && <div className="studio-error" role="alert">
+          {list(activeSource.refs?.coverage_issues).map((issue, index) => <p key={index}>{String(issue.message ?? "")}</p>)}
+        </div>}
+
         {previousDraft && <label className="segment-continuity-input"><input type="checkbox" aria-label="使用上一片段采用视频尾帧衔接" disabled={busy || archived} checked={continuitySource === previousDraft.lineage_key} onChange={(event) => change(activeIndex, { refs: { ...(activeDraft.refs ?? {}), continuity: event.target.checked ? { source_lineage_key: previousDraft.lineage_key, role: "first_frame" } : null } })} /><span><strong>使用上一片段采用视频尾帧衔接</strong><small>生成时解析片段 {String(previousSource?.order ?? activeIndex).padStart(2, "0")} 该血缘最新采用版本；未采用时会明确阻断</small></span></label>}
         <SegmentUnmatchedAssets refs={activeDraft.refs ?? {}} bindings={editorBindings} disabled={busy || archived} onChange={(refs) => change(activeIndex, { refs })} />
         {excludedShots.length > 0 && <label className="segment-continuity-input"><input type="checkbox" aria-label="确认正文删减范围" disabled={busy} checked={exclusionReviewed} onChange={(event) => setExclusionReviewed(event.target.checked)} /><span>确认本时间轴不使用已移除的 {excludedShots.length} 个来源镜头（原始正文与镜头保留）</span></label>}
@@ -569,7 +599,27 @@ export function EpisodeSegmentWorkspace({
         </>
       </>}
     </main>
+    <div className="segment-preview-resizer" {...previewWidth.separator} />
     <aside ref={previewPanelRef} id="segment-preview-panel" tabIndex={-1} className="segment-current-preview" aria-label="当前片段视频"><CheckedSegmentPreview projectId={projectId} episodeId={plan?.episode_id} key={activeSource?.id ?? "empty"}
+      referenceAssets={<><SegmentAssetReferences references={assetReferences} materials={assetMaterials} disabled={busy || archived} onRemove={assetId => removeAssetReference(activeIndex, assetId)} onDelivery={(assetId, delivery) => changeAssetDelivery(activeIndex, assetId, delivery)} />
+        <div className="segment-reference-row" aria-label="当前片段引用">{bindings.map((binding) => <button disabled={busy || archived} title="移除此视图绑定" key={String(binding.asset_version_id) + String(binding.role)} onClick={() => removeView(activeIndex, binding)}>{String(binding.asset_name ?? "素材")} · {String(binding.view_label ?? "指定视图")} ×</button>)}{unresolvedBindings.map((binding) => {
+          if (binding.asset_type !== "voice") return <span className="unresolved" key={String(binding.asset_id)}>{String(binding.asset_name)} · 待绑定</span>;
+          const isCharacterVoice = voicePurposeByAssetId.get(Number(binding.asset_id)) === "character_voice";
+          const fallback = isCharacterVoice ? "采用角色声线" : "按脚本描述";
+          return <span className="voice-fallback" role="status" aria-label={`${String(binding.asset_name)}没有可用声音素材，${fallback}`} key={String(binding.asset_id)}><Volume2 size={14} aria-hidden="true" /><strong>{String(binding.asset_name)}</strong><span>声音未绑定</span><span className="voice-fallback-separator" aria-hidden="true">·</span><span>{fallback}</span></span>;
+        })}</div>
+      </>}
+      referenceFrame={activeSource && onGenerateFirstFrames ? <details className="segment-reference-frame" open={frameGenerationError ? true : undefined}><summary>镜头画面 <span>{readyShotFrames.length} / {shotFrames.length} 已准备</span></summary>
+        {frameGenerationError && <p className="studio-error" role="alert">镜头图预检：{frameGenerationError}</p>}
+        {readyShotFrames.length > 0 && <label className="segment-shot-use"><input type="checkbox" checked={activeDraft?.refs?.use_shot_frames !== false} disabled={busy || archived} onChange={event => change(activeIndex, { refs: { ...activeDraft?.refs, use_shot_frames: event.target.checked } })} />加入视频参考</label>}
+        <div className="segment-shot-frames">{shotFrames.map(frame => <article key={Number(frame.shot_index)}>
+          {frame.media_file_id ? <MediaThumbnail mediaId={Number(frame.media_file_id)} alt={`镜头 ${frame.shot_index} 画面`} className="segment-shot-frame-image" /> : <div className="segment-shot-frame-empty"><Film size={24} /></div>}
+          <footer><span>镜头 {String(frame.shot_index).padStart(2, "0")}{frame.duration ? ` · ${frame.duration}s` : ""}</span>
+          <button aria-label={`生成镜头 ${frame.shot_index} 画面`} title={frame.media_file_id ? "重新生成此镜头" : "生成此镜头"} disabled={busy || dirty || archived || frameGenerationBusy || !imageModelName} onClick={() => onGenerateFirstFrames([activeSource.id], [Number(frame.shot_index)])}><Sparkles size={14} /></button></footer>
+        </article>)}</div>
+        <button disabled={!shotFrames.length || readyShotFrames.length === shotFrames.length || busy || dirty || archived || frameGenerationBusy || !imageModelName} onClick={() => onGenerateFirstFrames([activeSource.id])}><Sparkles size={15} />{frameGenerationBusy ? "正在检查…" : "生成缺失镜头图"}</button>
+        {dirty && <p role="status">保存脚本后可生成镜头画面。</p>}
+      </details> : undefined}
       input={checkVideoOptions && projectId && plan && activeDraft ? { plan_id: plan.id, production_revision: productionRevision,
         segment_id: activeDraft.id, refs: activeDraft.refs ?? {}, parameters: activeDraft.parameters ?? {},
         generation_duration: activeDraft.generation_duration, shot_count: (() => {
@@ -580,10 +630,11 @@ export function EpisodeSegmentWorkspace({
     <footer className={`segment-filmstrip${selection.length ? " has-selection" : ""}`}>
       <header><strong>片段</strong><span>{drafts.length} 段 · {plan ? seconds(plan.total_timeline_duration) : 0} 秒</span>
         {onOpenAssembly && <button className="segment-strip-edit" onClick={() => onOpenAssembly("video")}><Clapperboard size={15} />整集剪辑</button>}
+        {projectId && plan && <VideoQualityReview projectId={projectId} plan={plan} segmentId={activeSource?.id} />}
         <button className="segment-strip-select-all" disabled={!drafts.length || busy || dirty || deletePending} onClick={() => setSelection(allSelected ? [] : selectableIds)}>{allSelected ? "取消全选" : "全选片段"}</button>
         {selection.length > 0 && <><span>已选 {selection.length} 项</span>
           {onGenerateSelectedVideos && <button disabled={!selection.length || busy || dirty || deletePending || generationBusy} onClick={() => onGenerateSelectedVideos([...selection])}><Film size={16} />生成所选视频 ({selection.length})</button>}
-          {onGenerateFirstFrames && <button className="segment-strip-action" disabled={!frameIds.length || busy || dirty || frameGenerationBusy || !imageModelName} onClick={() => onGenerateFirstFrames(frameIds)}>{frameGenerationBusy ? "正在提交…" : `生成首帧 (${frameIds.length})`}</button>}
+          {onGenerateFirstFrames && <button className="segment-strip-action" disabled={!frameIds.length || busy || dirty || frameGenerationBusy || !imageModelName} onClick={() => onGenerateFirstFrames(frameIds)}>{frameGenerationBusy ? "正在提交…" : `生成缺失镜头图 (${frameIds.length}段)`}</button>}
           <button disabled={!selection.length || busy || dirty || deletePending || !onDeleteSegments} onClick={() => requestDelete(selection)}><Trash2 size={16} />删除所选片段 ({selection.length})</button></>}
         {!selection.length && <button className="segment-strip-tool" title="删除当前片段" aria-label="删除当前片段" disabled={busy || dirty || !activeSource || deletePending || !onDeleteSegments} onClick={() => activeSource && requestDelete([activeSource.id])}><Trash2 size={16} /></button>}
       </header>

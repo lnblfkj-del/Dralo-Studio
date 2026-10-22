@@ -1,5 +1,7 @@
 """Current-page recovery of original upstream tasks, including historical lineage."""
 
+from datetime import datetime, timezone
+
 from sqlalchemy import or_, select
 
 from app.core.errors import ConflictError, NotFoundError
@@ -19,6 +21,9 @@ def classify(job):
         state = "terminal_failure"
     elif job.status not in TERMINAL_STATUSES:
         state = "active"
+    elif (not remote_id and (submission.get("manual_review") or {}).get("outcome") == "no_result"
+          and (submission.get("manual_review") or {}).get("started_at") == submission.get("started_at")):
+        state = "reviewed_no_result"
     elif submission.get("started") and not remote_id:
         state = "uncertain"
     elif remote_id:
@@ -86,7 +91,7 @@ async def current_segment(session, owner_id, project_id, episode_id, segment_id)
 
 def describe(segment, job):
     state, submission, remote_id = classify(job) if job else ("none", {}, None)
-    blocked = bool(job and job.retry_block_reason)
+    blocked = bool(job and job.retry_block_reason and state != "reviewed_no_result")
     return {
         "segment_id": segment.id, "job_id": job.id if job else None,
         "source_segment_id": job.target_id if job else None,
@@ -94,7 +99,9 @@ def describe(segment, job):
         "job_status": job.status if job else None, "state": state,
         "remote_task_id": remote_id, "remote_status": submission.get("terminal_status"),
         "can_resume": state == "resumable" and not blocked,
-        "can_regenerate": state in {"none", "completed", "terminal_failure", "not_submitted"},
+        "can_regenerate": state in {"none", "completed", "terminal_failure", "not_submitted", "reviewed_no_result"},
+        "can_confirm_no_result": state == "uncertain",
+        "can_link_remote_task": state in {"uncertain", "reviewed_no_result"},
         "regenerate_requires_confirmation": True,
         "resume_creates_new_job": False, "resume_submits_generation": False,
         "error_code": job.error_code if job else None,
@@ -138,3 +145,55 @@ async def resume(session, owner_id, *, project_id, episode_id, segment_id, job_i
 async def require_resolved_generation(session, segment, project_id, owner_id):
     if unresolved_jobs(await lineage_jobs(session, segment, project_id, owner_id)):
         raise ConflictError("请先恢复或核对原渠道视频任务，不能重复提交付费生成")
+
+
+async def confirm_no_result(session, owner_id, *, project_id, episode_id, segment_id, job_id, reason):
+    """Record human channel review only; never enqueue or resubmit generation."""
+    from app.services.job_video_batch_batch import _lock_attempt_scope
+
+    await _lock_attempt_scope(session, owner_id, project_id, episode_id)
+    segment = await current_segment(session, owner_id, project_id, episode_id, segment_id)
+    jobs = await lineage_jobs(session, segment, project_id, owner_id)
+    job = recovery_job(jobs)
+    if job is None or job.id != job_id:
+        raise ConflictError("待核对任务已变化，请刷新当前片段后重试")
+    state, submission, _ = classify(job)
+    if state == "reviewed_no_result":
+        return await recovery(session, owner_id, project_id=project_id, episode_id=episode_id, segment_id=segment_id)
+    if state != "uncertain":
+        raise ConflictError("仅可核对已结束且没有渠道任务编号的原任务；有编号请先恢复原任务")
+    job.payload = {**job.payload, "video_submission": {**submission, "manual_review": {
+        "outcome": "no_result", "actor_id": owner_id, "reason": reason.strip(),
+        "reviewed_at": datetime.now(timezone.utc).isoformat(), "started_at": submission.get("started_at"),
+    }}}
+    await session.flush()
+    return await recovery(session, owner_id, project_id=project_id, episode_id=episode_id, segment_id=segment_id)
+
+
+async def link_remote_task(session, owner_id, *, project_id, episode_id, segment_id, job_id, remote_task_id, reason):
+    """Attach an explicitly matched channel task; recovery remains poll/download only."""
+    from app.services.job_video_batch_batch import _lock_attempt_scope
+
+    await _lock_attempt_scope(session, owner_id, project_id, episode_id)
+    segment = await current_segment(session, owner_id, project_id, episode_id, segment_id)
+    jobs = await lineage_jobs(session, segment, project_id, owner_id)
+    job = recovery_job(jobs)
+    if job is None or job.id != job_id:
+        raise ConflictError("待找回任务已变化，请刷新当前片段后重试")
+    state, submission, original_id = classify(job)
+    if original_id == remote_task_id:
+        return await recovery(session, owner_id, project_id=project_id, episode_id=episode_id, segment_id=segment_id)
+    if state not in {"uncertain", "reviewed_no_result"} or original_id:
+        raise ConflictError("只能为缺少渠道编号的已结束任务找回结果，不能替换已有任务编号")
+    duplicate = await session.scalar(select(Job.id).where(
+        Job.id != job.id, Job.job_type == "video", Job.provider_id == job.provider_id,
+        or_(Job.payload["video_submission"]["id"].as_string() == remote_task_id,
+            Job.payload["video_submission"]["business_id"].as_string() == remote_task_id),
+    ).limit(1))
+    if duplicate is not None:
+        raise ConflictError("该渠道任务已关联其他本机任务，不能重复绑定")
+    job.payload = {**job.payload, "video_submission": {**submission, "id": remote_task_id,
+        "manual_task_link": {"actor_id": owner_id, "reason": reason.strip(),
+                             "linked_at": datetime.now(timezone.utc).isoformat()}}}
+    await session.flush()
+    return await recovery(session, owner_id, project_id=project_id, episode_id=episode_id, segment_id=segment_id)

@@ -16,7 +16,9 @@ async def resolve_mode(session, project_id, asset, parameters):
     attrs = asset.attributes or {}
     mode = parameters.get("costume_mode") or profile.get("costume_mode") or attrs.get("costume_mode")
     if not mode:
-        mode = "worn" if profile.get("character_asset_id") or attrs.get("linked_character_asset_ids") or attrs.get("linked_character_asset_id") else "garment_only"
+        mode = "worn" if (profile.get("character_asset_id") or profile.get("linked_character_asset_id")
+                         or profile.get("linked_character_asset_ids") or attrs.get("linked_character_asset_ids")
+                         or attrs.get("linked_character_asset_id")) else "garment_only"
     if mode not in {"garment_only", "worn"}:
         raise ConflictError("服装生成模式无效")
     return mode

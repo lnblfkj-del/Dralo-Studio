@@ -113,6 +113,9 @@ async def create_image_job(
     parameters: dict[str, Any],
     view_type: str = "base",
     view_label: str | None = None,
+    defer_consistency: bool = False,
+    asset_generation_contract: str | None = None,
+    bypass_asset_identity: bool = False,
 ) -> Job:
     row = await session.execute(
         select(ProviderModel, Provider)
@@ -129,7 +132,7 @@ async def create_image_job(
     if model.model_type != "image":
         raise ConflictError("图片任务只能使用图片模型")
     from app.models import Asset
-    asset = await session.get(Asset, asset_id)
+    asset = await session.get(Asset, asset_id) if not bypass_asset_identity else None
     if asset is not None and asset.asset_type == "voice":
         raise ConflictError("声音资产不能生成图片，请使用声音生成入口")
     requested_ratio = parameters.get("aspect_ratio")
@@ -141,23 +144,29 @@ async def create_image_job(
     if (model.api_protocol or provider.protocol) == "openai_compatible":
         from app.providers.image_parameters import openai_image_parameters
         openai_image_parameters(model.model_id, parameters)
-    from app.services.asset_identity_input import costume_identity
+    from app.services.asset_identity_input import costume_identity, scene_identity
     from app.services.costume_generation_service import resolve_mode
     costume_mode = await resolve_mode(session, project_id, asset, parameters) if asset else None
     if costume_mode:
         parameters["costume_mode"] = costume_mode
-    prompt, reference_media_ids = await costume_identity(
-        session, project_id, asset_id, model, prompt, reference_media_ids, mode=costume_mode or "worn"
-    )
-    from app.services.image_model_contract import validate_image_inputs
-    from app.services.style_generation_service import project_style_media
-    references_to_validate = list(reference_media_ids)
-    # Worker appends the style reference; reserve its real slot during submission.
-    if project_id is not None and "reference_images" in model.capabilities:
-        style_media = await project_style_media(session, project_id, owner_id, "image")
-        if style_media:
-            references_to_validate.append(style_media)
-    validate_image_inputs(model, parameters, references_to_validate)
+    consistency_snapshot = None
+    if not defer_consistency and not bypass_asset_identity:
+        if project_id is None:
+            prompt, reference_media_ids = await costume_identity(
+                session, project_id, asset_id, model, prompt, reference_media_ids, mode=costume_mode or "worn"
+            )
+            prompt, reference_media_ids = await scene_identity(
+                session, project_id, asset, model, prompt, reference_media_ids
+            )
+        elif asset is not None and asset.asset_type in {"character", "costume", "scene", "prop"}:
+            from app.services.asset_consistency_images import freeze_image_references
+            prompt, reference_media_ids, consistency_snapshot = await freeze_image_references(
+                session, project_id, asset_id, model, prompt, reference_media_ids,
+                parameters=parameters, costume_mode=costume_mode or "worn", freeze=True,
+            )
+    from app.services.image_model_contract import validate_image_inputs, project_image_references
+    effective_references = await project_image_references(session, project_id, owner_id, reference_media_ids)
+    validate_image_inputs(model, parameters, effective_references)
     if project_id is not None:
         project = await session.scalar(
             select(Project.id).where(Project.id == project_id, owner_scope(Project.owner_id, owner_id))
@@ -186,6 +195,8 @@ async def create_image_job(
             "view_type": view_type,
             "view_label": view_label,
             "visual_identity_snapshot": identity_snapshot,
+            "consistency_image_snapshot": consistency_snapshot,
+            "asset_generation_contract": asset_generation_contract,
             "parameters": {**model.default_params, **parameters},
         },
         provider=provider.name,
@@ -196,6 +207,29 @@ async def create_image_job(
         from app.services.asset_character_representation import GROUP_CONTRACT
         job.payload = {**job.payload, "asset_generation_contract": GROUP_CONTRACT,
                        "character_group_snapshot": identity_snapshot["character_profile"]}
+    from app.services.style_generation_service import apply_project_style
+    style = await apply_project_style(session, job, model)
+    refs = list(job.payload["reference_media_ids"])
+    if style and style.get("media_id"):
+        style_media = await session.get(MediaFile, style["media_id"])
+        if style_media is None or style_media.kind != "image":
+            raise ConflictError("项目风格参考图片不存在或不可用")
+        style = {**style, "media_hash": style_media.hash, "media_path": style_media.file_path,
+                 "purpose": "project_style"}
+        refs = list(dict.fromkeys([*refs, style["media_id"]]))
+        if not defer_consistency:
+            job.payload = {**job.payload, "prompt": job.payload["prompt"] +
+                           f"\n参考图{refs.index(style['media_id']) + 1}：仅用于项目渲染风格，保持资产身份不变。"}
+    validate_image_inputs(model, parameters, refs)
+    job.payload = {**job.payload, "reference_media_ids": refs,
+                   "style_snapshot": deepcopy(style),
+                   "image_reference_roles": [
+                       *((consistency_snapshot or {}).get("references") or []),
+                       *([{"media_file_id": style["media_id"], "role": "style", "purpose": "project_style",
+                           "media_hash": style.get("media_hash"), "media_path": style.get("media_path"),
+                           "reference_index": refs.index(style["media_id"]) + 1}]
+                         if style and style.get("media_id") else []),
+                   ]}
     session.add(job)
     await session.flush()
     return job

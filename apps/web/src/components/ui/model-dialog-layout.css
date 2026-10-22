@@ -50,11 +50,13 @@
 .ui-dialog.model-management-dialog.ant-modal .video-spec-summary dl { grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px 20px; }
 .ui-dialog.model-management-dialog.ant-modal .video-settings-fields { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:16px 28px; }
 .ui-dialog.model-management-dialog.ant-modal .video-settings-fields > * { min-width:0; }
-.ui-dialog.model-management-dialog.ant-modal .video-settings-fields > :is(.video-generation-options,.video-rule-scope,.video-special-rules,.video-new-rule,.video-support-error) { grid-column:1 / -1; }
+.ui-dialog.model-management-dialog.ant-modal .video-settings-fields > :is(.video-generation-options,.video-rule-scope,.video-special-rules,.video-new-rule,.video-support-error,.video-material-rules,.video-inline-confirm) { grid-column:1 / -1; }
 .ui-dialog.model-management-dialog.ant-modal .video-rule-scope { gap:6px; }
 .ui-dialog.model-management-dialog.ant-modal .video-rule-scope select { max-width:540px; }
 .ui-dialog.model-management-dialog.ant-modal .video-settings-fields > .video-rule-fields { grid-column:1 / -1; }
-.ui-dialog.model-management-dialog.ant-modal .video-mode-edit-fields { grid-template-columns:repeat(3,minmax(0,1fr)); align-items:start; gap:24px; }
+.ui-dialog.model-management-dialog.ant-modal .video-mode-edit-fields { grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; gap:24px; }
+.ui-dialog.model-management-dialog.ant-modal .model-edit-form .video-duration-add input { max-width:none; }
+.ui-dialog.model-management-dialog.ant-modal .video-duration-add button { width:36px; height:36px; padding:0; }
 .ui-dialog.model-management-dialog.ant-modal .video-mode-edit-fields > .video-support-grid { grid-column:1 / -1; }
 .ui-dialog.model-management-dialog.ant-modal .video-mode-section { display:grid; min-width:0; align-content:start; gap:12px; }
 .ui-dialog.model-management-dialog.ant-modal .video-mode-section h3 { padding:0; margin:0; }

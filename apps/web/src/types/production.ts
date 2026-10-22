@@ -469,6 +469,10 @@ export interface EpisodeProductionPlan {
 }
 
 export interface SegmentFirstFramePlan {
+  frame_scope?: "segment" | "shots";
+  shot_indices?: number[] | null;
+  missing_only?: boolean;
+  source_fingerprint?: string | null;
   project_id: number;
   episode_id: number;
   provider_model_id: number;

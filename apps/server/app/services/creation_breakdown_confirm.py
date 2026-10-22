@@ -464,31 +464,29 @@ async def confirm_script_asset_breakdown(
         for asset_id in formal_asset_ids
         if (asset := await session.get(Asset, asset_id)) is not None
     ]
-    scene_asset_ids: dict[str, int] = {}
     for asset in formal_assets:
         if asset.asset_type == ASSET_TYPE_CHARACTER:
             for value in [asset.name, *((asset.attributes or {}).get("aliases") or [])]:
                 if str(value).strip():
                     character_asset_ids[str(value).strip().casefold()] = asset.id
-        if asset.asset_type == ASSET_TYPE_SCENE:
-            for value in [asset.name, *((asset.attributes or {}).get("aliases") or [])]:
-                if str(value).strip():
-                    scene_asset_ids[str(value).strip().casefold()] = asset.id
     for asset in formal_assets:
         attributes = dict(asset.attributes or {})
         requirement_type = str(attributes.get("requirement_type") or asset.asset_type)
         attach_character_relation(attributes, requirement_type)
-        if asset.asset_type == ASSET_TYPE_SCENE and attributes.get("base_scene_name"):
-            base_name = str(attributes["base_scene_name"]).strip().casefold()
-            base_id = scene_asset_ids.get(base_name)
-            attributes["linked_base_scene_asset_id"] = base_id
-            attributes["scene_relation_status"] = "linked" if base_id else "needs_review"
-            if not base_id:
-                attributes["needs_review"] = True
         asset.attributes = attributes
 
     from app.services.asset_admission_identity import bind_admitted_identities
     await bind_admitted_identities(session, project.id, breakdown.get("candidates", []))
+    await session.flush()
+    from app.services.asset_consistency_service import graph
+    relations = {row["asset_id"]: row for row in (await graph(session, project.id))["items"]}
+    for asset in formal_assets:
+        if asset.asset_type == ASSET_TYPE_SCENE and asset.id in relations:
+            relation = relations[asset.id]
+            asset.attributes = {**asset.attributes,
+                "linked_base_scene_asset_id": relation["identity_asset_id"],
+                "scene_relation_status": "linked" if relation["identity_asset_id"] else "independent",
+                "consistency_version": relation.get("version", "asset-consistency.ac1.v1")}
 
     breakdown.update(
         {

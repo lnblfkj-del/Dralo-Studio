@@ -25,10 +25,11 @@ import { ConfirmDialog } from "@/components/ui";
 import { JobFailurePanel } from "./JobFailurePanel";
 import "@/styles/task-monitor.css";
 
-const ACTIVE = new Set<JobStatus>(["queued", "running", "processing", "downloading", "retrying"]);
+const ACTIVE = new Set<JobStatus>(["queued", "waiting", "running", "processing", "downloading", "retrying"]);
 const TERMINAL = new Set<JobStatus>(["succeeded", "failed", "cancelled"]);
 const STATUS_LABEL: Record<JobStatus, string> = {
   queued: "排队中",
+  waiting: "等待前置资产",
   running: "已领取",
   processing: "生成中",
   downloading: "下载中",
@@ -39,6 +40,7 @@ const STATUS_LABEL: Record<JobStatus, string> = {
 };
 
 const QUEUE_REASON_LABEL: Record<string, string> = {
+  asset_dependency_waiting: "等待前置资产图片完成后自动继续，不占用模型生成并发。",
   remote_processing: "远端正在生成，本地 Worker 已释放，将按计划继续查询。",
   retry_backoff: "正在等待安全重试时间。",
   no_compatible_worker: "没有兼容的 Worker 可以处理该任务。",

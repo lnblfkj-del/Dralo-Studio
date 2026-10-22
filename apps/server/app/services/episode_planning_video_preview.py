@@ -28,6 +28,9 @@ def _semantics(segment):
         "exit_state": segment["exit_state"],
     }
     manifest = []
+    continuity = segment.get("continuity") or {}
+    beats = {beat["block_key"]: beat for beat in continuity.get("beats", [])}
+    identities = {item["key"]: item["name"] for item in continuity.get("identities", [])}
     for index, shot in enumerate(segment["shots"], 1):
         direction = shot["direction"]
         script["camera"].append(
@@ -40,6 +43,18 @@ def _semantics(segment):
             }
         )
         script["performances"].append({"shot_id": index, "action": direction["action"]})
+        if shot["key"] in beats:
+            from app.services.narrative_continuity import STATE_LABELS
+            beat = beats[shot["key"]]
+            constraints = [beat["staging"]]
+            constraints.extend(
+                f"{identities[change['entity_key']]}的{STATE_LABELS[change['field']]}："
+                f"{change['before'] or '原文首次明确'} → {change['after']}。依据：{change['evidence']}"
+                for change in beat["changes"]
+            )
+            script["performances"].append({
+                "shot_id": index, "action": "连续性约束（其他状态保持）：\n" + "\n".join(constraints),
+            })
         events = {event["source_key"]: event for event in shot["timing_events"]}
         for source in shot["sources"]:
             manifest.append({"shot_id": index, "source": source})

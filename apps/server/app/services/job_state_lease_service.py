@@ -125,6 +125,9 @@ async def claim_next_job(session: AsyncSession, worker_id: str, local_media_only
         await session.execute(select(func.pg_advisory_xact_lock(76422001)))
     await release_due_retries(session, local_media_only)
     await recover_expired_leases(session, local_media_only)
+    if not local_media_only:
+        from app.services.asset_batch_scheduler import tick
+        await tick(session)
     now = utcnow()
     active_global = aliased(Job)
     active_type = aliased(Job)

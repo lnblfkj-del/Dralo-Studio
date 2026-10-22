@@ -20,6 +20,9 @@ async def finalize_image_job(
     session: AsyncSession, job: Job, result: dict[str, object]
 ) -> dict[str, Any]:
     from app.services import asset_service
+    from app.services.asset_batch_scheduler import lock_transition
+
+    await lock_transition(session, job)
     if job.target_type == "style_image":
         from io import BytesIO
 
@@ -65,11 +68,16 @@ async def finalize_image_job(
     data = result.get("image_bytes")
     if not isinstance(data, bytes):
         raise ConflictError("图片任务没有返回有效文件")
+    if job.project_id and (job.payload or {}).get("consistency_image_snapshot"):
+        from app.services.asset_consistency_service import lock_project
+        await lock_project(session, job.project_id)
     await session.execute(update(Asset).where(Asset.id == asset.id).values(updated_at=func.current_timestamp()))
     existing_version = await session.scalar(select(AssetVersion).where(
         AssetVersion.asset_id == asset.id, AssetVersion.source_job_id == job.id,
     ))
     if existing_version is not None:
+        from app.services.asset_consistency_images import establish_image_basis
+        await establish_image_basis(session, job, existing_version, await session.get(MediaFile, existing_version.media_file_id))
         return {
             **(job.result or {}), "asset_id": asset.id,
             "asset_version_id": existing_version.id, "media_file_id": existing_version.media_file_id,
@@ -155,6 +163,8 @@ async def finalize_image_job(
     await session.flush()
     from app.services.asset_image_adoption import adopt_generated
     adoption_status = await adopt_generated(session, job, asset, version, media)
+    from app.services.asset_consistency_images import establish_image_basis
+    await establish_image_basis(session, job, version, media)
     frame_binding_status = None
     if isinstance((job.payload or {}).get("segment_frame"), dict):
         from app.services.segment_first_frame_service import bind_completed_frame

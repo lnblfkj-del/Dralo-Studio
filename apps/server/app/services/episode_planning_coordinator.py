@@ -35,6 +35,7 @@ class PlanningResult:
     plan: FrozenEpisodePlan
     solves: tuple[Partition, ...]
     replaced_segment_keys: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 def _mode(capability: VideoCapability, mode_key: str) -> VideoMode:
@@ -98,10 +99,29 @@ def create_plan(
     compiler_version: str,
     editorial_target_ms: int | None,
     background_music: bool,
+    reference_budget=None,
 ) -> PlanningResult:
     timing = content_timing(sources, analysis, editorial_target_ms)
     mode = _mode(capability, mode_key)
-    partition = solve_partition(analysis.blocks, mode)
+    warnings = []
+    try:
+        partition = solve_partition(analysis.blocks, mode, reference_budget=reference_budget)
+    except PlanningInfeasibleError:
+        try:
+            partition = solve_partition(analysis.blocks, mode, reference_budget=reference_budget,
+                                        allow_estimate_adjustment=True)
+        except PlanningInfeasibleError:
+            if reference_budget is None:
+                raise
+            # Automatic asset discovery is advisory at script planning time.
+            # Actual video input limits remain enforced before any paid request.
+            partition = solve_partition(analysis.blocks, mode, reference_budget=reference_budget,
+                                        allow_estimate_adjustment=True, allow_reference_overflow=True)
+            warnings.append("已优先拆分参考素材超限的片段；无法通过拆分解决的镜头保留，生成视频前需调整参考素材。")
+        if any(duration < block.duration("estimated_ms") for candidate in partition.candidates
+               for block, duration in zip(analysis.blocks[candidate.start:candidate.end],
+                                          candidate.block_durations_ms, strict=True)):
+            warnings.append("部分镜头在原有表演估算范围内适配了模型时长，完整对白保留，请试听核对。")
     segments = _segments(analysis.blocks, partition, mode, sources, background_music)
     plan = FrozenEpisodePlan(
         contract_version=CONTRACT_VERSION,
@@ -116,11 +136,13 @@ def create_plan(
         timing=timing,
         capability=capability,
         sources=sources.units,
+        identity_catalog=sources.identity_catalog,
+        continuity=analysis.continuity,
         segments=segments,
         planned_timeline_ms=sum(segment.used_duration_ms for segment in segments),
     )
     validate_frozen_plan(plan)
-    return PlanningResult(plan, (partition,))
+    return PlanningResult(plan, (partition,), warnings=tuple(warnings))
 
 
 def _switch_copy(plan: FrozenEpisodePlan, target: VideoCapability, mode_key: str):
@@ -255,6 +277,8 @@ def reusable_details(
     updated = result.plan
     if (
         original.sources != updated.sources
+        or original.identity_catalog != updated.identity_catalog
+        or original.continuity != updated.continuity
         or original.script_revision != updated.script_revision
         or original.script_fingerprint != updated.script_fingerprint
         or original.asset_fingerprint != updated.asset_fingerprint
@@ -304,16 +328,25 @@ def detail_prompt(plan: FrozenEpisodePlan, segment_key: str, analysis: ContentAn
         block.model_dump(mode="json") for block in analysis.blocks if block.key in block_keys
     ]
     from app.schemas.episode_planning import SegmentDetail
+    from app.services.narrative_continuity import continuity_prompt
 
-    return (
+    instruction = (
+        "只细化已冻结镜头的摄影，动作和入场/出场状态由整场戏规划装配，返回 SegmentDetail JSON。"
+        if plan.continuity is not None else
         "只填充已冻结镜头的摄影、动作演绎及入场/出场状态，返回 SegmentDetail JSON。"
+    )
+    return (
+        f"{instruction}"
         "不得新增镜头、片段或改变时长；不要重新输出或改写对白和声音，系统从原文装配。"
         "不得新增剧情、说话人或资产；动作与原文一致，保留衔接。"
         "资产参考仅用于锁定身份与外观，不是内容白名单；原文中的物件、动作与声音即使没有独立资产卡也必须保留。"
+        "背景群众、普通护卫、巡查队及仅声音出现的群体可直接使用原文描述，不为其虚构资产引用，不因缺少群演参考图要求补建。"
+        "精确人数只沿用原文明确属于该主体的数量；没有明确人数就保留一群、一队等原文表述，不自行增加人数。"
         "已有参考不得换成其他角色、服装或场景；不得自行虚构参考素材编号。"
         f"计划指纹：{fingerprint(plan)}\n"
         f"冻结片段：{segment.model_dump_json()}\n"
         f"表演时间与并行关系：{json.dumps(performance, ensure_ascii=False)}\n"
         f"原文：{json.dumps([units[k].model_dump(mode='json') for k in source_keys], ensure_ascii=False)}\n"
+        f"{continuity_prompt(plan, segment_key)}"
         f"结构：{json.dumps(SegmentDetail.model_json_schema(), ensure_ascii=False)}"
     )

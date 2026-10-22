@@ -67,17 +67,19 @@ class AssetPromptProposalRequest(BaseModel):
         return list(dict.fromkeys(value))
 
 
-class AssetImageBatchRequest(BaseModel):
+class AssetImageBatchPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    required_contract: Literal["asset-image-batch.v5"]
+    required_contract: Literal["asset-image-batch.v6"]
     asset_ids: list[int] = Field(min_length=1, max_length=1000)
     provider_model_id: int = Field(ge=1)
     generation_mode: Literal["missing", "regenerate"] = "missing"
+    scope: Literal["selected", "expanded"] = "selected"
+    prepare_prompts: bool = False
+    text_model_id: int | None = Field(default=None, ge=1)
     negative_prompt: str | None = Field(default=None, max_length=4000)
     parameters: dict[str, Any] = Field(default_factory=dict)
-    request_id: str = Field(min_length=8, max_length=128)
-    confirmed: Literal[True]
+    request_id: str | None = Field(default=None, min_length=8, max_length=128)
 
     @field_validator("asset_ids")
     @classmethod
@@ -91,6 +93,12 @@ class AssetImageBatchRequest(BaseModel):
     def clean_negative_prompt(cls, value: str | None) -> str | None:
         clean = (value or "").strip()
         return clean or None
+
+
+class AssetImageBatchRequest(AssetImageBatchPreviewRequest):
+    request_id: str = Field(min_length=8, max_length=128)
+    confirmed: Literal[True]
+    preview_token: str = Field(min_length=64, max_length=64)
 
 
 class AssetVersionOut(ORMModel):

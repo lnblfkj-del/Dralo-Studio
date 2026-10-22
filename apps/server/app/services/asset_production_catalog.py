@@ -251,6 +251,8 @@ async def catalog(
                 "duration_seconds": media.duration,
             },
         )
+    from app.services.asset_consistency_prompt import contexts
+    consistency = await contexts(session, project.id, set(ids)) if prompt_ids else {}
     return {
         "page": page,
         "page_size": page_size,
@@ -278,7 +280,7 @@ async def catalog(
                 "preview_media": previews.get(asset.id),
                 "latest_job": job_map.get(asset.id),
                 "prompt_optimization": prompt_state(asset, link, prompt_jobs.get(
-                    (link.production_data or {}).get("prompt_optimization", {}).get("job_id"))),
+                    (link.production_data or {}).get("prompt_optimization", {}).get("job_id")), consistency.get(asset.id)),
             }
             for asset, link in rows
         ],

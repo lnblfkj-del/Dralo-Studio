@@ -73,7 +73,7 @@ def automatic_references(assets, episode, units, source_keys):
     assets = [contextual_asset(asset, episode, selected) for asset in assets if eligible(asset, episode, selected)]
     scene_keys = {unit.get("scene_key") for unit in selected if unit.get("scene_key")}
     headers = [unit for unit in units if unit["kind"] == "scene" and unit.get("scene_key") in scene_keys]
-    visible_units = [unit for unit in selected if unit["kind"] in {"action", "scene", "metadata"}]
+    visible_units = [unit for unit in selected if unit["kind"] in {"action", "scene"}]
     visible_speakers = [str(unit.get("speaker") or "") for unit in selected if unit["kind"] == "dialogue"
                         and (unit.get("voice_source") or {}).get("location") != "off_screen"]
     text = "\n".join([*(unit["text"] for unit in visible_units), *visible_speakers])
@@ -87,6 +87,8 @@ def automatic_references(assets, episode, units, source_keys):
         if numbers and episode.number not in numbers:
             continue
         if asset["asset_type"] not in VISUAL_TYPES:
+            continue
+        if asset["asset_type"] == "scene" and not scene_variant_active(asset, units, selected):
             continue
         evidence = []
         matching_units = [*selected, *headers] if asset["asset_type"] == "scene" else selected
@@ -170,6 +172,25 @@ def automatic_references(assets, episode, units, source_keys):
             "unmatched_assets": list(dict.fromkeys(issue["name"] for issue in issues))}
 
 
+def scene_variant_active(asset, units, selected):
+    """A source-backed scene change cannot appear before its triggering action."""
+    facts = [fact for fact in asset.get("facts", [])
+             if fact.get("field") == "variant_label" and fact.get("quote_verified")
+             and not fact.get("needs_review")]
+    if not facts:
+        return True
+    positions = {unit["key"]: index for index, unit in enumerate(units)}
+    end = max((positions[unit["key"]] for unit in selected), default=-1)
+    scenes = {unit.get("scene_key") for unit in selected}
+    triggers = [index for index, unit in enumerate(units)
+                if unit.get("scene_key") in scenes and any(
+                    str(fact.get("evidence_text") or "").strip()
+                    and str(fact["evidence_text"]).strip() in unit["text"]
+                    for fact in facts)]
+    # Only constrain when the current screenplay contains an exact trigger.
+    return not triggers or min(triggers) <= end
+
+
 def reference(asset, *, source_keys=None, delivery=None):
     return {
         "asset_id": asset["asset_id"], "asset_name": asset["asset_name"],
@@ -182,7 +203,7 @@ def reference(asset, *, source_keys=None, delivery=None):
     }
 
 
-async def validate_references(session, project_id, raw, *, assets=None):
+async def validate_references(session, project_id, raw, *, assets=None, document_only=False):
     if not isinstance(raw, list) or len(raw) > 200:
         raise ValidationError("片段资产引用格式无效或数量过多")
     assets = {item["asset_id"]: item for item in (assets if assets is not None else await catalog(session, project_id))}
@@ -196,8 +217,8 @@ async def validate_references(session, project_id, raw, *, assets=None):
         if asset["asset_id"] in seen:
             raise ValidationError("同一片段不能重复引用同一资产")
         seen.add(asset["asset_id"])
-        delivery = item.get("delivery", "text" if asset["asset_type"] == "voice" else "auto")
-        if delivery not in {"auto", "text"} or (delivery == "text" and asset["material_required"]):
+        delivery = "text" if document_only else item.get("delivery", "text" if asset["asset_type"] == "voice" else "auto")
+        if delivery not in {"auto", "text"} or (not document_only and delivery == "text" and asset["material_required"]):
             raise ValidationError(f"资产“{asset['asset_name']}”需要固定素材，不能仅用文字替代")
         keys = item.get("source_keys") or []
         if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
@@ -235,6 +256,8 @@ async def resolve_materials(session, project, refs, *, strict=True, assets=None,
     result = deepcopy(refs or {})
     assets = assets if assets is not None else await catalog(session, project.id)
     if segment is not None:
+        from app.services.continuity_asset_coverage import apply_coverage
+        result = await apply_coverage(session, segment, assets, result)
         from app.models import Episode
         episode = await session.get(Episode, segment.episode_id)
         units = [{"key": f"line-{number}", "text": text, "source_lines": [number]}
@@ -243,7 +266,11 @@ async def resolve_materials(session, project, refs, *, strict=True, assets=None,
         selected_units = [unit for unit in units if unit["key"] in keys]
         assets = [contextual_asset(asset, episode, selected_units) for asset in assets
                   if (asset["asset_type"] == "voice" and (asset.get("character_identity") or {}).get("scope") != "source")
+                  or asset["asset_id"] in result.get("continuity_required_asset_ids", [])
                   or eligible(asset, episode, selected_units if keys else None)]
+    coverage_issues = result.get("coverage_issues") or []
+    if strict and coverage_issues:
+        raise ConflictError("；".join(issue["message"] for issue in coverage_issues[:8]))
     try:
         references = await validate_references(session, project.id, result.get("asset_references", []), assets=assets)
     except AppError as exc:
@@ -262,6 +289,14 @@ async def resolve_materials(session, project, refs, *, strict=True, assets=None,
             states.append({**raw, "material_status": "invalid", "message": exc.message})
     pinned_ids = {raw.get("asset_id") for raw in result.get("asset_bindings", [])}
     for item in references:
+        if item["asset_id"] in result.get("continuity_required_asset_ids", []):
+            item = {**item, "material_required": True}
+            if item["delivery"] == "text":
+                message = f"关键资产“{item['asset_name']}”需要固定图片，请选择自动素材或绑定版本"
+                if strict:
+                    raise ConflictError(message)
+                states.append({**item, "material_status": "missing", "message": message})
+                continue
         if item["asset_id"] in pinned_ids:
             binding = next((binding for binding in bindings if binding["asset_id"] == item["asset_id"]), None)
             if binding:
@@ -277,10 +312,15 @@ async def resolve_materials(session, project, refs, *, strict=True, assets=None,
         except AppError as exc:
             states.append({**item, "material_status": "missing", "message": exc.message})
             missing = any(label in exc.message for label in ("尚未采用素材", "尚未选择可用版本"))
-            if strict and (item["material_required"] or not missing):
+            if strict and (item["material_required"] or item["asset_id"] in result.get("continuity_required_asset_ids", []) or not missing):
                 raise ConflictError(f"资产“{item['asset_name']}”素材待准备，请在资产库采用图片后重试") from exc
     if strict and result.get("unmatched_assets"):
         raise ConflictError("片段资产待确认：" + "、".join(map(str, result["unmatched_assets"])))
+    if segment is not None:
+        from app.services.segment_shot_frame_service import available_frames
+        result["shot_frames"] = await available_frames(session, project, segment)
+    else:
+        result.pop("shot_frames", None)
     result["asset_references"] = references
     result["asset_bindings"] = bindings
     result["asset_materials"] = states
@@ -320,6 +360,14 @@ def material_guidance(refs):
         names = "、".join(str(binding["asset_name"]) for binding in bindings if binding["media_file_id"] == media_id)
         if names:
             lines.append(f"参考图 {index} 对应：{names}")
+    for frame in refs.get("shot_frames", []):
+        media_id = frame.get("media_file_id")
+        if media_id in refs.get("reference_media_ids", []):
+            index = refs["reference_media_ids"].index(media_id) + 1
+            lines.append(f"参考图 {index} 对应镜头 {frame['shot_index']} 的构图与站位；保持镜头顺序，不得拼成多格画面")
+    if any(binding.get("asset_type") == "costume" for binding in bindings):
+        lines.append("角色图用于锁定脸部、体型与身份；关联造型图决定本片段服装和外观状态。"
+                     "服装本体图不得生成额外人物，角色基准图的旧服装不得覆盖指定造型。")
     return "参考素材对应关系（人物、造型、地点不可混用）：\n" + "\n".join(lines) if lines else ""
 
 

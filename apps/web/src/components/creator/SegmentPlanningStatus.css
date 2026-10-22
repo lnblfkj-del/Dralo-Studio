@@ -1,0 +1,24 @@
+.segment-planning-status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 52vh;
+  gap: 12px;
+  padding: 24px;
+  margin: 16px;
+  text-align: center;
+}
+.segment-planning-status > div { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.segment-planning-status h2 { font-size: 18px; margin: 4px 0 6px; }
+.segment-planning-status--compact { min-height: 0; padding: 12px 16px; margin: 8px 16px; flex-direction: row; justify-content: flex-start; text-align: left; border-left: 3px solid var(--app-color-accent, #7c58d6); background: #f8f8fa; }
+.segment-planning-status--compact > div[role="status"] { flex: 1; }
+.segment-planning-status--compact > svg { flex-shrink: 0; }
+.segment-planning-status--compact p { margin: 4px 0 0; }
+.segment-planning-status--compact progress { margin-left: 0; }
+.segment-planning-status--compact h2 { font-size: 15px; }
+.segment-planning-status p { margin: 8px 0; color: #676773; font-size: 13px; }
+.segment-planning-status progress { display: block; width: 100%; max-width: 420px; height: 6px; margin: 14px auto 0; accent-color: var(--app-color-accent, #7c58d6); }
+.segment-planning-status > button { flex-shrink: 0; }
+.segment-planning-actions { margin: 12px 24px; }
+@media (max-width: 600px) { .segment-planning-status { flex-wrap: wrap; padding: 16px; } }

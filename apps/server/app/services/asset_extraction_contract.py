@@ -259,6 +259,10 @@ def extraction_prompt(context: dict[str, Any], kinds: list[str], *, output_schem
         "对于已经需要独立管理的地点，其昼夜、天气等视觉状态分成独立scene项，"
         "用base_scene_name记录原文地点、time或weather记录原文状态；"
         "相同地点相同状态复用，不按集号重复创建。"
+        "所有题材均按同一地点的空间身份提取，不因昼夜、天气、受损或机位变化另造地点名称。"
+        "原文明示区域隶属某地点时可用location事实记录逐字地点名；没有明示关系不要猜测。"
+        "道具occurrences必须定位实际出现的场景与原文单元，不将同一集出现视为每个场景都有。"
+        "owner只记录原文明示的所有者，不把共同出镜误当所有权或固定陈设。"
         "道具原文明示的完好/损坏等外观状态也分别提取并用story_state记录。"
         "这些事实都使用source来源和逐字证据，未说明的状态不要补造。"
         "scene中的原文地点和明示昼夜须用base_scene_name、time事实保留；逐字引用完整场景标题作证据，"
@@ -502,8 +506,20 @@ def parse_extraction(
         }
         if necessity_policy:
             from app.services.asset_necessity_service import validate_necessity
+            necessity_record = validate_necessity(asset, source_map, necessity_policy)
+            from app.services.asset_background_policy import VERSION as BACKGROUND_VERSION
+            from app.services.asset_background_policy import script_only_reason
+            background_reason = script_only_reason(asset, necessity_policy, usages, source_map)
+            if background_reason:
+                if diagnostics_out is not None:
+                    diagnostics_out.setdefault("source_only_items", []).append({
+                        "index": index, "kind": asset.kind, "name": asset.name,
+                        "reason": background_reason, "version": BACKGROUND_VERSION,
+                        "source_records": usages,
+                    })
+                continue
             attributes.update(extraction_contract_version=3,
-                              necessity_records=[validate_necessity(asset, source_map, necessity_policy)],
+                              necessity_records=[necessity_record],
                               media_delivery="description")
             if attributes["necessity_records"][0].get("entity_relation") == "unresolved":
                 attributes["needs_review"] = True

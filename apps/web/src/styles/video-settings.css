@@ -42,8 +42,8 @@
 .video-option-chips :is(button, span) { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 29px; padding: 3px 9px; border: 1px solid #c4c4cc; border-radius: 5px; background: #f8f8fa; color: #18181b; font: inherit; font-size: 13px; overflow-wrap: anywhere; }
 .video-option-chips button { cursor: pointer; }
 .video-option-chips button:hover { background: #ececf0; border-color: #52525b; }
-.video-duration-add { display: flex; gap: 6px; align-items: center; }
-.video-duration-add input { max-width: 108px; }
+.video-duration-add { display: grid; grid-template-columns: minmax(0, 220px) 36px; gap: 8px; align-items: center; min-width: 0; }
+.video-duration-add input { width: 100%; }
 .video-duration-add button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid #c4c4cc; border-radius: 5px; background: white; color: #18181b; cursor: pointer; }
 .video-duration-add button:disabled { opacity: .4; cursor: default; }
 .video-special-rules, .video-planning-preference { border-top: 1px solid #e4e4e7; padding-top: 4px; }
@@ -55,6 +55,9 @@
 .video-inline-confirm { padding: 12px; border-left: 2px solid #b42318; background: #fff7f5; }
 .video-inline-confirm .ui-button { margin-right: 8px; }
 .video-support-error { color: #b42318; margin: 0; }
+.video-material-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 28px; }
+.video-material-grid h3 { overflow-wrap: anywhere; }
+.video-reference-fields details[open] { display: grid; gap: 12px; }
 .video-planning-preference label { max-width: 300px; margin-bottom: 8px; }
 .video-model-edit-dialog .video-connection-tools { border: 0; padding: 0; }
 .video-model-edit-dialog .video-connection-tools > legend { display: none; }
@@ -64,4 +67,5 @@
   .video-simple-connection { align-items: flex-start; flex-direction: column; }
   .video-spec-summary dl { grid-template-columns: minmax(0, 1fr); }
   .video-model-edit-dialog .model-basic-grid, .video-support-grid { grid-template-columns: minmax(0, 1fr); }
+  .video-material-grid { grid-template-columns: minmax(0, 1fr); }
 }

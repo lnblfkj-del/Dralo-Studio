@@ -149,6 +149,9 @@ def local_exception(exc: Exception) -> tuple[str, str, dict[str, Any]]:
     if isinstance(exc, IntegrityError):
         return "LOCAL_DATABASE_CONSTRAINT", "数据库约束校验失败，可能存在重复记录、无效关联或必填数据缺失；需核查写入逻辑。", {}
     if isinstance(exc, OperationalError):
+        from app.core.local_write_session import sqlite_busy
+        if sqlite_busy(exc):
+            return "LOCAL_DATABASE_TRANSIENT", "本地数据库正在处理其他写入，请稍后重试保存或采用；已有视频保留，无需重新生成。", {}
         return "LOCAL_DATABASE_TRANSIENT", "数据库连接或执行失败，请恢复数据库服务后重试本地保存。", {}
     if isinstance(exc, SQLAlchemyError):
         return "LOCAL_DATABASE_ERROR", "数据库写入异常，需要检查数据库结构和写入逻辑。", {}

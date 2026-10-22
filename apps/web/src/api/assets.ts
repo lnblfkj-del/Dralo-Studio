@@ -27,18 +27,44 @@ export async function getLatestAssetImageBatch(projectId: number): Promise<Job |
   return (await http.get<Job | null>(`/projects/${projectId}/assets/image-batch/latest`)).data;
 }
 
-export async function createAssetImageBatch(
-  projectId: number,
-  payload: {
-    required_contract: "asset-image-batch.v5";
+export interface AssetImageBatchSelection {
+    prepare_prompts?: boolean;
+    text_model_id?: number | null;
+    required_contract: "asset-image-batch.v6";
     asset_ids: number[];
+    scope: "selected" | "expanded";
     generation_mode?: "missing" | "regenerate";
     provider_model_id: number;
     negative_prompt?: string | null;
     parameters?: Record<string, unknown>;
-    request_id: string;
-    confirmed: true;
-  },
+}
+
+export interface AssetImageBatchPreview {
+  prompt_asset_ids?: number[];
+  text_model_name?: string | null;
+  preview_token: string;
+  can_create: boolean;
+  selected_asset_ids: number[];
+  expanded_asset_ids: number[];
+  dependency_asset_ids: number[];
+  reused_asset_ids: number[];
+  asset_ids: number[];
+  planned_view_count: number;
+  items: Array<{ asset_id: number; asset_name: string; name?: string; status: string; prerequisite_asset_ids: number[]; reason?: string | null }>;
+  dependencies: Array<{ asset_id: number; prerequisite_asset_ids: number[] }>;
+  blockers: Array<{ asset_id: number; asset_name: string; code: string; reason: string }>;
+  skipped: Array<{ asset_id: number; asset_name: string; code: string; reason: string }>;
+  estimated_cost: { currency?: string; amount?: string | number | null; reason?: string | null } | null;
+  pricing_snapshot?: Record<string, unknown> | null;
+}
+
+export async function previewAssetImageBatch(projectId: number, payload: AssetImageBatchSelection): Promise<AssetImageBatchPreview> {
+  return (await http.post<AssetImageBatchPreview>(`/projects/${projectId}/assets/image-batch/preview`, payload)).data;
+}
+
+export async function createAssetImageBatch(
+  projectId: number,
+  payload: AssetImageBatchSelection & { request_id: string; confirmed: true; preview_token: string },
 ): Promise<Job> {
   return (await http.post<Job>(`/projects/${projectId}/assets/image-batch`, payload)).data;
 }
@@ -275,4 +301,50 @@ export async function getProjectAssetReadiness(projectId: number): Promise<Proje
 export async function getMediaObjectUrl(mediaFileId: number, signal?: AbortSignal): Promise<string> {
   const response = await http.get<Blob>(`/media/${mediaFileId}`, { responseType: "blob", signal });
   return URL.createObjectURL(response.data);
+}
+
+export interface AssetConsistencyProp {
+  asset_id: number;
+  presence: "fixed" | "occurrence";
+  source_scene_keys: string[];
+}
+
+export interface AssetConsistencyItem {
+  reference_media_id?: number | null;
+  asset_id: number;
+  name: string;
+  asset_type: string;
+  revision: number;
+  origin: "source" | "manual";
+  identity_asset_id: number | null;
+  location_asset_id: number | null;
+  kind: "base" | "state" | "view";
+  props: AssetConsistencyProp[];
+  design_description: string;
+  issues: string[];
+  suggestions?: unknown;
+}
+
+export interface AssetConsistencyGraph {
+  version: "asset-consistency.ac1.v1";
+  items: AssetConsistencyItem[];
+}
+
+export type AssetConsistencyPatch = Pick<AssetConsistencyItem,
+  "identity_asset_id" | "location_asset_id" | "kind" | "props" | "design_description"
+> & { expected_revision: number };
+
+export async function getAssetConsistency(projectId: number): Promise<AssetConsistencyGraph> {
+  return (await http.get<AssetConsistencyGraph>(`/projects/${projectId}/assets/consistency`)).data;
+}
+
+export async function patchAssetConsistency(projectId: number, assetId: number, payload: AssetConsistencyPatch): Promise<AssetConsistencyGraph> {
+  return (await http.patch<AssetConsistencyGraph>(`/projects/${projectId}/assets/${assetId}/consistency`, payload)).data;
+}
+
+export async function resetAssetGeneratedContent(projectId: number, assetId: number): Promise<{ asset_count: number; image_count: number }> {
+  return (await http.post<{ asset_count: number; image_count: number }>(
+    `/projects/${projectId}/assets/consistency/reset-generated`,
+    { asset_ids: [assetId], confirmed: true },
+  )).data;
 }

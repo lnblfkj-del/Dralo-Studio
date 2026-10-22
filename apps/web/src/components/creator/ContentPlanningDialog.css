@@ -9,3 +9,7 @@
 .content-planning-status { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .content-planning-dialog progress { width: 100%; }
 .content-planning-dialog p { overflow-wrap: anywhere; }
+.content-planning-summary { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px 12px; font-size: 13px; }
+.content-planning-summary span { color: var(--app-color-text-muted); }
+.content-planning-summary strong { font-weight: 500; overflow-wrap: anywhere; }
+.content-planning-fees { margin: 0; font-size: 12px; line-height: 1.7; color: var(--app-color-text-muted); }

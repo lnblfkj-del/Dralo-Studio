@@ -41,9 +41,9 @@
   background:var(--app-color-accent-hover); border-color:var(--app-color-accent-hover); color:#fff;
 }
 
-/* Native dialogs and modal workspaces use the same viewport-bounded frame. */
+/* Fullscreen editing workspaces own their geometry, unlike content dialogs. */
 dialog.production-editor,
-.production-overlay > [role="dialog"], .canvas-lightbox[aria-modal="true"], .upstream-director-editor[aria-modal="true"] {
+.production-overlay:not(.assembly-workspace) > [role="dialog"], .canvas-lightbox[aria-modal="true"], .upstream-director-editor[aria-modal="true"] {
   box-sizing:border-box;
   width:min(var(--app-dialog-width),calc(100vw - var(--app-dialog-inset-x))) !important;
   max-width:calc(100vw - var(--app-dialog-inset-x)) !important;
@@ -52,8 +52,8 @@ dialog.production-editor,
   min-width:0;
   min-height:0;
 }
-.production-overlay { display:flex !important; box-sizing:border-box; align-items:center; justify-content:center; padding:calc(var(--app-dialog-inset-y) / 2) calc(var(--app-dialog-inset-x) / 2) !important; }
-.production-overlay > [role="dialog"] { margin:auto; }
+.production-overlay:not(.assembly-workspace) { display:flex !important; box-sizing:border-box; align-items:center; justify-content:center; padding:calc(var(--app-dialog-inset-y) / 2) calc(var(--app-dialog-inset-x) / 2) !important; }
+.production-overlay:not(.assembly-workspace) > [role="dialog"] { margin:auto; }
 .canvas-lightbox[aria-modal="true"], .upstream-director-editor[aria-modal="true"] {
   inset:0; margin:auto; border-radius:var(--app-radius-surface); box-shadow:0 0 0 100vmax #0008;
 }

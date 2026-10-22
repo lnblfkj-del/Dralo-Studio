@@ -552,6 +552,7 @@
 }
 
 .task-status--queued,
+.task-status--waiting,
 .task-status--retrying {
   border-color: #dbd8e0;
   background: #f5f3f6;

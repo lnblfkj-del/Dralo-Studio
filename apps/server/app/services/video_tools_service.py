@@ -5,6 +5,7 @@ from hashlib import sha256
 from types import SimpleNamespace
 
 import httpx
+from pydantic import ValidationError as SchemaValidationError
 from sqlalchemy import select
 
 from app.core.errors import ConflictError, ValidationError
@@ -24,7 +25,13 @@ def digest(value):
 def validate_package(raw):
     if len(json.dumps(raw, allow_nan=False)) > 100000:
         raise ValidationError("接法文件超过100KB")
-    package = VideoPackage.model_validate(raw)
+    try:
+        package = VideoPackage.model_validate(raw)
+    except SchemaValidationError as exc:
+        raise ValidationError("视频配置未通过校验", details={"errors": [
+            {"loc": list(err["loc"]), "msg": err["msg"]}
+            for err in exc.errors(include_input=False, include_context=False, include_url=False)
+        ]}) from exc
     from app.providers.protocols import validate_protocol_type
 
     validate_protocol_type(package.protocol, "video")

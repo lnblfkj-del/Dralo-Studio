@@ -152,6 +152,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
         job = await session.get(Job, job_id)
         if job is None:
             return
+        from app.services.asset_batch_scheduler import lock_transition
+        await lock_transition(session, job)
         continuation = job.execution_phase in job_service.REMOTE_EXECUTION_PHASES
         claimed = (
             job.worker_id == worker_id
@@ -274,10 +276,14 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             await canvas_advanced_service.preflight(session, job)
         reference_images = []
         style_text_images = []
+        if job.target_type == "video_quality_review":
+            from app.services.video_quality_frames import prepare
+            style_text_images = await prepare(session, job, model, provider)
+            prompt = job.payload["prompt"]
         style_media_id = (style_snapshot or {}).get("media_id")
         if style_media_id and job.job_type == "text" and "vision" in model.capabilities:
             style_text_images = await asset_service.load_reference_images(session, job, [style_media_id])
-        if style_media_id and job.job_type == "image" and "reference_images" in model.capabilities:
+        if style_media_id and job.job_type == "image":
             refs = list(dict.fromkeys([*job.payload.get("reference_media_ids", []), style_media_id]))
             job.payload = {**job.payload, "reference_media_ids": refs}
         if style_media_id and job.job_type == "video" and "reference_images" in model.capabilities:
@@ -286,11 +292,14 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
                 raise GenerationFailedError("项目风格图未包含在冻结的视频输入协议中，请重新预检后提交")
         media_by_id = {}
         reference_audios = ()
-        if job.job_type == JOB_TYPE_IMAGE and "reference_images" in model.capabilities:
+        if job.job_type == JOB_TYPE_IMAGE:
+            from app.services.asset_consistency_images import validate_frozen_image_references
+            await validate_frozen_image_references(session, job)
             from app.services.image_model_contract import reference_limit, validate_image_inputs
             validate_image_inputs(model, parameters, job.payload.get("reference_media_ids", []))
             reference_images = await asset_service.load_reference_images(
-                session, job, job.payload.get("reference_media_ids", []), max_images=reference_limit(model)
+                session, job, job.payload.get("reference_media_ids", []),
+                max_images=reference_limit(model) if job.payload.get("reference_media_ids") else 0
             )
         if job.job_type == JOB_TYPE_VIDEO:
             from app.services.video_input_compiler import assert_frozen_video_input
@@ -647,6 +656,8 @@ async def _execute_job(job_id: int, worker_id: str) -> None:
             job = await session.get(Job, job_id)
             if job is None or job.worker_id != worker_id or job.status in job_service.TERMINAL_STATUSES:
                 return
+            from app.services.asset_batch_scheduler import lock_transition
+            await lock_transition(session, job)
             # Reserve completion before writing media. Concurrent cancel must win or
             # lose atomically, not leave a cancelled job with a generated node.
             if not await job_service.renew_lease(session, job_id, worker_id):

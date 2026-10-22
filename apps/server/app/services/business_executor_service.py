@@ -407,8 +407,10 @@ async def resolve_execution(
     key: str,
     *,
     requested_model_id: int | None = None,
+    initialize: bool = True,
 ) -> dict[str, Any]:
-    await ensure_executor_settings(session)
+    if initialize:
+        await ensure_executor_settings(session)
     setting = await session.scalar(
         select(BusinessExecutorSetting).where(BusinessExecutorSetting.key == key)
     )

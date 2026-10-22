@@ -379,6 +379,16 @@ async def resolve_asset_candidate_evidence(
     return candidate
 
 
+@router.post("/{project_id}/creation-session/asset-breakdown/recheck-deferred")
+async def recheck_deferred_assets(project: ProjectDep, session: SessionDep) -> dict[str, int]:
+    from app.services.asset_saved_organization import recheck_deferred_items
+
+    item = await creation_service.get_or_create_project_session(session, project)
+    result = await recheck_deferred_items(session, item)
+    await session.commit()
+    return result
+
+
 @router.post("/{project_id}/creation-session/asset-breakdown/deferred-review")
 async def resolve_deferred_asset(payload: DeferredAssetReviewRequest, project: ProjectDep,
                                  session: SessionDep, user: CurrentUser) -> dict:

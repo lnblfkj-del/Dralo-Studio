@@ -43,9 +43,9 @@ export function AssetScopeRecovery({ job, disabled, onRecovered, scopeLabel }: {
     <ConfirmDialog open={confirmOpen} title="重新生成此失败范围" accessibleLabel="确认重新生成失败范围"
       confirmLabel="确认调用模型" busy={recover.isPending} confirmDisabled={disabled || (unknownRemote && !channelChecked)}
       onClose={() => setConfirmOpen(false)} onConfirm={() => recover.mutate("regenerate")}
-      message={<div><p>将重新调用文本模型，可能产生新的费用，实际以渠道账单为准。成功范围不重复生成，原始响应保留。</p>
+      message={<div className="asset-recovery-confirmation"><p>将重新调用文本模型，可能产生新的费用，实际以渠道账单为准。成功范围不重复生成，原始响应保留。</p>
         <p>{scopeLabel ? `${scopeLabel} · ` : ""}任务 #{job.id} · {job.provider || "已配置渠道"} / {job.model || "原任务模型"}</p>
-        {unknownRemote && <label><input type="checkbox" checked={channelChecked} onChange={event => setChannelChecked(event.target.checked)} />已核对渠道后台，确认原请求未生成结果</label>}
+        {unknownRemote && <label className="asset-recovery-confirmation__check"><input type="checkbox" checked={channelChecked} onChange={event => setChannelChecked(event.target.checked)} /><span>已核对渠道后台，确认原请求未生成结果</span></label>}
         {recover.error && <p role="alert">{toErrorMessage(recover.error)}</p>}
       </div>} />
   </div>;

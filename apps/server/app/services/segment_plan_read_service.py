@@ -80,7 +80,7 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
     for segment in segments:
         for version in versions_by_segment[segment.id]:
             evidence_by_version[version.id] = await candidate_evidence(
-                session, segment=segment, plan=plan, version=version
+                session, segment=segment, plan=plan, version=version, allow_stale=True
             )
     shot_ids = [link.shot_id for values in links_by_segment.values() for link in values]
     shot_map = {
@@ -114,7 +114,7 @@ async def serialize_plan(session: AsyncSession, plan: EpisodeProductionPlan) -> 
     episode = await session.get(Episode, plan.episode_id)
     project = await session.get(Project, episode.project_id)
     assets = await catalog(session, project.id)
-    refs_by_segment = {segment.id: await resolve_materials(session, project, segment.refs, strict=False, assets=assets)
+    refs_by_segment = {segment.id: await resolve_materials(session, project, segment.refs, strict=False, assets=assets, segment=segment)
                        for segment in segments}
     # Media availability is a read projection; never turn automatic references
     # into version-pinned edits when the user saves the script.

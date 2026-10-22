@@ -157,18 +157,27 @@ async def persist(session, job, result):
     await validate_target(session, job)
     trial = job.target_type == "model_audio_test"
     from app.services.generated_audio_media import inspect_audio
+    reference = not trial and job.payload.get("audio_purpose") == "voice_reference"
+    extension = "wav" if reference else "mp3"
     rows = []
+    created = []
     for index, item in enumerate(previews(result)):
         root = Path("model-tests") / str(job.owner_id) if trial else Path("projects") / str(job.project_id)
-        relative = root / "voice-design" / f"{job.id}-{index}.mp3"
-        media = await session.scalar(select(MediaFile).where(MediaFile.owner_id == job.owner_id, MediaFile.project_id == job.project_id, MediaFile.file_path == relative.as_posix()))
+        relative = root / "voice-design" / f"{job.id}-{index}.{extension}"
+        paths = [relative.as_posix(), (root / "voice-design" / f"{job.id}-{index}.mp3").as_posix()]
+        media = await session.scalar(select(MediaFile).where(MediaFile.owner_id == job.owner_id, MediaFile.project_id == job.project_id, MediaFile.file_path.in_(paths)))
         if media is None:
             audio = base64.b64decode(item["audio_base_64"], validate=True)
-            metadata = await inspect_audio(audio)
+            if reference:
+                from app.services.generated_audio_media import reference_sample
+                metadata = await reference_sample(audio)
+                audio = metadata["audio_bytes"]
+            else:
+                metadata = await inspect_audio(audio)
             await require_media_budget(session, len(audio))
             write_storage_bytes(settings, settings.storage_path / relative, audio)
             media = MediaFile(owner_id=job.owner_id, project_id=job.project_id, kind="audio", source="generation", purpose="model_test" if trial else "voice_reference",
-                file_path=relative.as_posix(), original_name=f"音色候选-{index+1}.mp3", mime_type="audio/mpeg",
+                file_path=relative.as_posix(), original_name=f"音色候选-{index+1}.{extension}", mime_type="audio/wav" if reference else "audio/mpeg",
                 size=len(audio), hash=hashlib.sha256(audio).hexdigest(), duration=metadata["duration"])
             session.add(media)
             await session.flush()
@@ -176,7 +185,7 @@ async def persist(session, job, result):
                 session.add(ProjectMediaLink(project_id=job.project_id, media_file_id=media.id))
         rows.append({"index":index, "generated_voice_id":item["generated_voice_id"], "media_file_id":media.id,
             "language":str(item.get("language") or "")[:80], "duration":media.duration})
-        if job.payload.get("audio_purpose") == "voice_reference":
+        if not trial and job.payload.get("audio_purpose") == "voice_reference":
             from app.models import Asset, AssetVersion
             asset = await session.get(Asset, job.target_id)
             if asset.asset_type == "voice":
@@ -189,8 +198,15 @@ async def persist(session, job, result):
                         view_type="base", view_label=f"参考声线候选 {index+1}", review_status="candidate", is_final=False)
                     session.add(version)
                     await session.flush()
+                    created.append((asset, version, media))
                 rows[-1]["asset_version_id"] = version.id
-    return {"previews":rows, "text":str(result.get("text") or job.payload["parameters"]["text"])[:1000]}
+    adoption = None
+    if created:
+        from app.services.asset_audio_adoption import adopt_generated_audio
+        asset, version, media = max(created, key=lambda entry: entry[1].version)
+        adoption = await adopt_generated_audio(session, job, asset, version, media)
+    return {"previews":rows, "text":str(result.get("text") or job.payload["parameters"]["text"])[:1000],
+            **({"adoption": adoption} if adoption else {})}
 
 
 async def adopt(session, project, asset_id, job_id, payload):
